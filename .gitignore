@@ -10,3 +10,6 @@ dist/
 
 .mcpcell/
 *.bin
+
+mcpcell/web/vendor/*
+!mcpcell/web/vendor/README.md

@@ -16,7 +16,7 @@ def open_window(url):
     for p in programs:
         if p.is_file():
             try:
-                subprocess.Popen([str(p),f'--app={url}','--window-size=960,660'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                subprocess.Popen([str(p),f'--app={url}','--window-size=1000,710'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 return
             except OSError:pass
     webbrowser.open(url)

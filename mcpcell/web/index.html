@@ -2,20 +2,27 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light"><title>MCPcell</title>
-<link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script>
+<meta name="color-scheme" content="light"><title>MCPcell · Agents & MCP</title>
+<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/hub.css">
+<link rel="stylesheet" href="/vendor/terminal.css">
+<script defer src="/vendor/terminal.js"></script><script defer src="/app.js"></script><script defer src="/hub.js"></script>
 </head>
 <body>
 <div class="window">
-  <header class="titlebar"><a class="brand" href="#" aria-label="MCPcell"><span class="mark" aria-hidden="true"><i></i><i></i></span>MCPCELL<span class="version">0.2</span></a><div class="window-tools"><span id="connection" class="connection"><i></i>本地管理器</span><button id="settings" class="icon-button" aria-label="设置与诊断"></button></div></header>
-  <main>
-    <div class="heading"><div><h1>MCP 管理</h1><p id="subtitle">检测已有配置，接入统一管理。</p></div><button class="button" id="scan"><span id="scan-icon"></span><span>检测 MCP</span></button></div>
+  <header class="titlebar"><a class="brand" href="#" aria-label="MCPcell"><span class="mark" aria-hidden="true"><i></i><i></i></span>MCPCELL<span class="version">0.3</span></a><div class="window-tools"><span id="connection" class="connection"><i></i>本地管理器</span><button id="settings" class="icon-button" aria-label="设置与诊断"></button></div></header>
+  <nav class="workspace-nav" aria-label="工作台页签"><div role="tablist" class="primary-tabs"><button id="nav-detection" role="tab" data-page="detection" aria-controls="page-detection" aria-selected="true">⌕ <span>检测</span></button><button id="nav-agents" role="tab" data-page="agents" aria-controls="page-agents" aria-selected="false">▧ <span>Agents</span><b id="agent-total">0</b></button><button id="nav-mcp" role="tab" data-page="mcp" aria-controls="page-mcp" aria-selected="false">◇ <span>MCP</span><b id="mcp-total">0</b></button></div><button class="new-session-button" id="new-session"><span>＋</span>新会话</button></nav>
+  <div id="session-strip" class="session-strip" hidden><div id="session-tabs" role="tablist" aria-label="Agent 会话页签"></div><button id="session-add" aria-label="再开一个会话">＋</button></div>
+  <main id="page-detection" class="page panel" role="tabpanel" aria-labelledby="nav-detection"><div class="heading"><div><h1>发现本机工具</h1><p>查找 Agent 程序和已有 MCP，按需接入。</p></div><div class="heading-tools"><button class="button" id="add-scope">添加目录</button><button class="button primary" id="detect-all">↻ 扫描本机</button></div></div><div id="detect-summary" class="detection-summary">准备检测 · 不执行查找到的程序</div><div class="toolbar"><div class="tabs" role="tablist" aria-label="检测类别"><button role="tab" data-detect-kind="agents" aria-selected="true">Agent 程序 <span id="detected-agent-count">0</span></button><button role="tab" data-detect-kind="mcp" aria-selected="false">MCP 配置 <span id="detected-mcp-count">0</span></button></div><label class="search"><span>⌕</span><input id="detection-search" type="search" placeholder="搜索检测结果" aria-label="搜索检测结果"></label></div><div class="detection-columns"><label><input id="detect-select-all" type="checkbox" aria-label="选择全部可接入的检测结果">名称 / 来源</label><span>检测结果</span><span>操作</span></div><div id="detection-results" class="detection-results" role="region" aria-label="检测结果"></div><div class="actionbar"><span id="detection-note">仅检查已知位置与选择的目录</span><button class="button primary" id="collect-selected" disabled>收纳所选 →</button></div></main>
+  <main id="page-agents" class="page panel" role="tabpanel" aria-labelledby="nav-agents" hidden><div class="heading"><div><h1>我的 Agents</h1><p>工具集中收纳，会话各自独立。</p></div><div class="heading-tools"><button class="button" id="register-agent">手动添加</button><button class="button primary" data-page="detection">＋ 从检测中添加</button></div></div><div class="agent-toolbar"><div class="tabs" role="group" aria-label="Agent 筛选"><button data-agent-filter="all" aria-pressed="true">全部收纳</button><button data-agent-filter="pinned" aria-pressed="false">已置顶</button></div><label class="search"><span>⌕</span><input id="agent-search" type="search" placeholder="搜索 Agent" aria-label="搜索 Agent"></label></div><div id="agent-cards" class="agent-cards" role="region" aria-label="已收纳的 Agents"></div><div class="agent-library-footer"><span id="agent-library-note">先收纳，再选择目录开启会话。</span><button class="text-action" data-page="detection">查看未收纳工具 ↗</button></div></main>
+  <main id="page-mcp" class="page panel" role="tabpanel" aria-labelledby="nav-mcp" hidden>
+    <div class="heading"><div><h1>MCP 管理</h1><p id="subtitle">检测已有配置，接入统一管理。</p></div><button class="button" id="scan"><span id="scan-icon"></span><span>重新检测</span></button></div>
     <div class="toolbar"><div class="tabs" role="tablist" aria-label="MCP 列表"><button role="tab" id="tab-all" data-tab="all" aria-selected="true">全部 <span>0</span></button><button role="tab" id="tab-managed" data-tab="managed" aria-selected="false">已接入 <span>0</span></button></div><div class="filters"><label class="search"><span id="search-icon"></span><input id="search" placeholder="搜索 MCP" type="search" aria-label="搜索 MCP"></label><select id="client" aria-label="来源客户端"><option value="all">所有来源</option></select></div></div>
     <div class="list-heading"><label class="check-wrap"><input type="checkbox" id="select-all" aria-label="选择当前列表可接入的 MCP"><span>MCP / 来源</span></label><span>状态</span><span class="align-right">操作</span></div>
     <div id="list" class="list" role="region" aria-label="MCP 服务列表" tabindex="-1"><div class="empty"><h2>正在检测…</h2></div></div>
     <div class="actionbar"><div id="selection">勾选需要统一管理的 MCP</div><button id="enroll-selected" class="button primary" disabled>接入所选<span id="selected-count"></span><span id="arrow-icon"></span></button></div>
   </main>
-  <footer><div><span class="status-dot"></span><span id="summary">准备就绪</span><button id="diagnostics" hidden></button></div><div id="runtime">运行 0<span class="separator">/</span>0 MB</div></footer>
+  <div id="session-panels" class="session-panels" hidden></div>
+  <footer><div><span class="status-dot"></span><span id="summary">准备就绪</span><button id="diagnostics" hidden></button></div><div><span id="agent-running">Agent 0</span><span class="separator">/</span><span id="runtime">MCP 0</span></div></footer>
 </div>
 <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>

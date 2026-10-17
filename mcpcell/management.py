@@ -106,7 +106,7 @@ class Manager:
                         'enabled':r['enabled'], 'managementState':'conflict', 'canEnroll':False,
                         'reason':'源配置未发现或不可读；未自动覆盖'})
             snap['capabilities'].update(configWrite=True, executeMcp=True, executeCli=False, resourceEnforcement=False)
-            snap['version']='0.2.0a1'
+            snap['version']='0.3.0a1'
             snap['mode']='demo' if self.scanner.demo else 'local'
             snap['stats']['managedBindings']=len(self.bindings)
             snap['stats']['definitions']=len(snap['entries'])

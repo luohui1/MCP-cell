@@ -1,11 +1,13 @@
-# Compact tool window · 0.2
+# 0.3 · 小窗口，多工作区
 
-A single 960×660 utility window, not a dashboard.
+默认工具窗口约 1000×710，可缩放。顶部固定三个主页：检测、Agents、MCP。会话作为第二行独立页签，不塞进主列表，也不因切换页面重建进程。
 
-Keep one service list, two tabs (all / managed), a source filter, search, and the direct actions: detect, enroll, pause, enable, restore. Selection counts configuration bindings, not imaginary process savings. Equal configurations can collapse into one visual row while keeping each source and runtime authorization independent.
+检测页把 Agent 程序和 MCP 配置分成两个子页，明确展示可执行入口、来源、是否已收纳。Agents 页提供紧凑的双列收纳卡片、搜索、置顶、配置和启动。MCP 页保留服务列表、接入、启停与还原。
 
-Remove navigation sidebar, hero, marketing copy, summary cards, charts, onboarding timeline, CLI placeholder page, and continuously visible security essays. Details live in a small modal, and implementation limits in settings.
+液态风格收敛为近白表面、细边高光、浅灰绿底、醒目的浅柠檬绿主操作。终端使用深色，提高交互区与管理区的区别。没有营销 hero、大指标墙、持续动画或装饰图表。
 
-High-contrast headings, normal-size service text, pale glass edges, near-white surfaces, restrained lime primary action. No WebGL, animation loop or decorative telemetry. Static HTML/CSS/JS; use an existing system browser in app-window mode when possible, ordinary browser fallback otherwise.
+启动必须确认 Agent 与工作目录。关闭运行中的会话先确认；结束保留输出，关闭移除页签。切页保留各终端 DOM，不重放输入，不再次启动程序。未加载终端资源时不启动新会话。
 
-Reference behaviors reviewed: CCS (kaitranntt/ccs), CC Switch (farion1231/cc-switch). Import existing configurations and act on a service directly; do not reproduce their source or branding.
+键盘：Alt+1/2/3 切主页；Ctrl/Cmd+K 搜索；页签方向键；Escape 关闭弹层。支持窄屏和 reduced-motion。终端使用本地 xterm 静态资源，不添加新的 Node 服务。
+
+检测、收纳、启用、运行、MCP 托管状态必须分开。演示数据始终标注，演示终端不会执行输入。不显示没有测量过的内存节省或不存在的沙箱认证。

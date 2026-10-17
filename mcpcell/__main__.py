@@ -53,7 +53,7 @@ def main():
             return
         state_dir=(args.state_dir or scanner.home / ".mcpcell").expanduser().absolute()
         try:
-            server=Workbench(scanner,args.port,state_dir)
+            server=Workbench(scanner,args.port,state_dir,agent_environ={} if args.home else None)
         except Conflict:
             endpoint=Vault(state_dir).get("endpoint.bin",{})
             if not endpoint.get("url"): raise
@@ -62,7 +62,7 @@ def main():
             return
         with server:
             url = f"{server.origin}/#token={server.token}"
-            print("MCPcell 0.2 · 本机 MCP 管理器", flush=True)
+            print("MCPcell 0.3 · Agents 与 MCP 工作台", flush=True)
             print("此链接含临时访问凭据，请勿分享：\n" + url, flush=True)
             print("接入前不会修改配置。按 Ctrl+C 停止管理器及其托管进程。", flush=True)
             if args.open:

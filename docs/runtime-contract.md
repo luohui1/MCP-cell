@@ -25,3 +25,7 @@ Windows process ownership is established using a suspended child and Job Object 
 Remote MCP HTTP/SSE remains discovery-only. CLI will use explicitly registered executable artifacts and argv schemas rather than arbitrary shell text. MCP and CLI will share identity, workspace, authorization, budget, lifecycle and audit concepts without conflating an AI-client configuration adapter with a protocol execution adapter.
 
 Safe sharing is opt-in only after validating a pinned artifact, configuration, identity/credential domain, workspace/mount boundary, policy version and state model. Equal configuration fingerprints are not sharing approval, and permissions must not be unioned to improve reuse. Request-level hard memory isolation cannot be promised inside a single shared process.
+
+## 0.3 implementation addendum
+
+The compact UI now separates detection, Agent collection and MCP management and adds independent interactive Agent tabs. AgentHub explicitly registers local CLI Agent entrypoints, then uses POSIX PTY or a preview ConPTY backend to launch them. This is a supported subset of CLI execution, not a general shell or parameterized job scheduler. MCP runtime remains per-connection exclusive; Agent integration does not automatically inject MCP tools or inherit a sandbox. See agents.md and validation.md for actual limits and platform verification.
