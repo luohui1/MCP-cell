@@ -9,10 +9,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/luohui1/MCP-cell/internal/catalog"
 	"github.com/luohui1/MCP-cell/internal/httpd"
+	"github.com/luohui1/MCP-cell/internal/npmcache"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/registry"
 )
@@ -44,9 +47,14 @@ func runDaemon(args []string) error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	userHome, _ := os.UserHomeDir()
-	p := pool.New(cfg, pool.Options{Version: version, ParentEnv: os.Environ(), DefaultDir: userHome, Log: log})
+	pkgs, err := npmcache.Open(filepath.Join(home, "pkgs"), nil)
+	if err != nil {
+		return fmt.Errorf("无法打开 npm 包缓存：%w", err)
+	}
+	p := pool.New(cfg, pool.Options{Version: version, ParentEnv: os.Environ(), DefaultDir: userHome, Log: log,
+		MaxInstances: cfg.Limits.MaxInstances, Packages: pkgs, Catalog: catalog.OpenStore(filepath.Join(home, "catalog"))})
 	srv := httpd.New(p, httpd.Options{Port: cfg.Port, Token: token, Version: version,
-		ConfigPath: registry.ConfigPath(home), Log: log})
+		ConfigPath: registry.ConfigPath(home), Home: home, MaxInstances: cfg.Limits.MaxInstances, Log: log})
 
 	started := time.Now()
 	if err := registry.WriteDaemonInfo(home, registry.DaemonInfo{PID: os.Getpid(), Port: cfg.Port,

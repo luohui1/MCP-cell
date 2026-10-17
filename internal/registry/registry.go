@@ -17,16 +17,24 @@ import (
 )
 
 const (
-	DefaultPort        = 47621
-	DefaultIdleTimeout = 10 * time.Minute
-	ModeShared         = "shared"
+	DefaultPort         = 47621
+	DefaultIdleTimeout  = 10 * time.Minute
+	DefaultMaxInstances = 32
+	ModeShared          = "shared"
 )
 
 // Config is config.json. Service entries use the same shape as a client's
 // mcpServers entry, so existing definitions can be pasted in.
 type Config struct {
 	Port     int                 `json:"port,omitempty"`
+	Limits   Limits              `json:"limits,omitzero"`
 	Services map[string]*Service `json:"services"`
+}
+
+type Limits struct {
+	// MaxInstances caps running upstream instances across all services. When
+	// full, the least recently used idle instance is stopped to make room.
+	MaxInstances int `json:"maxInstances,omitempty"`
 }
 
 type Service struct {
@@ -36,7 +44,64 @@ type Service struct {
 	Cwd         string            `json:"cwd,omitempty"`
 	Mode        string            `json:"mode,omitempty"`
 	IdleTimeout Duration          `json:"idleTimeout,omitzero"`
-	Disabled    bool              `json:"disabled,omitempty"`
+	// MemoryLimit caps the committed memory of the service's whole process
+	// tree, e.g. "1GB" (Windows only for now). Allocations beyond it fail.
+	MemoryLimit Size `json:"memoryLimit,omitzero"`
+	// Flatten runs `npx pkg` as `node <bin>` from MCPcell's package cache.
+	// Default true; set false to keep npx.
+	Flatten *bool `json:"flatten,omitempty"`
+	// Catalog "off" disables caching the server's tool/prompt/resource lists,
+	// for servers whose lists change at runtime without notifying.
+	Catalog  string `json:"catalog,omitempty"`
+	Disabled bool   `json:"disabled,omitempty"`
+}
+
+func (s *Service) FlattenEnabled() bool { return s.Flatten == nil || *s.Flatten }
+
+// Idle is the effective idle timeout: the configured one, or the default.
+// 0 means never reap.
+func (s *Service) Idle() time.Duration {
+	if !s.IdleTimeout.Set {
+		return DefaultIdleTimeout
+	}
+	return s.IdleTimeout.Duration
+}
+func (s *Service) CatalogEnabled() bool { return s.Catalog != "off" }
+
+// Size reads "512MB", "1.5GB", "800KB" or "0".
+type Size uint64
+
+func (z *Size) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("大小应写成字符串，例如 \"1GB\"")
+	}
+	u := strings.ToUpper(strings.TrimSpace(s))
+	mult := 1.0
+	for _, suf := range []struct {
+		s string
+		m float64
+	}{{"GB", 1 << 30}, {"MB", 1 << 20}, {"KB", 1 << 10}, {"B", 1}} {
+		if strings.HasSuffix(u, suf.s) {
+			u, mult = strings.TrimSpace(strings.TrimSuffix(u, suf.s)), suf.m
+			break
+		}
+	}
+	var v float64
+	if _, err := fmt.Sscanf(u, "%g", &v); err != nil || v < 0 {
+		return fmt.Errorf("无效的大小 %q", s)
+	}
+	*z = Size(v * mult)
+	return nil
+}
+
+func (z Size) MarshalJSON() ([]byte, error) { return json.Marshal(z.Text()) }
+
+func (z Size) Text() string {
+	if z > 0 && z%(1<<30) == 0 {
+		return fmt.Sprintf("%dGB", uint64(z)>>30)
+	}
+	return fmt.Sprintf("%dMB", uint64(z)>>20)
 }
 
 // Duration reads "10m", "90s" or "0" (never reap). Set distinguishes an
@@ -62,7 +127,22 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()) }
+func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.Text()) }
+
+// Text formats the duration the way people write it in config.json.
+func (d Duration) Text() string {
+	switch v := d.Duration; {
+	case v == 0:
+		return "0"
+	case v%time.Hour == 0:
+		return fmt.Sprintf("%dh", v/time.Hour)
+	case v%time.Minute == 0:
+		return fmt.Sprintf("%dm", v/time.Minute)
+	case v%time.Second == 0:
+		return fmt.Sprintf("%ds", v/time.Second)
+	}
+	return d.Duration.String()
+}
 
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
@@ -111,6 +191,9 @@ func Parse(data []byte) (*Config, error) {
 	if cfg.Port == 0 {
 		cfg.Port = DefaultPort
 	}
+	if cfg.Limits.MaxInstances <= 0 {
+		cfg.Limits.MaxInstances = DefaultMaxInstances
+	}
 	if cfg.Services == nil {
 		cfg.Services = map[string]*Service{}
 	}
@@ -138,10 +221,40 @@ func (s *Service) normalize(name string) error {
 	default:
 		return fmt.Errorf("服务 %s：未知模式 %q", name, s.Mode)
 	}
-	if !s.IdleTimeout.Set {
-		s.IdleTimeout = Duration{DefaultIdleTimeout, true}
+	if s.Catalog != "" && s.Catalog != "off" {
+		return fmt.Errorf("服务 %s：catalog 只能是 \"off\" 或不写", name)
+	}
+	if s.MemoryLimit > 0 && s.MemoryLimit < 32<<20 {
+		return fmt.Errorf("服务 %s：memoryLimit 太小（至少 32MB）", name)
 	}
 	return nil
+}
+
+// ParseService validates one service entry as it would appear in config.json.
+func ParseService(name string, raw []byte) (*Service, error) {
+	var s Service
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&s); err != nil {
+		return nil, fmt.Errorf("服务 %s 的配置无效：%w", name, err)
+	}
+	if err := s.normalize(name); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// Save writes config.json atomically.
+func Save(home string, cfg *Config) error {
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := ConfigPath(home) + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, ConfigPath(home))
 }
 
 // Names returns enabled service names in stable order.

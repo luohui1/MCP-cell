@@ -1,0 +1,155 @@
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { Activity, Plug, Server, Settings as SettingsIcon } from 'lucide-react';
+import { api, Unauthorized, type Status } from './api';
+import { bytes, since } from './format';
+import { Logo } from './icons';
+import { go, useRoute } from './router';
+import { Card, cx, Dot, ToastProvider } from './ui';
+import { ServicesPage } from './pages/Services';
+import { ServiceDetail } from './pages/ServiceDetail';
+import { ServiceFormPage } from './pages/ServiceForm';
+import { SessionsPage } from './pages/Sessions';
+import { ClientsPage } from './pages/Clients';
+import { SettingsPage } from './pages/Settings';
+
+interface StatusCtx {
+  status: Status;
+  refresh: () => Promise<void>;
+}
+
+const StatusContext = createContext<StatusCtx | null>(null);
+
+export function useStatus(): StatusCtx {
+  const ctx = useContext(StatusContext);
+  if (!ctx) throw new Error('status not loaded');
+  return ctx;
+}
+
+export function App() {
+  const [status, setStatus] = useState<Status | null>(null);
+  const [offline, setOffline] = useState(false);
+  const [expired, setExpired] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api.status());
+      setOffline(false);
+    } catch (e) {
+      if (e instanceof Unauthorized) setExpired(true);
+      else setOffline(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(() => !document.hidden && refresh(), 2000);
+    const onVisible = () => !document.hidden && refresh();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refresh]);
+
+  if (expired) return <Notice title="管理页登录已失效" text="在终端运行 mcpcell ui，会用新的一次性链接重新打开。" />;
+  if (!status) return <Notice title={offline ? '连不上 MCPcell 守护进程' : '正在连接…'} text={offline ? '确认 mcpcell daemon 仍在运行。' : ''} />;
+
+  return (
+    <ToastProvider>
+      <StatusContext.Provider value={{ status, refresh }}>
+        <div className="flex h-full">
+          <Sidebar status={status} offline={offline} />
+          <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+            <Routes />
+          </main>
+        </div>
+      </StatusContext.Provider>
+    </ToastProvider>
+  );
+}
+
+function Routes() {
+  const route = useRoute();
+  const [page = 'services', id, sub] = route;
+  switch (page) {
+    case 'services':
+      if (id === 'new') return <ServiceFormPage />;
+      if (id && sub === 'edit') return <ServiceFormPage name={id} />;
+      if (id) return <ServiceDetail name={id} />;
+      return <ServicesPage />;
+    case 'sessions':
+      return <SessionsPage />;
+    case 'clients':
+      return <ClientsPage />;
+    case 'settings':
+      return <SettingsPage />;
+  }
+  return <ServicesPage />;
+}
+
+function NavItem({ icon, label, count, active, onClick }: { icon: ReactNode; label: string; count?: number; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cx(
+        'flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] transition-colors',
+        active
+          ? 'bg-zinc-200/70 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-white'
+          : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100',
+      )}
+    >
+      <span className="grid size-5 place-items-center">{icon}</span>
+      <span className="flex-1">{label}</span>
+      {count !== undefined && count > 0 && <span className="text-xs font-normal text-zinc-400 tabular-nums">{count}</span>}
+    </button>
+  );
+}
+
+function Sidebar({ status, offline }: { status: Status; offline: boolean }) {
+  const [page = 'services'] = useRoute();
+  const running = status.services.filter((s) => s.instance).length;
+  return (
+    <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
+      <div className="flex h-[72px] items-center gap-2.5 px-5">
+        <Logo />
+        <span className="text-[17px] font-semibold tracking-tight">MCPcell</span>
+      </div>
+      <nav className="space-y-1 px-3 pt-2">
+        <NavItem icon={<Server className="size-[18px]" />} label="MCP 服务" count={status.services.length} active={page === 'services'} onClick={() => go('services')} />
+        <NavItem icon={<Activity className="size-[18px]" />} label="会话" count={status.sessions.length} active={page === 'sessions'} onClick={() => go('sessions')} />
+        <NavItem icon={<Plug className="size-[18px]" />} label="客户端接入" active={page === 'clients'} onClick={() => go('clients')} />
+      </nav>
+      <div className="mt-auto px-3 pb-3">
+        <Card className="mb-3 px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Dot tone={offline ? 'red' : 'green'} />
+            {offline ? '守护进程无响应' : '守护进程运行中'}
+          </div>
+          <div className="mt-1.5 space-y-0.5 text-xs leading-5 text-zinc-500">
+            <div className="font-mono">127.0.0.1:{status.port}</div>
+            <div>
+              {running} 个实例 · {bytes(status.daemon.privateBytes)} · 已运行 {since(status.startedAt)}
+            </div>
+          </div>
+        </Card>
+        <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800">
+          <NavItem icon={<SettingsIcon className="size-[18px]" />} label="设置" active={page === 'settings'} onClick={() => go('settings')} />
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function Notice({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="grid h-full place-items-center bg-zinc-50 dark:bg-zinc-950">
+      <Card className="w-[420px] p-8 text-center">
+        <div className="mx-auto mb-4 w-fit">
+          <Logo className="size-12" />
+        </div>
+        <h1 className="text-lg font-semibold">{title}</h1>
+        {text && <p className="mt-2 text-sm leading-6 text-zinc-500">{text}</p>}
+      </Card>
+    </div>
+  );
+}

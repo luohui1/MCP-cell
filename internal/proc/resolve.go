@@ -16,7 +16,7 @@ import (
 // target env's PATH, and npm .cmd shims are replaced by node + their script.
 // Batch files are never run through cmd.exe, whose argument parsing is unsafe.
 func ResolveArgv(argv []string, env []string, dir string) ([]string, error) {
-	argv = unwrapCmd(argv)
+	argv = UnwrapCmd(argv)
 	if len(argv) == 0 || argv[0] == "" {
 		return nil, errors.New("command 为空")
 	}
@@ -33,8 +33,8 @@ func ResolveArgv(argv []string, env []string, dir string) ([]string, error) {
 	return append([]string{exe}, argv[1:]...), nil
 }
 
-// unwrapCmd strips a leading `cmd [/d] [/s] /c`, the usual Windows MCP config.
-func unwrapCmd(argv []string) []string {
+// UnwrapCmd strips a leading `cmd [/d] [/s] /c`, the usual Windows MCP config.
+func UnwrapCmd(argv []string) []string {
 	if len(argv) < 3 {
 		return argv
 	}

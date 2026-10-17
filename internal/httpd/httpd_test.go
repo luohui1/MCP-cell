@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/luohui1/MCP-cell/internal/catalog"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/proc"
 	"github.com/luohui1/MCP-cell/internal/registry"
@@ -35,13 +38,29 @@ type harness struct {
 	base string // http://127.0.0.1:port
 }
 
-func start(t *testing.T) *harness {
+func start(t *testing.T) *harness { return startWith(t, nil) }
+
+// startWithHome also gives the server a home with config.json, so the
+// service editing API works.
+func startWithHome(t *testing.T) (*harness, string) {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"services":{"fake":{"command":"fake"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := startWith(t, nil)
+	h.srv.opts.Home = home
+	return h, home
+}
+
+// startWith runs the daemon's HTTP side; a non-nil store enables the catalog.
+func startWith(t *testing.T, store *catalog.Store) *harness {
 	t.Helper()
 	cfg, err := registry.Parse([]byte(`{"services":{"fake":{"command":"fake"}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := pool.New(cfg, pool.Options{Version: "test",
+	p := pool.New(cfg, pool.Options{Version: "test", Catalog: store,
 		SpecFor: func(string, *registry.Service) proc.Spec { return fakemcp.Spec() }})
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -219,6 +238,11 @@ func TestProgressOverSSE(t *testing.T) {
 	if txt := callText(t, cs, params); txt != "done" {
 		t.Fatal(txt)
 	}
+	// The SDK client runs notification handlers concurrently with returning
+	// the result, so the last one may land just after CallTool returns.
+	for deadline := time.Now().Add(2 * time.Second); got.Load() < 4 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if got.Load() != 4 {
 		t.Fatalf("got %d progress notifications, want 4", got.Load())
 	}
@@ -347,8 +371,23 @@ func TestUILogin(t *testing.T) {
 	if code := get("/ui/", nil, "GET"); code != 200 {
 		t.Fatalf("ui with cookie: %d", code)
 	}
-	if code := get("/ui/app.js", nil, "GET"); code != 200 {
-		t.Fatalf("app.js: %d", code)
+	index := func() string {
+		req, _ := http.NewRequest("GET", h.base+"/ui/", nil)
+		req.AddCookie(cookie)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}()
+	asset := regexp.MustCompile(`/ui/assets/[^"]+\.js`).FindString(index)
+	if asset == "" {
+		t.Fatalf("built index.html has no script asset: %s", index)
+	}
+	if code := get(asset, nil, "GET"); code != 200 {
+		t.Fatalf("%s: %d", asset, code)
 	}
 	if code := get("/api/services/fake/stop", nil, "POST"); code != 401 {
 		t.Fatalf("cookie write without X-MCPcell header: %d", code)
@@ -398,5 +437,136 @@ func TestOrphanedSessionExpires(t *testing.T) {
 	h.srv.mu.Unlock()
 	if exitedLeft || !quietLeft {
 		t.Fatalf("after 11 idle minutes: exited client kept=%v, stream-less client kept=%v", exitedLeft, quietLeft)
+	}
+}
+
+func (h *harness) running(t *testing.T) bool {
+	t.Helper()
+	return h.status(t).Services[0].Instance != nil
+}
+
+func (h *harness) waitCatalog(t *testing.T) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if c := h.status(t).Services[0].Catalog; c != nil && c.Tools > 0 {
+			return
+		}
+	}
+	t.Fatal("catalog never filled")
+}
+
+// M2 acceptance: with a catalog, connecting and listing start no process; the
+// first tool call does.
+func TestConnectAndListStartNothing(t *testing.T) {
+	h := startWith(t, catalog.OpenStore(t.TempDir()))
+	first := h.connect(t, nil) // no catalog yet: this one starts the upstream
+	h.waitCatalog(t)
+	first.Close()
+	h.srv.pool.Stop("fake", "test")
+	if h.running(t) {
+		t.Fatal("instance still running after stop")
+	}
+	var clients []*mcp.ClientSession
+	for range 3 {
+		cs := h.connect(t, nil)
+		tools, err := cs.ListTools(context.Background(), nil)
+		if err != nil || len(tools.Tools) != 5 {
+			t.Fatalf("list from catalog: %v %v", tools, err)
+		}
+		clients = append(clients, cs)
+	}
+	if h.running(t) {
+		t.Fatal("connecting or listing started the upstream")
+	}
+	callText(t, clients[0], &mcp.CallToolParams{Name: "pid", Arguments: map[string]any{}})
+	if !h.running(t) {
+		t.Fatal("tool call did not start the upstream")
+	}
+}
+
+func TestCatalogChangeReachesSessionThatNeverCalled(t *testing.T) {
+	h := startWith(t, catalog.OpenStore(t.TempDir()))
+	h.connect(t, nil)
+	h.waitCatalog(t)
+	changed := make(chan struct{}, 4)
+	cold := h.connect(t, &mcp.ClientOptions{ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+		changed <- struct{}{}
+	}})
+	if _, err := cold.ListTools(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond) // let its GET stream open
+	other := h.connect(t, nil)
+	callText(t, other, &mcp.CallToolParams{Name: "add_tool", Arguments: map[string]any{"text": "late"}})
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a session served only from the catalog never heard list_changed")
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		tools, _ := cold.ListTools(context.Background(), nil)
+		for _, tool := range tools.Tools {
+			if tool.Name == "extra_late" {
+				return
+			}
+		}
+	}
+	t.Fatal("re-listing never showed the new tool")
+}
+
+func (h *harness) apiCall(t *testing.T, method, path, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(method, h.base+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func TestServiceEditingAPI(t *testing.T) {
+	h, home := startWithHome(t)
+	form := `{"name":"added","command":"x","args":["a"],"env":{"API_KEY":"s3cret"},"idleTimeout":"5m","flatten":true,"catalog":true}`
+	if code, body := h.apiCall(t, "POST", "/api/services", form); code != 200 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	if code, _ := h.apiCall(t, "POST", "/api/services", form); code != http.StatusConflict {
+		t.Fatalf("duplicate create: %d", code)
+	}
+	if n := len(h.status(t).Services); n != 2 {
+		t.Fatalf("services after create = %d", n)
+	}
+	_, list := h.apiCall(t, "GET", "/api/configs", "")
+	if strings.Contains(list, "s3cret") || !strings.Contains(list, `"API_KEY":null`) {
+		t.Fatalf("env value leaked or missing: %s", list)
+	}
+	// Saving with a null value keeps the stored secret.
+	edit := `{"command":"x","args":["a","b"],"env":{"API_KEY":null},"idleTimeout":"0","flatten":false,"catalog":true}`
+	if code, body := h.apiCall(t, "PUT", "/api/services/added", edit); code != 200 {
+		t.Fatalf("update: %d %s", code, body)
+	}
+	cfg, err := registry.Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Services["added"]
+	if got.Env["API_KEY"] != "s3cret" || len(got.Args) != 2 || got.FlattenEnabled() || got.Idle() != 0 {
+		t.Fatalf("saved definition: %+v", got)
+	}
+	if code, body := h.apiCall(t, "PUT", "/api/services/added", `{"command":"x","env":{"NEW":null}}`); code != 400 {
+		t.Fatalf("null for an unknown env key must fail: %d %s", code, body)
+	}
+	if code, _ := h.apiCall(t, "DELETE", "/api/services/added", ""); code != 200 {
+		t.Fatal("delete")
+	}
+	if cfg, _ := registry.Load(home); cfg.Services["added"] != nil || cfg.Services["fake"] == nil {
+		t.Fatalf("config after delete: %+v", cfg.Services)
+	}
+	if n := len(h.status(t).Services); n != 1 {
+		t.Fatalf("services after delete = %d", n)
 	}
 }

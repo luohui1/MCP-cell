@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -17,9 +18,25 @@ var (
 	procGetProcessMemory = kernel32.NewProc("K32GetProcessMemoryInfo")
 )
 
-type sysState struct{ job windows.Handle }
+type sysState struct {
+	job      windows.Handle
+	port     windows.Handle // completion port for job notifications, if limited
+	watching chan struct{}
+	limitHit atomic.Bool
+}
 
-func start(cmd *exec.Cmd) (*sysState, error) {
+const (
+	jobMsgJobMemoryLimit = 10 // JOB_OBJECT_MSG_JOB_MEMORY_LIMIT
+	stopWatchingKey      = 0xdead
+)
+
+// jobAssociateCompletionPort is JOBOBJECT_ASSOCIATE_COMPLETION_PORT.
+type jobAssociateCompletionPort struct {
+	CompletionKey  uintptr
+	CompletionPort windows.Handle
+}
+
+func start(cmd *exec.Cmd, memoryLimit uint64) (*sysState, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		// Suspended until it is in the job; CREATE_NO_WINDOW gives the tree a
 		// hidden console so npx/cmd children do not flash windows.
@@ -29,7 +46,7 @@ func start(cmd *exec.Cmd) (*sysState, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	s, err := adopt(uint32(cmd.Process.Pid))
+	s, err := adopt(uint32(cmd.Process.Pid), memoryLimit)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -38,7 +55,11 @@ func start(cmd *exec.Cmd) (*sysState, error) {
 	return s, nil
 }
 
-func adopt(pid uint32) (*sysState, error) {
+func hideWindow(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, HideWindow: true}
+}
+
+func adopt(pid uint32, memoryLimit uint64) (*sysState, error) {
 	const access = windows.PROCESS_SET_QUOTA | windows.PROCESS_TERMINATE |
 		windows.PROCESS_SUSPEND_RESUME | windows.PROCESS_QUERY_LIMITED_INFORMATION
 	h, err := windows.OpenProcess(access, false, pid)
@@ -51,22 +72,71 @@ func adopt(pid uint32) (*sysState, error) {
 		return nil, err
 	}
 	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	// DIE_ON_UNHANDLED_EXCEPTION: a crashing server exits at once instead of
+	// waiting on Windows Error Reporting.
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+		windows.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
+	if memoryLimit > 0 {
+		info.BasicLimitInformation.LimitFlags |= windows.JOB_OBJECT_LIMIT_JOB_MEMORY
+		info.JobMemoryLimit = uintptr(memoryLimit)
+	}
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 		windows.CloseHandle(job)
 		return nil, err
 	}
+	s := &sysState{job: job}
+	if memoryLimit > 0 {
+		if err := s.watchMemoryLimit(); err != nil {
+			s.release()
+			return nil, err
+		}
+	}
 	if err := windows.AssignProcessToJobObject(job, h); err != nil {
-		windows.CloseHandle(job)
+		s.release()
 		return nil, err
 	}
 	if st, _, _ := procNtResumeProcess.Call(uintptr(h)); st != 0 {
-		windows.CloseHandle(job) // KILL_ON_JOB_CLOSE ends the suspended child
+		s.release() // KILL_ON_JOB_CLOSE ends the suspended child
 		return nil, fmt.Errorf("NtResumeProcess: 0x%x", st)
 	}
-	return &sysState{job: job}, nil
+	return s, nil
 }
+
+// watchMemoryLimit kills the tree when it hits JobMemoryLimit. A process at
+// the limit does not reliably die on its own: allocations just fail, and Go
+// or Node runtimes can sit there retrying while client calls hang.
+func (s *sysState) watchMemoryLimit() error {
+	port, err := windows.CreateIoCompletionPort(windows.InvalidHandle, 0, 0, 1)
+	if err != nil {
+		return err
+	}
+	assoc := jobAssociateCompletionPort{CompletionKey: 1, CompletionPort: port}
+	if _, err := windows.SetInformationJobObject(s.job, windows.JobObjectAssociateCompletionPortInformation,
+		uintptr(unsafe.Pointer(&assoc)), uint32(unsafe.Sizeof(assoc))); err != nil {
+		windows.CloseHandle(port)
+		return err
+	}
+	s.port, s.watching = port, make(chan struct{})
+	go func() {
+		defer close(s.watching)
+		for {
+			var msg uint32
+			var key uintptr
+			var ov *windows.Overlapped
+			if windows.GetQueuedCompletionStatus(port, &msg, &key, &ov, windows.INFINITE) != nil || key == stopWatchingKey {
+				return
+			}
+			if msg == jobMsgJobMemoryLimit {
+				s.limitHit.Store(true)
+				_ = windows.TerminateJobObject(s.job, 1)
+			}
+		}
+	}()
+	return nil
+}
+
+func (s *sysState) memoryLimitHit() bool { return s.limitHit.Load() }
 
 func (s *sysState) kill(*exec.Cmd) {
 	if s.job != 0 {
@@ -75,6 +145,13 @@ func (s *sysState) kill(*exec.Cmd) {
 }
 
 func (s *sysState) release() {
+	if s.port != 0 {
+		// Stop the watcher before closing handles it uses.
+		_ = windows.PostQueuedCompletionStatus(s.port, 0, stopWatchingKey, nil)
+		<-s.watching
+		windows.CloseHandle(s.port)
+		s.port = 0
+	}
 	if s.job != 0 {
 		windows.CloseHandle(s.job)
 		s.job = 0

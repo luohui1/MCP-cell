@@ -16,6 +16,7 @@ const usage = `mcpcell %s — 本机 MCP 运行时：每个服务一份进程，
   daemon [--port N]    启动守护进程（前台运行，Ctrl+C 退出）
   ps                   查看服务、实例、会话与内存（私有提交）
   ui                   在浏览器中打开管理页
+  update <服务>        把 npx 服务的 npm 包更新到最新版本并重新锁定
   version              显示版本
 
 服务定义在 ~/.mcpcell/config.json（可用 MCPCELL_HOME 改目录）。
@@ -35,6 +36,12 @@ func main() {
 		err = runPS()
 	case "ui":
 		err = runUI()
+	case "update":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "用法: mcpcell update <服务>")
+			os.Exit(2)
+		}
+		err = runUpdate(os.Args[2])
 	case "version", "--version", "-v":
 		fmt.Println("mcpcell", version)
 	case "help", "--help", "-h":

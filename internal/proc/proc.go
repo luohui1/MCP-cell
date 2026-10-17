@@ -7,6 +7,7 @@
 package proc
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -18,6 +19,10 @@ type Spec struct {
 	Argv []string
 	Env  []string // KEY=VALUE, exactly what the child sees
 	Dir  string
+	// MemoryLimit caps the committed memory of the whole tree (Windows Job
+	// JobMemoryLimit); allocations beyond it fail. 0 means no limit. Not
+	// enforced on Unix yet.
+	MemoryLimit uint64
 }
 
 // Usage is memory for the whole owned tree. PrivateBytes is private commit on
@@ -68,7 +73,7 @@ func Start(spec Spec) (*Process, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env, cmd.Dir = spec.Env, spec.Dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, errW
-	sys, err := start(cmd)
+	sys, err := start(cmd, spec.MemoryLimit)
 	closeAll(inR, outW, errW) // the child has its own copies now
 	if err != nil {
 		closeAll(inW, outR, errR)
@@ -108,6 +113,10 @@ func (p *Process) Kill() {
 	})
 }
 
+// MemoryLimitHit reports whether the tree was killed for exceeding
+// Spec.MemoryLimit.
+func (p *Process) MemoryLimitHit() bool { return p.sys.memoryLimitHit() }
+
 func (p *Process) Usage() (Usage, error) {
 	select {
 	case <-p.done:
@@ -123,4 +132,18 @@ func closeAll(cs ...io.Closer) {
 			_ = c.Close()
 		}
 	}
+}
+
+// Run executes a one-off helper command (npm install and the like) with the
+// same argv resolution and hidden console as upstreams, returning combined
+// output.
+func Run(ctx context.Context, argv []string, env []string, dir string) ([]byte, error) {
+	argv, err := ResolveArgv(argv, env, dir)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env, cmd.Dir = env, dir
+	hideWindow(cmd)
+	return cmd.CombinedOutput()
 }

@@ -1,6 +1,6 @@
 # MCPcell 架构 · 0.6 新内核
 
-日期：2026-10-17。状态：M0、M1 已完成（实测结果见 roadmap），M2 未开始。里程碑与验收见 [roadmap.md](roadmap.md)。
+日期：2026-10-17。状态：M0–M2 已完成（实测结果见 roadmap），下一步 M3。里程碑与验收见 [roadmap.md](roadmap.md)。
 
 一句话：**一台机器上，每个 MCP 服务只跑必要的那几份进程，所有 Agent 共用；不调用就不占内存；对客户端透明，随时可还原。**
 
@@ -61,10 +61,11 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 | `internal/registry` ✅ | `~/.mcpcell/config.json`、token、`daemon.json` | M1 |
 | `internal/proc` ✅ | 进程创建：Windows 挂起创建 → 加入 Job → 恢复；POSIX 进程组；`cmd /c` 拆包、npm shim 解析；环境变量白名单；私有提交度量 | M1（npx/uvx 扁平化 M2） |
 | `internal/instance` ✅ | 一个上游 stdio 进程：旧版握手、id/progressToken/取消的映射、通知按归属分发、订阅引用计数、stderr 环形缓冲。原计划的 upstream 和 router 合并在这里 | M1 |
-| `internal/pool` ✅ | 实例生命周期：单次创建合并、空闲回收、启动失败退避、连续崩溃暂停 | M1（预算 M2） |
+| `internal/pool` ✅ | 实例生命周期：单次创建合并、空闲回收、启动失败退避、连续崩溃暂停、实例上限与 LRU 驱逐、npx 扁平化、目录刷新 | M1/M2 |
+| `internal/npmcache` ✅ | `npx pkg` 识别、安装到 `~/.mcpcell/pkgs` 并锁定版本、解析 bin 入口、`update` | M2 |
 | `internal/httpd` ✅ | Streamable HTTP（旧版，POST/GET/DELETE、会话、SSE）、Origin/Host 校验、token 鉴权、管理 API、内嵌状态页 | M1 |
 | `internal/testutil/fakemcp` ✅ | 基于官方 SDK 的测试用上游 | M1 |
-| `internal/catalog` | 能力目录缓存及失效 | M2 |
+| `internal/catalog` ✅ | 能力目录：拉取并合并分页、按配置指纹判断有效、`list_changed` 时先标记过期再刷新、存到 `~/.mcpcell/catalog` | M2 |
 | `internal/clients` | 各客户端配置的发现、改写、备份、还原（移植自 legacy） | M3 |
 | `internal/hub` | 聚合命名空间、元工具、调用策略 | M4 |
 
@@ -152,9 +153,9 @@ cold ──acquire──► starting ──握手+能力校验──► ready �
 
 - **单次创建合并**：同一个 InstanceKey 的并发 acquire 只触发一次启动，其他请求等它就绪
 - **空闲回收**：shared 默认 10 分钟；per-session 默认在会话结束或空闲 30 分钟后回收，因为回收会丢掉浏览器页面、SSH 连接这类状态
-- **预算**：全局实例上限和总私有提交上限。新实例启动前先预留；不够时先驱逐最久未用的空闲实例，再不够就排队或拒绝。每个实例可选 Job 内存上限（`JOB_OBJECT_LIMIT_PROCESS_MEMORY`）
+- **预算**（M2 已实现）：全局实例上限 `limits.maxInstances`（默认 32），满额时先停掉最久未用的空闲实例，全部忙碌就拒绝。每个服务可设 `memoryLimit`，对应整棵进程树的 Job 内存上限（`JOB_OBJECT_LIMIT_JOB_MEMORY`）。实测发现，进程到达上限后只是分配失败，会卡在那里既不退出也不响应，所以 Job 绑定了 I/O 完成端口，收到 `JOB_OBJECT_MSG_JOB_MEMORY_LIMIT` 后立即终止整棵树，并报告"超出内存上限"。总私有提交预算尚未实现
 - **进程归属**：Windows 挂起创建 → 加入 Job（KILL_ON_JOB_CLOSE、禁止脱离）→ 恢复线程，沿用 legacy `processes.py` 的做法。守护进程无论怎么退出，Job 句柄关闭后整棵进程树都会被系统清理
-- **npx 扁平化**（M2）：导入时把包装进 `~/.mcpcell/pkgs/<name>@<version>/`，读 `package.json` 的 `bin`，之后直接 `node.exe <bin.js> <args>` 启动。uvx 同理，指向已安装工具的入口。版本锁定，`mcpcell update` 才升级
+- **npx 扁平化**（M2 已实现）：第一次启动时把包 `npm install` 到 `~/.mcpcell/pkgs/<name>@<version>/`，从安装结果读出实际版本并锁定，按 `package.json` 的 `bin` 找入口，之后直接 `node <bin> <args>` 启动。安装失败（如断网）时退回原 npx 命令，并在状态里说明原因。`npm_config_*` 环境变量会放行，以支持镜像源。`mcpcell update <服务>` 才升级。服务可设 `"flatten": false` 保留 npx。uvx 尚未处理
 - **度量**：枚举 Job 内的进程，逐个取 `PrivateUsage` 求和；同时报峰值
 
 ## 8. 隔离模式

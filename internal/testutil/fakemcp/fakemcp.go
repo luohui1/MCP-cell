@@ -27,14 +27,19 @@ func MaybeRun() {
 }
 
 // Spec launches the running test binary as the fake server.
-func Spec() proc.Spec {
+func Spec() proc.Spec { return SpecWith(0) }
+
+// SpecWith sets the server's list page size, to exercise pagination.
+func SpecWith(pageSize int) proc.Spec {
 	self, _ := os.Executable()
 	return proc.Spec{
 		Argv: []string{self},
-		Env:  proc.BuildEnv(os.Environ(), map[string]string{envVar: "1"}),
+		Env:  proc.BuildEnv(os.Environ(), map[string]string{envVar: "1", pageEnv: strconv.Itoa(pageSize)}),
 		Dir:  os.TempDir(),
 	}
 }
+
+const pageEnv = "MCPCELL_FAKE_PAGE"
 
 type echoIn struct {
 	Text string `json:"text,omitempty"`
@@ -50,7 +55,12 @@ func text(s string) *mcp.CallToolResult {
 }
 
 func newServer() *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1.0.0"}, nil)
+	page, _ := strconv.Atoi(os.Getenv(pageEnv))
+	s := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1.0.0"}, &mcp.ServerOptions{PageSize: page})
+	s.AddPrompt(&mcp.Prompt{Name: "greet", Description: "Say hello"},
+		func(context.Context, *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			return &mcp.GetPromptResult{Messages: []*mcp.PromptMessage{{Role: "user", Content: &mcp.TextContent{Text: "hello"}}}}, nil
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "pid", Description: "Return the server process id"},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 			return text(strconv.Itoa(os.Getpid())), nil, nil

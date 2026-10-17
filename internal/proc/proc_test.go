@@ -30,6 +30,13 @@ func helper(mode string) {
 		_, _ = io.Copy(os.Stdout, os.Stdin)
 	case "sleep":
 		time.Sleep(time.Minute)
+	case "alloc":
+		b := make([]byte, 256<<20)
+		for i := 0; i < len(b); i += 4096 {
+			b[i] = 1
+		}
+		fmt.Println("allocated")
+		time.Sleep(time.Minute)
 	case "spawn":
 		child, err := Start(helperSpec("sleep"))
 		if err != nil {
@@ -116,8 +123,8 @@ func TestUnwrapCmd(t *testing.T) {
 		"node server.js":         "node server.js",
 	}
 	for in, want := range cases {
-		if got := strings.Join(unwrapCmd(strings.Fields(in)), " "); got != want {
-			t.Errorf("unwrapCmd(%q) = %q, want %q", in, got, want)
+		if got := strings.Join(UnwrapCmd(strings.Fields(in)), " "); got != want {
+			t.Errorf("UnwrapCmd(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -173,5 +180,31 @@ func TestBuildEnv(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %s in %v", want, env)
 		}
+	}
+}
+
+func TestMemoryLimitStopsTree(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("memory limits are enforced through Job Objects on Windows only")
+	}
+	spec := helperSpec("alloc")
+	spec.MemoryLimit = 96 << 20
+	p, err := Start(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Kill()
+	select {
+	case <-p.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("process over its memory limit kept running")
+	}
+	if !p.MemoryLimitHit() {
+		t.Fatal("exit not attributed to the memory limit")
+	}
+	out := make([]byte, 64)
+	n, _ := p.Stdout.Read(out)
+	if strings.Contains(string(out[:n]), "allocated") {
+		t.Fatal("allocation beyond the job memory limit succeeded")
 	}
 }

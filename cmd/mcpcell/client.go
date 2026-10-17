@@ -31,12 +31,20 @@ func daemonCall(method, path string, out any) error {
 	}
 	req, _ := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", info.Port, path), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	timeout := 5 * time.Second
+	if strings.HasSuffix(path, "/update") {
+		timeout = 10 * time.Minute // npm install
+	}
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return fmt.Errorf("守护进程（PID %d，端口 %d）没有响应；可能已异常退出，请重新运行 mcpcell daemon", info.PID, info.Port)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		var e struct{ Error string }
+		if json.NewDecoder(resp.Body).Decode(&e) == nil && e.Error != "" {
+			return errors.New(e.Error)
+		}
 		return fmt.Errorf("守护进程返回 %s", resp.Status)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
@@ -55,7 +63,13 @@ type psStatus struct {
 		State     string     `json:"state"`
 		LastError string     `json:"lastError"`
 		RetryAt   *time.Time `json:"retryAt"`
-		Instance  *struct {
+		Catalog   *struct {
+			Tools int `json:"tools"`
+		} `json:"catalog"`
+		Package *struct {
+			Version string `json:"version"`
+		} `json:"package"`
+		Instance *struct {
 			PID          int       `json:"pid"`
 			LastActiveAt time.Time `json:"lastActiveAt"`
 			Inflight     int       `json:"inflight"`
@@ -86,7 +100,7 @@ func runPS() error {
 	for _, s := range st.Sessions {
 		sessions[s.Service]++
 	}
-	rows := [][]string{{"服务", "状态", "会话", "进程", "私有提交", "活动"}}
+	rows := [][]string{{"服务", "状态", "会话", "进程", "私有提交", "工具", "活动"}}
 	var total uint64
 	for _, s := range st.Services {
 		state, procs, mem, act := map[string]string{"ready": "运行中", "starting": "启动中", "failed": "启动失败"}[s.State], "-", "-", "-"
@@ -102,8 +116,14 @@ func runPS() error {
 			}
 		} else if s.RetryAt != nil {
 			act = human(time.Until(*s.RetryAt)) + "后可重试"
+		} else if s.State == "cold" {
+			act = "调用时启动"
 		}
-		rows = append(rows, []string{s.Name, state, fmt.Sprint(sessions[s.Name]), procs, mem, act})
+		tools := "-"
+		if s.Catalog != nil {
+			tools = fmt.Sprint(s.Catalog.Tools)
+		}
+		rows = append(rows, []string{s.Name, state, fmt.Sprint(sessions[s.Name]), procs, mem, tools, act})
 	}
 	printTable(rows)
 	fmt.Printf("\n会话 %d · MCP 私有提交合计 %s\n", len(st.Sessions), mb(total))
@@ -112,6 +132,26 @@ func runPS() error {
 			line, _, _ := strings.Cut(s.LastError, "\n")
 			fmt.Printf("  %s：%s\n", s.Name, line)
 		}
+	}
+	return nil
+}
+
+func runUpdate(service string) error {
+	fmt.Printf("正在更新 %s 的 npm 包……\n", service)
+	var out struct{ Version, Previous, Error string }
+	if err := daemonCall("POST", "/api/services/"+service+"/update", &out); err != nil {
+		return err
+	}
+	switch {
+	case out.Previous == out.Version:
+		fmt.Printf("%s 已是最新：%s\n", service, out.Version)
+	case out.Previous == "":
+		fmt.Printf("%s 已安装并锁定：%s\n", service, out.Version)
+	default:
+		fmt.Printf("%s 已从 %s 更新到 %s\n", service, out.Previous, out.Version)
+	}
+	if out.Error != "" {
+		return errors.New(out.Error)
 	}
 	return nil
 }

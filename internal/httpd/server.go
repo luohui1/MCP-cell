@@ -23,7 +23,9 @@ import (
 	"github.com/luohui1/MCP-cell/internal/proc"
 )
 
-//go:embed ui
+// The status page is built from web/ (npm run build) into ui/dist.
+//
+//go:embed all:ui/dist
 var uiFiles embed.FS
 
 type Options struct {
@@ -31,7 +33,10 @@ type Options struct {
 	Token      string
 	Version    string
 	ConfigPath string
-	Log        *slog.Logger
+	Home       string // config.json lives here; the page edits services through it
+	// MaxInstances is reported on the settings page.
+	MaxInstances int
+	Log          *slog.Logger
 }
 
 type Server struct {
@@ -43,14 +48,18 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	codes    map[string]time.Time // one-time UI login codes
+
+	cfgMu sync.Mutex // serializes config.json edits
 }
 
 func New(p *pool.Pool, opts Options) *Server {
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
-	return &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
+	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
 		sessions: map[string]*session{}, codes: map[string]time.Time{}}
+	p.OnListChange(s.notifyListChanged)
+	return s
 }
 
 func randomHex(n int) string {
@@ -65,9 +74,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/status", s.api(s.handleStatus))
 	mux.HandleFunc("POST /api/services/{name}/stop", s.api(s.handleStop))
 	mux.HandleFunc("POST /api/services/{name}/start", s.api(s.handleStart))
+	mux.HandleFunc("POST /api/services/{name}/update", s.api(s.handleUpdate))
+	mux.HandleFunc("GET /api/configs", s.api(s.handleListConfigs))
+	mux.HandleFunc("POST /api/services", s.api(s.handleSaveService))
+	mux.HandleFunc("PUT /api/services/{name}", s.api(s.handleSaveService))
+	mux.HandleFunc("DELETE /api/services/{name}", s.api(s.handleDeleteService))
 	mux.HandleFunc("POST /api/login-code", s.handleLoginCode)
 	mux.HandleFunc("GET /ui/login", s.handleLogin)
-	sub, _ := fs.Sub(uiFiles, "ui")
+	sub, _ := fs.Sub(uiFiles, "ui/dist")
 	mux.Handle("GET /ui/", s.requireUI(http.StripPrefix("/ui/", http.FileServerFS(sub))))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
@@ -139,6 +153,7 @@ func (s *Server) requireUI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.cookieOK(r) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(loginHint))
 			return
@@ -190,22 +205,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 type statusResponse struct {
-	Version    string               `json:"version"`
-	PID        int                  `json:"pid"`
-	Port       int                  `json:"port"`
-	StartedAt  time.Time            `json:"startedAt"`
-	BaseURL    string               `json:"baseUrl"`
-	Token      string               `json:"token"`
-	ConfigPath string               `json:"configPath"`
-	Daemon     proc.Usage           `json:"daemon"`
-	Services   []pool.ServiceStatus `json:"services"`
-	Sessions   []sessionInfo        `json:"sessions"`
+	Version      string               `json:"version"`
+	PID          int                  `json:"pid"`
+	Port         int                  `json:"port"`
+	StartedAt    time.Time            `json:"startedAt"`
+	BaseURL      string               `json:"baseUrl"`
+	Token        string               `json:"token"`
+	ConfigPath   string               `json:"configPath"`
+	MaxInstances int                  `json:"maxInstances"`
+	Daemon       proc.Usage           `json:"daemon"`
+	Services     []pool.ServiceStatus `json:"services"`
+	Sessions     []sessionInfo        `json:"sessions"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, statusResponse{
 		Version: s.opts.Version, PID: pid(), Port: s.opts.Port, StartedAt: s.started,
-		BaseURL: "http://127.0.0.1:" + strconv.Itoa(s.opts.Port), Token: s.opts.Token, ConfigPath: s.opts.ConfigPath,
+		BaseURL: "http://127.0.0.1:" + strconv.Itoa(s.opts.Port), Token: s.opts.Token, ConfigPath: s.opts.ConfigPath, MaxInstances: s.opts.MaxInstances,
 		Daemon: proc.Self(), Services: s.pool.Status(), Sessions: s.sessionInfos(),
 	})
 }
@@ -231,6 +247,28 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"started": true})
+}
+
+func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	now, before, err := s.pool.Update(ctx, r.PathValue("name"))
+	if err != nil && now == nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, pool.ErrUnknownService) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": firstLine(err.Error())})
+		return
+	}
+	out := map[string]string{"version": now.Version}
+	if before != nil {
+		out["previous"] = before.Version
+	}
+	if err != nil {
+		out["error"] = firstLine(err.Error())
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

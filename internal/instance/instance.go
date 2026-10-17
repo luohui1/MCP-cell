@@ -44,6 +44,10 @@ type Options struct {
 	InitTimeout time.Duration
 	Version     string // MCPcell version, sent as clientInfo
 	Log         *slog.Logger
+	// OnListChanged runs synchronously when the upstream announces a
+	// */list_changed, before sessions are told, so a cache can be marked stale
+	// before clients re-list.
+	OnListChanged func(notification string)
 }
 
 type Instance struct {
@@ -249,6 +253,31 @@ func (i *Instance) Call(ctx context.Context, ds Downstream, req jsonrpc.Message,
 	}
 }
 
+// Request sends a request on MCPcell's own behalf (catalog refresh) and waits
+// for the response. Errors are transport-level; a JSON-RPC error comes back as
+// the message.
+func (i *Instance) Request(ctx context.Context, method string, params any) (jsonrpc.Message, error) {
+	req, err := jsonrpc.NewRequest(json.RawMessage(`0`), method, params)
+	if err != nil {
+		return req, err
+	}
+	c, out, err := i.register(nil, req)
+	if err != nil {
+		return req, err
+	}
+	if err := i.write(out); err != nil {
+		up, _ := strconv.ParseInt(string(out.ID), 10, 64)
+		i.unregister(c, up)
+		return req, err
+	}
+	select {
+	case resp := <-c.resp:
+		return resp, nil
+	case <-ctx.Done():
+		return req, ctx.Err()
+	}
+}
+
 // unsubscribeLocally keeps the upstream subscription while other sessions
 // still use it; it reports whether the request was fully handled here.
 func (i *Instance) unsubscribeLocally(ds Downstream, req jsonrpc.Message) bool {
@@ -379,7 +408,9 @@ func (i *Instance) finish() {
 	reason := i.stopReason
 	i.mu.Unlock()
 	msg := "MCP 服务进程已退出，调用结果未知，未自动重试"
-	if reason != "" {
+	if i.p.MemoryLimitHit() {
+		msg = "MCP 服务超出内存上限，已被终止；调用结果未知，未自动重试"
+	} else if reason != "" {
 		msg = "MCP 服务已被停止（" + reason + "），调用结果未知，未自动重试"
 	}
 	for _, c := range pending {
@@ -463,6 +494,9 @@ func (i *Instance) onNotification(m jsonrpc.Message) {
 	case "notifications/cancelled":
 		// Cancels a server-to-client request; shared instances forward none.
 	default:
+		if strings.HasSuffix(m.Method, "/list_changed") && i.opts.OnListChanged != nil {
+			i.opts.OnListChanged(m.Method)
+		}
 		// list_changed, log messages and unknown notifications go to every
 		// session using this instance.
 		for _, ds := range i.targets(i.attached) {
@@ -506,6 +540,10 @@ func (i *Instance) Stop(reason string) {
 }
 
 func (i *Instance) Done() <-chan struct{} { return i.done }
+
+// MemoryLimitHit reports whether the upstream was killed for exceeding its
+// memory limit.
+func (i *Instance) MemoryLimitHit() bool { return i.p.MemoryLimitHit() }
 
 func (i *Instance) Alive() bool {
 	select {

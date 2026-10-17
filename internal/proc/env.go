@@ -28,8 +28,8 @@ func envKey(k string) string {
 }
 
 // BuildEnv returns the allowlisted subset of parent with extra layered on top.
-// Proxy variables are matched case-insensitively on every platform because
-// lowercase http_proxy is common on Unix.
+// Proxy and npm_config_* variables (registry mirrors) are matched
+// case-insensitively on every platform because lowercase forms are common.
 func BuildEnv(parent []string, extra map[string]string) []string {
 	allow := map[string]bool{}
 	for _, k := range baseEnv {
@@ -38,10 +38,11 @@ func BuildEnv(parent []string, extra map[string]string) []string {
 	out := map[string]string{} // envKey -> KEY=VALUE
 	for _, kv := range parent {
 		k, _, ok := strings.Cut(kv, "=")
-		if !ok || k == "" || !allow[strings.ToUpper(k)] {
+		npmConfig := strings.HasPrefix(strings.ToUpper(k), "NPM_CONFIG_")
+		if !ok || k == "" || !allow[strings.ToUpper(k)] && !npmConfig {
 			continue
 		}
-		if runtime.GOOS != "windows" && k != strings.ToUpper(k) && !strings.HasSuffix(strings.ToLower(k), "_proxy") {
+		if runtime.GOOS != "windows" && k != strings.ToUpper(k) && !npmConfig && !strings.HasSuffix(strings.ToLower(k), "_proxy") {
 			continue
 		}
 		out[envKey(k)] = kv

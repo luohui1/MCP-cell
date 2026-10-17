@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/luohui1/MCP-cell/internal/catalog"
+	"github.com/luohui1/MCP-cell/internal/instance"
 	"github.com/luohui1/MCP-cell/internal/jsonrpc"
 )
 
@@ -201,18 +203,23 @@ func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request, name string) {
 }
 
 func (s *Server) initialize(w http.ResponseWriter, r *http.Request, name string, m jsonrpc.Message) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
-	inst, err := s.pool.Acquire(ctx, name)
-	if err != nil {
-		writeMessage(w, http.StatusOK, jsonrpc.NewError(m.ID, jsonrpc.CodeUpstreamUnavailable, "MCP 服务无法启动："+firstLine(err.Error())))
-		return
+	// From the catalog when possible: connecting a session starts nothing.
+	result, version, cached := s.pool.CachedInit(name)
+	var inst *instance.Instance
+	if !cached {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		var err error
+		if inst, err = s.pool.Acquire(ctx, name); err != nil {
+			writeMessage(w, http.StatusOK, jsonrpc.NewError(m.ID, jsonrpc.CodeUpstreamUnavailable, "MCP 服务无法启动："+firstLine(err.Error())))
+			return
+		}
+		result, version = inst.InitResult()
 	}
 	var p struct {
 		ClientInfo struct{ Name, Version string } `json:"clientInfo"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	result, version := inst.InitResult()
 	ss := &session{id: randomHex(16), service: name, version: version, created: time.Now(), lastSeen: time.Now(),
 		client: strings.TrimSpace(p.ClientInfo.Name + " " + p.ClientInfo.Version)}
 	s.mu.Lock()
@@ -223,8 +230,10 @@ func (s *Server) initialize(w http.ResponseWriter, r *http.Request, name string,
 	}
 	s.sessions[ss.id] = ss
 	s.mu.Unlock()
-	inst.Attach(ss)
-	s.opts.Log.Info("session opened", "service", name, "client", ss.client, "protocol", version)
+	if inst != nil {
+		inst.Attach(ss)
+	}
+	s.opts.Log.Info("session opened", "service", name, "client", ss.client, "protocol", version, "fromCatalog", cached)
 	// The upstream negotiated its protocol version once; every session on the
 	// shared instance speaks that version.
 	w.Header().Set("Mcp-Session-Id", ss.id)
@@ -250,6 +259,15 @@ func (s *Server) handle(ctx context.Context, ss *session, m jsonrpc.Message, emi
 		// The log level is per-process state; one client must not change it
 		// for every other client of a shared instance.
 		return jsonrpc.NewResult(m.ID, nil)
+	case "tools/list", "prompts/list", "resources/list", "resources/templates/list":
+		// The catalog holds every page merged, so only a first-page request
+		// can be answered from it.
+		if jsonrpc.Field(m.Params, "cursor") == nil {
+			if res, ok := s.pool.CachedList(ss.service, m.Method); ok {
+				ss.touch(0)
+				return jsonrpc.NewResult(m.ID, res)
+			}
+		}
 	}
 	ss.touch(1)
 	defer ss.touch(-1)
@@ -382,6 +400,24 @@ func (s *Server) mcpGet(w http.ResponseWriter, r *http.Request, name string) {
 		case <-r.Context().Done():
 			return
 		}
+	}
+}
+
+// notifyListChanged tells every session of service that list changed. Sessions
+// attached to the upstream may already have heard it from there; a duplicate
+// list_changed only costs a re-list.
+func (s *Server) notifyListChanged(service, list string) {
+	n, _ := jsonrpc.NewNotification(catalog.ChangedNotification(list), nil)
+	s.mu.Lock()
+	var targets []*session
+	for _, ss := range s.sessions {
+		if ss.service == service {
+			targets = append(targets, ss)
+		}
+	}
+	s.mu.Unlock()
+	for _, ss := range targets {
+		ss.Notify(n)
 	}
 }
 
