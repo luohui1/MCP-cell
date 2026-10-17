@@ -91,7 +91,23 @@
 
 分三步做，先拿到真实机器上的节省：
 
-**M3a 接管与还原（代码完成，待真机验收）**
+**M3a 接管与还原 ✅**
+
+真机验收（2026-10-17，Windows 11，作者的开发机）：接管 Claude Code 的 3 个可共享条目（context7、shadcn-ui、一个 npm 的 API 包装服务）和 Codex 的 2 个，开启自启，预热后用 `scripts/bench-sessions.ps1` 做 A/B——同一台机器、同一份配置，各起 3 个全新的 Claude Code 会话，45 秒后测量：
+
+| | 接管前 | 接管后 |
+|---|---|---|
+| 每个会话的 MCP 私有提交 | 约 632 MB（6–7 个进程） | **约 314 MB**（7 个进程，全是尚未接管的有状态服务） |
+| 3 个会话 + MCPcell | 1,946 MB | **997 MB** |
+| MCPcell 内的上游进程 | — | **0**（会话连接和列工具都由能力目录应答） |
+
+- 接管前，context7、shadcn-ui 和一个 ssh 服务在新会话里**根本没连上**：npx 冷启动超过 Claude Code 的 30 秒连接超时被杀掉，占了启动开销却不可用。接管后它们即时可用
+- 真实 Claude Code 会话（不加任何参数，用接管后的 `~/.claude.json`）调用 context7 成功；MCPcell 此时才拉起 context7（2 个进程），没被调用的服务保持 0 进程
+- 被调用时每个服务只在全机起一份：实测 context7 约 81–116 MB、shadcn-ui 约 45 MB、API 包装服务约 218 MB，空闲 10 分钟回收
+- 剩下的每会话开销来自有状态服务（浏览器调试、桌面应用桥接等），由 M3b 的按会话隔离处理
+- 测量方法：会话用 `--input-format stream-json` 并保持 stdin 打开，不发任何消息，完全不调用模型；测量只计会话自己拉起的 MCP 进程树（排除 shell），以及创建时间晚于父进程的子进程（Windows 不会清除已退出父进程的 PID）
+
+**M3a 交付内容**
 - `internal/clients`：读取 Claude Code（`~/.claude.json` 用户级）、Codex（`config.toml`）、Cursor（`mcp.json`）的 MCP 条目；按启动包、参数、环境变量值识别"同一个服务"，Claude Code 和 Codex 的 context7 映射到同一个 MCPcell 服务，凭据不同则分开
 - 分类：可共享（已知无状态清单）/ 需要会话隔离 / 未知（可强制共享）/ 远程 HTTP / 客户端内置（Codex 的 codex、node_repl、cua_repl）/ 已连接 MCPcell
 - 接管：Claude Code 走 `claude mcp remove/add-json -s user`（不和运行中的会话抢写文件，失败时把原条目放回）；Codex 只替换该条目的表块，保留 enabled、超时等客户端策略；Cursor 只替换该条目的 JSON 片段。改前整文件备份到 `~/.mcpcell/backups/`，接管记录在 `takeover.json`

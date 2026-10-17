@@ -23,7 +23,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$agentPattern = '^(claude|codex|grok|gemini|cursor|code|code - insiders|windsurf|kiro|opencode|mcpcell)\.exe$'
+$agentPattern = '^(claude|codex|grok|gemini|cursor|code|code - insiders|windsurf|kiro|opencode|mcpcell|mcpcelld)\.exe$'
 # Descendants that are agent tooling rather than MCP servers.
 $notServer = '^(conhost|bash|sh|pwsh|powershell|git|git-remote-https|rg|ssh|ssh-agent|less|cat|find|timeout|WerFault|OpenConsole)\.exe$'
 
@@ -40,9 +40,13 @@ foreach ($p in $all) {
 function Get-Descendants([int]$id, [int]$depth = 0) {
   $out = @()
   if ($depth -gt 16 -or -not $children.ContainsKey($id)) { return $out }
+  $born = $byPid[$id].CreationDate
   foreach ($c in $children[$id]) {
     $cid = [int]$c.ProcessId
     if ($cid -eq $id) { continue }
+    # A child older than its "parent" belongs to an earlier process that had
+    # this PID; Windows does not clear ParentProcessId when a parent exits.
+    if ($born -and $c.CreationDate -lt $born) { continue }
     # Nested agents (e.g. a Claude subagent process) are reported as their own root.
     if ($c.Name -match $agentPattern) { continue }
     # Agents run tool calls through shells; MCP servers are spawned directly or
