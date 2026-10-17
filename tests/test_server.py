@@ -61,4 +61,23 @@ class ServerTests(unittest.TestCase):
         status,h,b=self.request('/api/rescan','POST','{}',{'Content-Type':'application/json'},True)
         self.assertEqual(status,200);self.assertEqual(json.loads(b)['stats']['definitions'],12)
 
+    def test_z_real_http_enroll_pause_restore(self):
+        status,_,data=self.request('/api/snapshot',auth=True)
+        entry=next(e for e in json.loads(data)['entries'] if e['canEnroll'])
+        status,_,data=self.request('/api/enroll','POST',json.dumps({'ids':[entry['id']],'confirm':True}),{'Content-Type':'application/json'},True)
+        self.assertEqual(status,200)
+        result=json.loads(data);self.assertTrue(result['results'][0]['ok'],result)
+        bid=result['results'][0]['bindingId']
+        self.assertTrue(any(e.get('bindingId')==bid for e in result['snapshot']['entries']))
+        try:
+            status,_,data=self.request('/api/toggle','POST',json.dumps({'bindingId':bid,'enabled':False}),{'Content-Type':'application/json'},True)
+            self.assertEqual(status,200);self.assertFalse(json.loads(data)['enabled'])
+        finally:
+            status,_,data=self.request('/api/restore','POST',json.dumps({'bindingId':bid}),{'Content-Type':'application/json'},True)
+            self.assertEqual(status,200);self.assertTrue(json.loads(data)['ok'])
+    def test_enroll_requires_explicit_confirmation(self):
+        entry=next(e for e in self.server.snapshot['entries'] if e['canEnroll'])
+        status,_,_=self.request('/api/enroll','POST',json.dumps({'ids':[entry['id']],'confirm':False}),{'Content-Type':'application/json'},True)
+        self.assertEqual(status,409)
+
 if __name__=='__main__':unittest.main()

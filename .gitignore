@@ -7,3 +7,6 @@ __pycache__/
 mcpcell-inventory.json
 mcpcell-review-plan.json
 dist/
+
+.mcpcell/
+*.bin

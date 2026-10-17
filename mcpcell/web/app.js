@@ -1,178 +1,48 @@
 'use strict';
 (() => {
-  const paths = {
-    grid:'<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
-    layers:'<path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/>',
-    devices:'<rect x="3" y="4" width="14" height="11" rx="2"/><path d="M7 20h7M10 15v5"/><rect x="17" y="10" width="5" height="10" rx="1"/>',
-    shield:'<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/>',
-    terminal:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/>',
-    lock:'<rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/>',
-    settings:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="16" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/>',
-    search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
-    refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 13 3M5 15a8 8 0 0 0 13 3"/>',
-    arrow:'<path d="M4 12h15m-5-5 5 5-5 5"/>',
-    chevron:'<path d="m9 5 7 7-7 7"/>',
-    download:'<path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/>',
-    leaf:'<path d="M20 3s0 12-6 15c-5 3-10-2-8-7 2-5 14-8 14-8Z"/><path d="M4 21 15 10"/>',
-    check:'<path d="m5 12 4 4L19 6"/>',
-    alert:'<path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3v.01"/>',
-    link:'<path d="m9 15 6-6m-7 8-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m4 0 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 -1)"/>',
-    globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18Z"/>',
-    close:'<path d="m6 6 12 12M6 18 18 6"/>',
-    clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-    file:'<path d="M5 3h9l5 5v13H5V3Zm9 0v6h5M8 13h8m-8 4h6"/>',
-    sliders:'<path d="M5 3v18M12 3v18M19 3v18"/><path d="M2 8h6m1 9h6m1-10h6"/>'
-  };
-  const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[n] || paths.layers}</svg>`;
-  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); });
-  const titles = {overview:'概览', services:'服务清单', clients:'AI 客户端', review:'审查与迁移', cli:'CLI 接入', about:'能力与边界'};
-  const state = {snapshot:null, view:'overview', query:'', filter:'all', client:'all', selected:new Set()};
-  const main = document.querySelector('#main');
-  const offline = Boolean(window.__MCPCELL_PREVIEW__);
-  let toastTimer;
-  function toast(text) { const el=document.querySelector('#toast'); el.textContent=text; el.classList.add('visible'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('visible'),4200); }
-  async function api(path, method='GET', token='') {
-    const headers = method === 'POST' ? {'Content-Type':'application/json'} : {};
-    if(token) headers.Authorization=`Bearer ${token}`;
-    const response = await fetch(path, {method, credentials:'same-origin', headers, ...(method==='POST'?{body:'{}'}:{})});
-    if(!response.ok) throw new Error(response.status===401?'请使用终端打印的含临时凭据的启动链接。':response.status===429?'扫描间隔过短，请稍后重试。':`本地接口返回 ${response.status}；操作未完成。`);
-    return response.json();
-  }
-  function clientName(id) { return state.snapshot.clients.find(c=>c.id===id)?.name || id; }
-  function scopeName(s) {return ({user:'用户级', workspace:'项目级',local:'本地项目',custom:'自定义'})[s] || s;}
-  const tag=(text,kind='neutral')=>`<span class="tag ${kind}">${esc(text)}</span>`;
-  const button=(label,action,ico='arrow',primary=false)=>`<button class="button ${primary?'primary':''}" data-action="${action}">${icon(ico)}${esc(label)}</button>`;
-  function heading(title, subtitle, action='rescan') {
-    return `<div class="page-heading"><div><p class="eyebrow">YOUR TOOLS. ONE QUIET PLACE.</p><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div><div class="heading-actions">${button('重新扫描','rescan','refresh')}${action==='plan'?button('导出审查提案','export-plan','download',true):button('审查迁移建议','review','sliders',true)}</div></div>`;
-  }
-  function stats() {
-    const s=state.snapshot.stats;
-    return `<div class="stats-grid">${[
-      ['发现配置的客户端',s.clientsFound,'/ 11','已知位置发现，不代表运行中','devices'],
-      ['配置绑定',s.definitions,'条','按客户端及配置来源分别保留','layers'],
-      ['同配置候选组',s.candidateGroups,'组','配置相同 ≠ 可以共享进程','link'],
-      ['需要核对',s.reviewCount,'条','静态线索，不是安全认证','shield']
-    ].map(([title,value,unit,note,ico])=>`<article class="glass stat-card"><div class="stat-title">${esc(title)}${icon(ico)}</div><div class="stat-value"><strong>${value}</strong><span>${unit}</span></div><p class="stat-note">${esc(note)}</p></article>`).join('')}</div>`;
-  }
-  function serviceRows(entries, compact=false) {
-    return entries.map(e=>`<tr>${compact?'':`<td><input type="checkbox" data-select="${esc(e.id)}" aria-label="选择 ${esc(e.name)}" ${state.selected.has(e.id)?'checked':''}></td>`}<td><div class="service-label"><span class="service-icon">${icon(e.transport==='remote'?'globe':'layers')}</span><div><button class="service-name" data-detail="${esc(e.id)}">${esc(e.name)}</button><p class="service-sub">${esc(e.endpoint)}</p></div></div></td><td><span class="client-chip">${esc(clientName(e.client))}</span></td>${compact?'':`<td>${esc(scopeName(e.scope))}</td>`}<td>${tag(e.configuredState==='disabled'?'配置已禁用':e.candidateCount>1?'复用待评估':'尚未托管',e.configuredState==='disabled'?'neutral':e.candidateCount>1?'mint':'outline')}</td><td class="numeric"><button class="icon-button" data-detail="${esc(e.id)}" aria-label="查看 ${esc(e.name)}">${icon('chevron')}</button></td></tr>`).join('');
-  }
-  function table(entries,compact=false) {
-    if(!entries.length) return `<div class="empty-state"><h2>没有匹配的配置</h2><p>试试其他筛选条件，或显式指定需要扫描的工作区。</p></div>`;
-    return `<div class="table-wrap"><table><thead><tr>${compact?'':'<th><input id="select-all" type="checkbox" aria-label="选择当前筛选下所有条目"></th>'}<th>服务</th><th>来源客户端</th>${compact?'':'<th>作用域</th>'}<th>治理状态</th><th class="numeric">详情</th></tr></thead><tbody>${serviceRows(entries,compact)}</tbody></table></div>`;
-  }
-  function overview() {
-    const x=state.snapshot,s=x.stats;
-    const seen=x.clients.filter(c=>c.found>0);
-    return heading('工具有序，工作轻盈。','发现分散的 MCP 配置，在统一接入前看清每一个边界。')+
-      `<section class="glass hero"><div class="hero-copy"><p class="eyebrow">A LIGHTER WAY TO WORK</p><h2>让每一份工具资源，都有归属。</h2><p>连接你的 AI 工作流，而不是再启动一整套服务。<br>先发现、再审查，逐步进入受控运行。</p><div class="hero-links"><button class="text-button" data-view="clients">查看客户端接入 ${icon('arrow')}</button><span>当前阶段 · 只读发现</span></div></div><div class="hero-art" aria-label="配置清单示意，不是资源监控"><span class="orbit-label left">MCP</span><div class="liquid-orb"><div class="orb-content"><strong>${s.definitions}</strong><span>配置绑定</span></div></div><span class="orbit-label right">CLI · NEXT</span></div></section>`+
-      stats()+`<div class="main-grid"><section class="glass section-card"><div class="section-heading"><div><h2>服务清单 <span class="count">${s.definitions}</span></h2><p class="subtitle">保留来源，不直接合并</p></div><button class="text-button" data-view="services">查看全部 ${icon('arrow')}</button></div>${table(x.entries.slice(0,5),true)}<p class="table-note">这里展示配置声明；当前尚未观测进程，也没有接管运行。</p></section><aside class="aside-column"><section class="glass review-card"><div class="section-heading"><h2>接管之前</h2>${tag('建议','amber')}</div><p>先处理边界，再决定如何共享。</p><div class="review-item"><span class="review-icon">${icon('link')}</span><div><strong>${s.candidateGroups} 组同配置候选</strong><p>需验证工作区、凭据和状态隔离，<br>不会自动合并成一个进程。</p></div></div><div class="review-item"><span class="review-icon">${icon('shield')}</span><div><strong>${s.reviewCount} 条配置需要核对</strong><p>检查凭据、启动方式和批准设置，<br>保留原客户端的授权边界。</p></div></div><div class="review-divider"></div><button class="button block" data-view="review">打开审查工作台 ${icon('arrow')}</button></section><section class="compact-note"><div class="note-head">${icon('leaf')}不把愿景当成已实现</div><p>运行实例：未观测 · 内存节省：未测量<br>当前不会运行工具或修改配置。</p></section></aside></div>`+
-      `<section class="clients-strip"><div class="section-heading"><h2>你的 AI 客户端</h2><button class="text-button" data-view="clients">全部适配器 ${icon('arrow')}</button></div><div class="client-mini-grid">${(seen.length?seen:x.clients).slice(0,4).map(c=>`<button class="glass client-mini" data-client-detail="${c.id}"><span class="monogram">${c.monogram}</span><div><strong>${c.name}</strong><p>${c.found?`${c.entryCount} 条配置绑定`:'未发现配置'}</p></div><span class="tiny-dot"></span></button>`).join('')}</div></section>`;
-  }
-  function filtered() {
-    const q=state.query.toLowerCase().trim();
-    return state.snapshot.entries.filter(e=>(state.client==='all'||e.client===state.client)&&(!q||`${e.name} ${clientName(e.client)} ${e.endpoint} ${e.source}`.toLowerCase().includes(q))&&(state.filter==='all'||(state.filter==='candidates'&&e.candidateCount>1)||(state.filter==='review'&&e.issues.length>0)||(state.filter==='disabled'&&e.configuredState==='disabled')));
-  }
-  function services() {
-    return heading('服务清单','每条配置有来源，每次接入有边界。这里只显示声明，不推断客户端是否启用。','plan')+
-      `<div class="toolbar"><label class="search-box">${icon('search')}<input id="service-search" type="search" placeholder="搜索服务、客户端或来源…" value="${esc(state.query)}" aria-label="搜索服务"><kbd>⌘ K</kbd></label><div class="segmented" role="group" aria-label="配置筛选">${[['all','全部'],['candidates','重复候选'],['review','需核对'],['disabled','已禁用']].map(([id,t])=>`<button data-filter="${id}" class="${state.filter===id?'active':''}" aria-pressed="${state.filter===id}">${t}</button>`).join('')}</div><select id="client-filter" class="select" aria-label="按客户端筛选"><option value="all">全部客户端</option>${state.snapshot.clients.map(c=>`<option value="${c.id}" ${state.client===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div><section class="glass full-table"><div id="table-region">${table(filtered())}</div><p class="table-note" id="selection-note">已选 ${state.selected.size} 条 · 导出的是审查提案，不是可直接应用的客户端配置。</p></section>`;
-  }
-  function clients() {
-    return heading('AI 客户端','不同配置格式，同一个发现入口。保留客户端原有的配置与权限语义。')+
-      `<div class="section-note">自动检查已知用户级路径。项目级配置需在启动时通过 <code>--workspace</code> 显式指定；自定义路径使用 <code>--config CLIENT=PATH</code>。未发现配置，不等于未安装客户端。</div><div class="client-grid">${state.snapshot.clients.map(c=>`<article class="glass client-card"><div class="card-top"><span class="monogram">${c.monogram}</span><h3>${c.name}</h3>${tag(c.found?'发现配置':'未发现',c.found?'mint':'outline')}</div><p>${c.format} 只读解析<br>${c.found?`发现 ${c.found} 个配置来源，未改变原有设置。`:'已知位置未发现配置，可检查自定义路径。'}</p><div class="source-count"><span><strong>${c.entryCount}</strong> 条绑定</span><button class="text-button" data-client-detail="${c.id}">查看来源 ${icon('arrow')}</button></div></article>`).join('')}</div>`;
-  }
-  function findings() {
-    return state.snapshot.entries.flatMap(e=>e.issues.map(i=>({...i, entry:e}))).sort((a,b)=>(b.severity==='high')-(a.severity==='high'));
-  }
-  function review() {
-    const list=findings();
-    return heading('审查与迁移','发现不是信任。先核对配置，再谈资源复用与自动接管。','plan')+
-      `<div class="inline-warning">当前仅生成审查提案。配置回写、事务备份、回滚与运行接管尚未实现，界面不会执行这些操作。</div><div class="review-layout"><section class="glass section-card"><div class="section-heading"><h2>配置审查线索 <span class="count">${list.length}</span></h2>${tag('静态检查','outline')}</div>${list.length?list.map(f=>`<div class="finding">${tag(f.severity==='high'?'优先核对':'需核对',f.severity==='high'?'red':'amber')}<div><h3>${esc(f.title)}</h3><p><button class="text-button" data-detail="${f.entry.id}">${esc(f.entry.name)} · ${esc(clientName(f.entry.client))} ${icon('arrow')}</button></p></div></div>`).join(''):'<div class="empty-state"><h2>未发现预设风险线索</h2><p>这不代表配置或服务已通过安全验证。</p></div>'}</section><aside><section class="glass section-card"><h2>渐进接入，不打断工作</h2><ol class="steps"><li><strong>发现与归一化 · 已实现</strong><p>只读解析，保留来源、作用域和配置差异。</p></li><li><strong>审查提案 · 已实现</strong><p>默认独占；凭据留在源配置；不会执行。</p></li><li><strong>事务迁移 · 待实现</strong><p>备份、对比、原子替换、校验与可逆回滚。</p></li><li><strong>运行治理 · 待实现</strong><p>进程归属、资源限制、租约与安全复用。</p></li></ol><button class="button primary block" data-action="export-plan">${icon('download')}导出审查提案</button><p class="subtitle">所有限制和阻断项都会写入提案。</p></section><section class="compact-note"><div class="note-head">${icon('lock')}敏感值留在配置文件</div><p>浏览器不接收参数值、环境变量值、认证头或 OAuth 原文。自定义命令路径默认隐藏。</p></section></aside></div>`;
-  }
-  function cli() {
-    return heading('CLI，也在同一套秩序里。','统一执行契约，而不是再造一个任意命令终端。')+
-      `<section class="glass prose"><p class="eyebrow">ONE CONTRACT. MULTIPLE ADAPTERS.</p>${tag('设计预留 · 尚未执行','amber')}<h2>前端不依赖底层调用协议</h2><p>MCP 和 CLI 将使用同一份服务身份、工作区、权限、资源预算与审计记录。CLI 接入通过显式注册的参数模板，而不是把任意文本交给 shell。</p><div class="contract-box">ToolDefinition
-  ├─ identity / source / workspace
-  ├─ authorization / approval
-  ├─ resourceBudget / lifecycle
-  └─ adapter
-      ├─ mcp-stdio
-      ├─ mcp-http
-      └─ cli-argv  [planned]</div><p>当前程序只提供扫描与审查命令，没有 CLI 执行 API，也不会通过 <code>--help</code> 或 <code>--version</code> 运行发现到的程序。</p></section><div class="capability-grid"><article class="glass capability">${icon('terminal')}<h2>结构化参数</h2><p>注册可执行制品、允许的子命令和参数模式。固定工作目录与环境白名单，禁止隐式 shell 拼接。</p></article><article class="glass capability">${icon('shield')}<h2>同样的治理边界</h2><p>超时、输出预算、并发、批准和取消语义将与 MCP 共用。没有安全执行后端时，拒绝执行。</p></article></div>`;
-  }
-  function about() {
-    const x=state.snapshot;
-    return heading('能力与边界','能做到什么、还没做到什么，都应该看得清楚。','plan')+
-      `<div class="capability-grid"><article class="glass capability">${tag('本版已实现','mint')}<h2>本地只读工作台</h2><p>11 类配置适配器；JSON / JSONC / TOML 解析；显式工作区与自定义路径；来源追踪；同配置候选；静态审查；隐藏敏感值；审查提案导出。</p><button class="text-button" data-action="export-inventory">导出当前清单 ${icon('download')}</button></article><article class="glass capability">${tag('尚未实现','amber')}<h2>运行治理与迁移</h2><p>MCP/CLI 执行、进程共享、Job Objects/cgroups、凭据托管、自动配置回写、事务备份及回滚。当前没有经过测量的内存节省数据。</p></article><article class="glass capability"><h2>扫描范围</h2><p>${x.limitations.map(esc).join('<br>')}</p></article><article class="glass capability"><h2>访问与隐私</h2><p>仅监听 127.0.0.1，API 需要随机访问凭据；限制 Host 与 Origin。资源全部本地加载。扫描限额：单文件 1 MiB，256 个来源，1024 条绑定。</p><p>不防御已完全控制同一系统账号的恶意进程；本版也不是工具执行沙箱。</p></article></div>`+
-      `<section class="glass section-card clients-strip"><h2>扫描诊断 · ${x.errors.length} 条</h2>${x.errors.length?x.errors.map(e=>`<div class="finding"><div><h3>${esc(e.message)}</h3><p>${esc(e.source)}</p></div></div>`).join(''):'<p class="subtitle">本次已检查来源未返回读取或解析错误；未检查范围不在此结论内。</p>'}</section>`;
-  }
-  function render() {
-    if(!state.snapshot) return;
-    document.querySelectorAll('[data-view]').forEach(el=>{if(el.classList.contains('nav-item')){el.classList.toggle('active',el.dataset.view===state.view); if(el.dataset.view===state.view) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current');}});
-    document.querySelector('#crumb').textContent=titles[state.view];
-    document.querySelector('#service-count').textContent=state.snapshot.stats.definitions;
-    const badge=document.querySelector('#mode-badge');
-    badge.className=`tag ${state.snapshot.mode==='demo'?'amber':'mint'}`;
-    badge.textContent=state.snapshot.mode==='demo'?(offline?'演示数据 · 离线预览':'演示数据 · 样例配置'):'本机配置 · 只读';
-    document.querySelector('#footer-status').textContent=`最近扫描 ${state.snapshot.scannedAt.slice(11,19)} · ${state.snapshot.durationMs} ms · 无运行时测量`;
-    main.innerHTML=({overview,services,clients,review,cli,about})[state.view]();
-    main.classList.remove('view-enter'); requestAnimationFrame(()=>main.classList.add('view-enter'));
-    document.body.dataset.ready='true';
-  }
-  function navigate(view) {if(!titles[view])return; state.view=view;render();window.scrollTo({top:0});}
-  function showDialog(html) {const dialog=document.querySelector('#detail');document.querySelector('#detail-body').innerHTML=html;dialog.showModal();}
-  const closeButton=()=>`<button class="icon-button" data-action="close-dialog" aria-label="关闭详情">${icon('close')}</button>`;
-  function detail(id) {
-    const e=state.snapshot.entries.find(v=>v.id===id);if(!e)return;
-    const line=(key,value)=>`<div class="detail-line"><dt>${esc(key)}</dt><dd>${esc(value)}</dd></div>`;
-    showDialog(`<div class="detail-header"><div><p class="eyebrow">SERVICE DEFINITION</p><h2 id="detail-title">${esc(e.name)}</h2><small>${esc(clientName(e.client))} · ${esc(scopeName(e.scope))}</small></div>${closeButton()}</div>${tag('发现配置 · 未托管','neutral')}<div class="detail-section"><h3>来源与身份</h3><dl>${line('配置文件',e.source)}${line('工作区',e.workspace)}${line('连接方式',e.transport==='remote'?'远程声明（未连接）':e.transport==='stdio'?'本地 stdio（未启动）':'未确定')}${line('地址 / 程序',e.endpoint)}${line('配置状态',e.configuredState==='disabled'?'显式禁用声明':'存在声明；未确认实际启用')}${line('同配置候选',`${e.candidateCount} 条；不是共享资格`)}${line('默认策略','独占 · 尚未执行')}</dl></div><div class="detail-section"><h3>敏感值不进入界面</h3><dl>${line('参数',`${e.argumentCount} 个，所有值隐藏`)}${line('环境变量',`${e.environmentCount} 个，所有值隐藏`)}${line('请求头',`${e.headerCount} 个，所有值隐藏`)}${line('扩展字段',`${e.extraFieldCount} 个，保留原文件，不自动转换`)}</dl></div><div class="detail-section"><h3>审查线索</h3>${e.issues.length?e.issues.map(i=>`<div class="finding">${tag(i.severity==='high'?'优先':'核对',i.severity==='high'?'red':'amber')}<div><h3>${esc(i.title)}</h3><p>${esc(i.code)}</p></div></div>`).join(''):'<p class="detail-note">未匹配预设线索，不代表服务已通过安全验证。</p>'}</div><div class="detail-section"><p class="detail-note">当前不执行服务、不修改客户端配置，也不展示推测的内存节省。原始凭据仍保留在源配置中。</p></div>`);
-  }
-  function clientDetail(id) {
-    const c=state.snapshot.clients.find(v=>v.id===id);if(!c)return;
-    showDialog(`<div class="detail-header"><div><p class="eyebrow">CLIENT ADAPTER</p><h2 id="detail-title">${esc(c.name)}</h2><small>${esc(c.format)} · 只读配置发现</small></div>${closeButton()}</div><p class="detail-note">文件存在不代表客户端正在使用。当前不合并覆盖顺序，不读取密钥库，不检测进程。</p><div class="detail-section"><h3>检查过的来源</h3>${c.sources.map(s=>`<div class="source-record">${tag(s.status==='found'?'发现配置':s.status==='missing'?'未发现':'读取受限',s.status==='found'?'mint':s.status==='missing'?'outline':'amber')}<p class="source-file">${esc(s.path)}</p><small>${esc(scopeName(s.scope))} · ${s.entries} 条绑定${s.note?' · '+esc(s.note):''}</small></div>`).join('')||'<p class="subtitle">此平台未登记默认位置，请使用自定义配置路径。</p>'}</div><div class="detail-section"><button class="button block" data-client-filter="${c.id}">查看此客户端的服务 ${icon('arrow')}</button></div>`);
-  }
-  function saveJSON(data,name) {const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
-  function offlinePlan(){return {schemaVersion:'mcpcell.review-plan/v0alpha1',mode:'proposal_only',applicable:false,demo:true,reason:'离线演示审查提案；不是客户端配置，不能执行。',items:state.snapshot.entries.map(e=>({definitionId:e.id,name:e.name,client:e.client,source:e.source,scope:e.scope,operation:'review-before-enrollment',proposedSharing:'exclusive',credentialAction:'keep-in-source',blockers:['runtime-not-implemented','client-semantics-unverified','operator-approval-required'],checks:e.issues.map(i=>i.code)}))};}
-  document.addEventListener('click',async event=>{
-    const el=event.target.closest('button,a');if(!el)return;
-    if(el.dataset.view){navigate(el.dataset.view);return;}
-    if(el.dataset.detail){detail(el.dataset.detail);return;}
-    if(el.dataset.clientDetail){clientDetail(el.dataset.clientDetail);return;}
-    if(el.dataset.clientFilter){document.querySelector('#detail').close();state.client=el.dataset.clientFilter;navigate('services');return;}
-    if(el.dataset.filter){state.filter=el.dataset.filter;render();return;}
-    const action=el.dataset.action;
-    if(action==='close-dialog'){document.querySelector('#detail').close();return;}
-    if(action==='review'){navigate('review');return;}
-    if(action==='rescan'){
-      if(offline){toast('离线预览不会访问本机。运行 python -m mcpcell 后可重新扫描。');return;}
-      el.disabled=true;
-      try{state.snapshot=await api('/api/rescan','POST');state.selected.clear();render();toast('扫描完成。没有修改配置或启动工具。');}catch(error){toast(error.message);}finally{el.disabled=false;}
-    }
-    if(action==='export-inventory'){saveJSON(state.snapshot,'mcpcell-inventory.json');toast('已导出隐藏敏感值的清单；分享前仍请检查服务名与文件路径。');}
-    if(action==='export-plan'){
-      el.disabled=true;
-      try{const proposal=offline?offlinePlan():await api('/api/plan');if(state.selected.size)proposal.items=proposal.items.filter(i=>state.selected.has(i.definitionId));saveJSON(proposal,'mcpcell-review-plan.json');toast('已导出审查提案。此文件不可直接应用，原配置未改变。');}catch(error){toast(error.message);}finally{el.disabled=false;}
-    }
-  });
-  document.addEventListener('input',event=>{if(event.target.id==='service-search'){state.query=event.target.value;document.querySelector('#table-region').innerHTML=table(filtered());}});
-  document.addEventListener('change',event=>{
-    const el=event.target;
-    if(el.id==='client-filter'){state.client=el.value;document.querySelector('#table-region').innerHTML=table(filtered());}
-    if(el.dataset.select){if(el.checked)state.selected.add(el.dataset.select);else state.selected.delete(el.dataset.select);}
-    if(el.id==='select-all'){filtered().forEach(e=>{if(el.checked)state.selected.add(e.id);else state.selected.delete(e.id);});document.querySelector('#table-region').innerHTML=table(filtered());document.querySelector('#select-all').checked=el.checked;}
-    const note=document.querySelector('#selection-note');if(note)note.textContent=`已选 ${state.selected.size} 条 · 导出的是审查提案，不是可直接应用的客户端配置。`;
-  });
-  function focusSearch(){navigate('services');document.querySelector('#service-search')?.focus();}
-  document.querySelector('#search-shortcut').addEventListener('click',focusSearch);
-  document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();if(document.querySelector('#detail').open)document.querySelector('#detail').close();focusSearch();}});
-  document.querySelector('#detail').addEventListener('click',event=>{if(event.target===event.currentTarget){const r=event.currentTarget.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.currentTarget.close();}});
-  document.querySelector('.brand').addEventListener('click',e=>{e.preventDefault();navigate('overview');});
-  (async()=>{
-    try{
-      if(offline)state.snapshot=window.__MCPCELL_PREVIEW__;
-      else{const params=new URLSearchParams(location.hash.slice(1));let token=params.get('token')||'';if(token){history.replaceState(null,'',location.pathname);await api('/api/session','POST',token);token='';}state.snapshot=await api('/api/snapshot');}
-      render();
-    }catch(error){document.querySelector('#mode-badge').textContent='连接未完成';main.innerHTML=`<div class="loading-state"><h1>还没有连接到工作台</h1><p>${esc(error.message)}</p><p>在项目目录运行 <code>python -m mcpcell --open</code>。<br>仅浏览样式可运行 <code>python -m mcpcell --demo --open</code>。</p></div>`;}
-  })();
+const d=document,$=s=>d.querySelector(s);
+const paths={search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',scan:'<path d="M20 8v5h-5M4 16v-5h5"/><path d="M5.5 7a8 8 0 0 1 13.7 2M4.8 15a8 8 0 0 0 13.7 2"/>',arrow:'<path d="M4 12h16m-6-6 6 6-6 6"/>',settings:'<path d="M4 6h16M4 12h16M4 18h16"/><path d="M8 3v6m8 0v6m-6 0v6"/>',close:'<path d="m6 6 12 12M6 18 18 6"/>',check:'<path d="m5 12 4 4 10-10"/>'};
+const icon=n=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[n]}</svg>`;
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+$('#settings').innerHTML=icon('settings');$('#search-icon').innerHTML=icon('search');$('#scan-icon').innerHTML=icon('scan');$('#arrow-icon').innerHTML=icon('arrow');
+const offline=Boolean(window.__MCPCELL_PREVIEW__);
+const state={data:null,tab:'all',query:'',client:'all',selected:new Set(),busy:false};
+let timer;
+function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(timer);timer=setTimeout(()=>$('#toast').classList.remove('visible'),5000);}
+async function api(path,body,token){const headers={};if(body!==undefined)headers['Content-Type']='application/json';if(token)headers.Authorization=`Bearer ${token}`;const r=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers,...(body===undefined?{}:{body:JSON.stringify(body)})});let value;try{value=await r.json();}catch{throw new Error('本地管理器没有返回有效响应。');}if(!r.ok)throw new Error(value.error||`操作失败（${r.status}）`);return value;}
+const clientName=id=>state.data.clients.find(c=>c.id===id)?.name||id;
+const scope=s=>({user:'用户',workspace:'项目',local:'本地项目',custom:'自定义'})[s]||s;
+function groups(){const map=new Map();for(const e of state.data.entries){const key=e.candidateKey||e.id;if(!map.has(key))map.set(key,{key,name:e.name,members:[]});map.get(key).members.push(e);}return [...map.values()];}
+function visible(){return groups().filter(g=>(state.tab!=='managed'||g.members.some(e=>e.managed))&&(state.client==='all'||g.members.some(e=>e.client===state.client))&&(!state.query||`${g.name} ${g.members.map(e=>clientName(e.client)).join(' ')}`.toLowerCase().includes(state.query.toLowerCase())));}
+function available(g){return g.members.filter(e=>!e.managed&&e.canEnroll!==false);}
+function managed(g){return g.members.filter(e=>e.managed);}
+function selectedIds(){return [...new Set(visible().filter(g=>state.selected.has(g.key)).flatMap(g=>available(g).map(e=>e.id)))];}
+function bytes(n){return n===null||n===undefined?'—':`${(n/1048576).toFixed(n<1048576?1:0)} MB`;}
+function status(g){const m=managed(g),run=state.data.runtime?.instances||[];if(m.some(e=>e.managementState==='conflict'))return ['配置变化','conflict'];if(m.some(e=>run.some(r=>r.bindingId===e.bindingId)))return ['运行中','running'];if(m.length&&m.every(e=>e.enabled===false))return ['已暂停','paused'];if(m.length)return [m.length===g.members.length?'已接入':`${m.length}/${g.members.length} 已接入`,'ready'];return [available(g).length?'待接入':'仅检测',''];}
+function renderRows(){const shown=visible();$('#list').innerHTML=shown.length?shown.map(g=>{const m=managed(g),a=available(g),s=status(g),names=[...new Set(g.members.map(e=>clientName(e.client)))];return `<div class="row ${state.selected.has(g.key)?'selected':''}" data-group="${esc(g.key)}"><div class="service"><input type="checkbox" data-select="${esc(g.key)}" aria-label="选择 ${esc(g.name)}" ${state.selected.has(g.key)?'checked':''} ${!a.length?'disabled':''}><span class="glyph">${esc(g.name.slice(0,1).toUpperCase())}</span><div class="service-copy"><button class="name" data-detail="${esc(g.key)}">${esc(g.name)}</button><div class="sources">${names.slice(0,2).map(n=>`<span class="source">${esc(n)}</span>`).join('')}${names.length>2?`<span class="meta">+${names.length-2}</span>`:''}<span class="meta">${g.members[0].transport==='remote'?'HTTP':'STDIO'}</span></div></div></div><div><span class="state ${s[1]}">${s[1]?'<i></i>':''}${s[0]}</span></div><div class="row-actions">${a.length?`<button class="row-button" data-enroll="${esc(g.key)}">接入</button>`:m.length?`<button class="row-button" data-toggle="${esc(g.key)}">${m.every(e=>e.enabled===false)?'启用':'暂停'}</button>`:`<button class="row-button" data-detail="${esc(g.key)}">详情</button>`}${m.length?`<button class="text-action" data-restore="${esc(g.key)}">还原</button>`:a.length?`<button class="text-action" data-detail="${esc(g.key)}">详情</button>`:''}</div></div>`;}).join(''):`<div class="empty">${icon('search')}<h2>${state.tab==='managed'?'还没有接入的 MCP':'没有找到 MCP'}</h2><p>${state.query||state.client!=='all'?'换个搜索词或来源试试。':state.tab==='managed'?'在“全部”中选择已有 MCP，点击接入。':'点击“检测 MCP”查找已有配置。项目配置可通过启动参数指定目录。'}</p></div>`;updateSelection();}
+function updateSelection(){const ids=selectedIds();$('#enroll-selected').disabled=!ids.length||state.busy;$('#selected-count').textContent=ids.length?String(ids.length):'';$('#selection').innerHTML=ids.length?`已选 <strong>${ids.length}</strong> 条配置`:'勾选需要统一管理的 MCP';const all=visible().filter(g=>available(g).length);const num=all.filter(g=>state.selected.has(g.key)).length;$('#select-all').checked=Boolean(all.length)&&num===all.length;$('#select-all').indeterminate=num>0&&num<all.length;$('#select-all').disabled=!all.length||state.busy;}
+function render(){if(!state.data)return;const gs=groups();$('#tab-all span').textContent=gs.length;$('#tab-managed span').textContent=gs.filter(g=>managed(g).length).length;d.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===state.tab)));const clients=state.data.clients.filter(c=>state.data.entries.some(e=>e.client===c.id));$('#client').innerHTML='<option value="all">所有来源</option>'+clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');$('#client').value=state.client;const demo=offline||state.data.mode==='demo';$('#connection').className=`connection ${demo?'demo':''}`;$('#connection').innerHTML=`<i></i>${demo?'交互演示':'管理器在线'}`;$('#summary').textContent=demo?'演示数据 · 不修改本机':`已检测 ${clients.length} 类客户端 · ${gs.length} 个 MCP`;const errors=state.data.errors||[];$('#diagnostics').hidden=!errors.length;$('#diagnostics').textContent=`${errors.length} 项检测异常`;renderRows();runtime();d.body.dataset.ready='true';}
+function runtime(){const r=state.data.runtime||{running:0,rssBytes:0};$('#runtime').innerHTML=`运行 ${r.running||0}<span class="separator">/</span>${esc(bytes(r.rssBytes))}`;}
+const dialog=$('#dialog');
+function show(title,content,buttons='',subtitle=''){ $('#dialog-content').innerHTML=`<div class="dialog-head"><div><h2 id="dialog-title">${esc(title)}</h2>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div><button class="icon-button" data-close aria-label="关闭">${icon('close')}</button></div>${content}${buttons?`<div class="dialog-buttons">${buttons}</div>`:''}`;if(!dialog.open)dialog.showModal();}
+const cancel='<button class="button" data-close>取消</button>';
+function getGroup(key){return groups().find(g=>g.key===key);}
+function detail(key){const g=getGroup(key);if(!g)return;show(g.name,g.members.map(e=>`<div class="detail-item"><div class="detail-label">${esc(clientName(e.client))} · ${esc(scope(e.scope))}</div><div class="detail-value">${e.managed?(e.enabled===false?'已接入 · 暂停中':'已接入 · 独占转发'):(e.reason||'可以接入 MCPcell')}</div><div class="file-path">${esc(e.source)}</div>${e.managed?`<div class="detail-actions"><button data-single-stop="${esc(e.bindingId)}">停止运行实例</button><button data-single-restore="${esc(e.bindingId)}">还原此来源</button></div>`:''}</div>`).join('')+`<div class="notice">接入会备份原配置并替换启动入口。原 MCP 名称、参数和客户端批准设置保留。重启对应 AI 客户端后生效。</div>`,'',`${g.members.length} 条配置来源`);}
+let pending=[];
+function confirmEnroll(ids){if(!ids.length)return;pending=ids;const entries=state.data.entries.filter(e=>ids.includes(e.id));show(`接入 ${entries.length} 条 MCP 配置？`,`<p class="explain">将为 <strong>${esc([...new Set(entries.map(e=>clientName(e.client)))].join('、'))}</strong> 保存备份，并把所选 MCP 的启动入口交给 MCPcell。</p><div class="notice">接入后请重启对应客户端。工具按连接启动，退出时回收；不同会话仍独立运行，不合并权限。</div>${offline?'<div class="notice warn">这是交互演示，只改变当前页面，不读取或修改本机配置。</div>':''}`,cancel+'<button class="button primary" id="confirm-enroll">备份并接入</button>');}
+function confirmRestore(bids){pending=bids;show('还原为原来的启动方式？','<p class="explain">停止选中来源的托管实例，恢复原 MCP 配置。其他客户端设置保持不变。</p><div class="notice warn">进行中的调用可能中断。配置若被外部修改，会停止还原并报告冲突，不强行覆盖。</div>',cancel+'<button class="button danger" id="confirm-restore">还原配置</button>');}
+async function mutate(path,body){if(offline){if(path==='/api/enroll'){for(const id of body.ids){const e=state.data.entries.find(x=>x.id===id);if(e)Object.assign(e,{managed:true,bindingId:id,enabled:true,managementState:'active',canEnroll:false});}}else if(path==='/api/restore'){const e=state.data.entries.find(x=>x.bindingId===body.bindingId);if(e)Object.assign(e,{managed:false,enabled:true,canEnroll:true,managementState:'available',bindingId:null});}else if(path==='/api/toggle'){state.data.entries.filter(e=>e.bindingId===body.bindingId).forEach(e=>e.enabled=body.enabled);}return {snapshot:state.data,results:body.ids?.map(id=>({id,ok:true}))};}return api(path,body);}
+async function busy(task){if(state.busy)return;state.busy=true;updateSelection();d.querySelectorAll('#dialog button').forEach(b=>b.disabled=true);try{await task();}catch(err){toast(err.message);}finally{state.busy=false;d.querySelectorAll('#dialog button').forEach(b=>b.disabled=false);render();}}
+async function restore(bids){const failures=[];for(const bindingId of [...new Set(bids)]){try{const r=await mutate('/api/restore',{bindingId});state.data=r.snapshot;}catch(e){failures.push(e.message);}}if(failures.length)show('有配置未能还原',failures.map(t=>`<div class="failure">${esc(t)}</div>`).join(''));else{dialog.close();toast(offline?'演示：已还原，不涉及本机文件。':'已还原。重启对应 AI 客户端后生效。');}}
+d.addEventListener('click',event=>{const b=event.target.closest('button');if(!b||state.busy)return;if(b.hasAttribute('data-close')){dialog.close();return;}if(b.dataset.tab){state.tab=b.dataset.tab;state.selected.clear();render();return;}if(b.dataset.detail){detail(b.dataset.detail);return;}if(b.dataset.enroll){confirmEnroll(available(getGroup(b.dataset.enroll)).map(e=>e.id));return;}if(b.dataset.restore){confirmRestore(managed(getGroup(b.dataset.restore)).map(e=>e.bindingId));return;}if(b.dataset.singleRestore){confirmRestore([b.dataset.singleRestore]);return;}if(b.dataset.singleStop){busy(async()=>{const r=await mutate('/api/stop',{bindingId:b.dataset.singleStop});if(r.snapshot)state.data=r.snapshot;toast('已请求停止；当前调用不会自动重试。');});return;}if(b.dataset.toggle){const rows=managed(getGroup(b.dataset.toggle)),enabled=rows.every(e=>e.enabled===false);busy(async()=>{for(const e of rows){const r=await mutate('/api/toggle',{bindingId:e.bindingId,enabled});state.data=r.snapshot;}toast(enabled?'已启用；重新连接客户端即可调用。':'已暂停，阻止新连接并停止托管实例。');});return;}if(b.id==='confirm-enroll'){const ids=[...pending];busy(async()=>{const r=await mutate('/api/enroll',{ids,confirm:true});state.data=r.snapshot;state.selected.clear();const failed=(r.results||[]).filter(x=>!x.ok);if(failed.length)show('部分配置未接入',failed.map(x=>`<div class="failure">${esc(x.error)}</div>`).join(''));else{dialog.close();toast(offline?'演示：已接入，不涉及本机文件。':'已备份并接入。请重启对应的 AI 客户端。');}});}if(b.id==='confirm-restore')busy(()=>restore([...pending]));});
+$('#enroll-selected').onclick=()=>confirmEnroll(selectedIds());
+$('#select-all').onchange=e=>{for(const g of visible().filter(g=>available(g).length)){if(e.target.checked)state.selected.add(g.key);else state.selected.delete(g.key);}renderRows();};
+d.addEventListener('change',e=>{if(e.target.dataset.select){const key=e.target.dataset.select;if(e.target.checked)state.selected.add(key);else state.selected.delete(key);renderRows();}});
+$('#search').oninput=e=>{state.query=e.target.value;state.selected.clear();renderRows();};$('#client').onchange=e=>{state.client=e.target.value;state.selected.clear();renderRows();};
+$('#scan').onclick=()=>busy(async()=>{if(offline){toast('演示清单已刷新；真实检测请运行源码中的启动程序。');return;}$('#scan-icon').classList.add('spin');try{state.data=await api('/api/rescan',{});state.selected.clear();toast('检测完成。未自动修改任何配置。');}finally{$('#scan-icon').classList.remove('spin');}});
+function settings(){const x=state.data;show('设置与诊断',`<div class="detail-item"><div class="detail-label">运行模式</div><div class="detail-value">本地 stdio 接管 · 每连接独占 · 最多 8 个连接</div></div><div class="detail-item"><div class="detail-label">配置与备份</div><div class="detail-value">仅在确认后修改选中配置；本机状态默认保存在 ~/.mcpcell。Windows 使用 DPAPI，Linux/macOS 使用私有文件权限。</div></div><div class="detail-item"><div class="detail-label">检测更多项目</div><div class="file-path">python -m mcpcell --workspace "你的项目目录" --open</div></div><div class="detail-item"><div class="detail-label">尚未提供</div><div class="detail-value">跨会话进程共享、远程 MCP 代理、CLI 执行、内核内存硬限制和完整沙箱。RSS 是进程树观测值，不是节省量。</div></div>${(x.errors||[]).length?`<div class="detail-item"><div class="detail-label">检测异常</div>${x.errors.map(e=>`<p class="failure">${esc(e.message)}<br><span class="file-path">${esc(e.source)}</span></p>`).join('')}</div>`:''}`,'','MCPcell 0.2 · compact manager');}
+$('#settings').onclick=settings;$('#diagnostics').onclick=settings;
+dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();}});
+d.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();dialog.close();$('#search').focus();}});
+(async()=>{try{if(offline){state.data=structuredClone(window.__MCPCELL_PREVIEW__);for(const e of state.data.entries){if(e.canEnroll===undefined)e.canEnroll=e.transport==='stdio'&&e.configuredState!=='disabled';}state.data.runtime??={running:0,rssBytes:0,instances:[]};}else{const token=new URLSearchParams(location.hash.slice(1)).get('token');if(token){history.replaceState(null,'',location.pathname);await api('/api/session',{},token);}state.data=await api('/api/snapshot');}render();if(!offline)setInterval(async()=>{if(d.hidden||state.busy)return;try{state.data.runtime=await api('/api/runtime');runtime();if(!dialog.open)renderRows();}catch{/* Do not invent zero usage when the backend disconnects. */$('#connection').innerHTML='<i></i>管理器已断开';}},3000);}catch(err){$('#list').innerHTML=`<div class="empty"><h2>未连接到管理器</h2><p>${esc(err.message)}</p><p>运行 <code>python -m mcpcell --open</code> 打开本机工具窗。</p></div>`;$('#connection').textContent='未连接';}})();
 })();

@@ -1,15 +1,11 @@
-# Liquid Minimal · 控制台视觉与交互规范
+# Compact tool window · 0.2
 
-目标是安静、清晰的本地系统工具，而不是带大面积渐变的营销页。
+A single 960×660 utility window, not a dashboard.
 
-珍珠灰背景、近白表面、极淡鼠尾草绿状态色。半透明只用于层次，不牺牲正文对比。细白边、柔和内高光和小面积折射感构成液态风格；不使用 WebGL、持续粒子、全屏动态模糊或不断变化的装饰图表。
+Keep one service list, two tabs (all / managed), a source filter, search, and the direct actions: detect, enroll, pause, enable, restore. Selection counts configuration bindings, not imaginary process savings. Equal configurations can collapse into one visual row while keeping each source and runtime authorization independent.
 
-左侧稳定导航，顶部环境标识，中间服务清单，右侧审查建议。服务详情采用侧边原生 dialog，不打断列表上下文。桌面优先，窄屏保留紧凑导航，表格横向滚动限制在自己的容器。
+Remove navigation sidebar, hero, marketing copy, summary cards, charts, onboarding timeline, CLI placeholder page, and continuously visible security essays. Details live in a small modal, and implementation limits in settings.
 
-页面：概览、服务清单、AI 客户端、审查与迁移、CLI 接入规划、能力与边界。用户级/项目级/自定义来源都可追溯。演示数据始终显示来源标签。
+High-contrast headings, normal-size service text, pale glass edges, near-white surfaces, restrained lime primary action. No WebGL, animation loop or decorative telemetry. Static HTML/CSS/JS; use an existing system browser in app-window mode when possible, ordinary browser fallback otherwise.
 
-动画只在切换与悬停中使用短暂 opacity/transform，支持 prefers-reduced-motion 与 reduced-transparency。键盘支持 Tab、Escape 关闭弹层、Ctrl/Cmd+K 搜索。所有用户配置文本转义后渲染。
-
-运行时仅用静态 HTML/CSS/JS，不增加 Node 服务或 Electron。打开系统浏览器依然有浏览器自身开销；“无需额外前端运行时”不等于内存零开销。后续桌面壳与托盘应作为可选外层，不将其绑定到管理器生命周期。
-
-样式令牌定义在 mcpcell/web/style.css。实际指标不得被审美需求替换为占位的性能增长或虚假的节省百分比。
+Reference behaviors reviewed: CCS (kaitranntt/ccs), CC Switch (farion1231/cc-switch). Import existing configurations and act on a service directly; do not reproduce their source or branding.

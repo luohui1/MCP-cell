@@ -164,6 +164,7 @@ class Discovery:
         self.sources = candidates(home, self.workspaces, platform=platform, environ=environ) + (extra or [])
         self.key = secrets.token_bytes(32)
         self.demo = demo
+        self.refs = {}
 
     def digest(self, obj: object) -> str:
         raw = json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":")).encode()
@@ -263,6 +264,7 @@ class Discovery:
     def scan(self) -> dict:
         started = time.monotonic()
         entries, sources, errors = [], [], []
+        self.refs = {}
         for s in self.sources[:MAX_SOURCES]:
             sid = self.digest([s.client, str(s.path), s.scope, s.workspace])
             record = {"id": sid, "client": s.client, "path": self.display_path(s.path), "scope": s.scope,
@@ -286,6 +288,8 @@ class Discovery:
                         continue
                     try:
                         entry = self.normalize(name, cfg, s, sid)
+                        keys = ["projects", s.workspace, "mcpServers", name] if s.selector == "claude_project" else [s.selector, name]
+                        self.refs[entry["id"]] = {"source": s, "keys": keys, "raw": data, "cfg": cfg, "entry": entry}
                         entries.append(entry)
                         record["entries"] += 1
                     except ConfigError as exc:
@@ -332,11 +336,11 @@ class Discovery:
 
 def plan(snapshot: dict) -> dict:
     return {"schemaVersion": "mcpcell.review-plan/v0alpha1", "mode": "proposal_only", "applicable": False,
-        "reason": "执行层和事务式迁移尚未实现；此文件不能用于替换客户端配置。",
+        "reason": "此导出只是审查提案，接入必须通过管理 API 确认。不能用于替换客户端配置。",
         "createdAt": snapshot["scannedAt"], "demo": snapshot["mode"] == "demo",
         "items": [{"definitionId": e["id"], "client": e["client"], "name": e["name"],
             "source": e["source"], "scope": e["scope"], "operation": "review-before-enrollment",
             "proposedSharing": "exclusive", "credentialAction": "keep-in-source",
             "sourceVersion": next((s.get("version") for c in snapshot["clients"] for s in c["sources"] if s["id"] == e["sourceId"]), None),
-            "blockers": ["runtime-not-implemented", "client-semantics-unverified", "operator-approval-required"],
+            "blockers": ["client-semantics-unverified", "operator-approval-required"],
             "checks": [i["code"] for i in e["issues"]]} for e in snapshot["entries"]]}

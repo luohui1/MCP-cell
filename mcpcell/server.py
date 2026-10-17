@@ -1,4 +1,4 @@
-"""Loopback-only, authenticated read-only workbench; no execution endpoints."""
+"""Loopback-only authenticated management API and bounded static workbench."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +12,9 @@ import threading
 import time
 
 from .discovery import Discovery, plan
+from .management import Manager
+from .runtime import Runtime
+from .storage import InstanceLock, Conflict
 
 WEB = Path(__file__).with_name("web")
 ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
@@ -25,19 +28,29 @@ class Workbench(HTTPServer):
     allow_reuse_address = True
     request_queue_size = 8
 
-    def __init__(self, scanner: Discovery, port: int = 0):
+    def __init__(self, scanner: Discovery, port: int = 0, state_dir: Path | None = None):
         self.scanner = scanner
         self.token = secrets.token_urlsafe(32)
         self.session = secrets.token_urlsafe(32)
         self.lock = threading.Lock()
-        self.snapshot = scanner.scan()
+        self.state_dir = state_dir or (scanner.home / ".mcpcell")
+        self.instance_lock = InstanceLock(self.state_dir)
+        self.manager = Manager(scanner, self.state_dir)
+        self.runtime = Runtime(self.manager)
+        self.manager.runtime = self.runtime
+        self.snapshot = self.manager.scan()
         self.last_scan = time.monotonic()
         self.pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="mcpcell-http")
         self.slots = threading.BoundedSemaphore(8)
-        super().__init__(("127.0.0.1", port), Handler)
+        try:
+            super().__init__(("127.0.0.1", port), Handler)
+        except Exception:
+            self.runtime.close(); self.instance_lock.close(); self.pool.shutdown(wait=False)
+            raise
         self.authority = f"127.0.0.1:{self.server_port}"
         self.origin = f"http://{self.authority}"
         self.cookie_name = f"mcpcell_{self.server_port}"
+        self.manager.vault.put("endpoint.bin", {"brokerPort": self.runtime.server_address[1], "url": self.origin + "/#token=" + self.token})
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
@@ -53,7 +66,7 @@ class Workbench(HTTPServer):
     def process_bounded(self, request, address):
         try:
             self.finish_request(request, address)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
             pass
         finally:
             self.shutdown_request(request)
@@ -62,6 +75,8 @@ class Workbench(HTTPServer):
     def server_close(self):
         super().server_close()
         self.pool.shutdown(wait=True, cancel_futures=True)
+        self.runtime.close()
+        self.instance_lock.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -132,7 +147,11 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(401, {"error": "open_authenticated_launch_url"})
             return
         if path == "/api/snapshot":
-            self.reply(200, self.server.snapshot)
+            snapshot = dict(self.server.snapshot)
+            snapshot["runtime"] = self.server.runtime.status()
+            self.reply(200, snapshot)
+        elif path == "/api/runtime":
+            self.reply(200, self.server.runtime.status())
         elif path == "/api/plan":
             self.reply(200, plan(self.server.snapshot))
         else:
@@ -155,16 +174,43 @@ class Handler(BaseHTTPRequestHandler):
             size = int(lengths[0]) if len(lengths) == 1 else -1
         except ValueError:
             size = -1
-        if size < 0 or size > 1024:
+        path = urlsplit(self.path).path
+        max_body = 8192 if path in {"/api/enroll", "/api/toggle", "/api/restore", "/api/stop"} else 1024
+        if size < 0 or size > max_body:
             self.reply(413, {"error": "body_limit"})
             return
         try:
-            if json.loads(self.rfile.read(size)) != {}:
-                raise ValueError()
+            body = json.loads(self.rfile.read(size))
+            if not isinstance(body, dict): raise ValueError()
+            schemas = {"/api/enroll": {"ids", "confirm"}, "/api/toggle": {"bindingId", "enabled"},
+                       "/api/restore": {"bindingId"}, "/api/stop": {"bindingId"}}
+            if set(body) != schemas.get(path, set()): raise ValueError()
         except (ValueError, UnicodeError):
-            self.reply(400, {"error": "empty_object_required"})
+            self.reply(400, {"error": "请求内容无效"})
             return
-        path = urlsplit(self.path).path
+        if path in {"/api/enroll", "/api/toggle", "/api/restore", "/api/stop"}:
+            try:
+                if path == "/api/enroll":
+                    ids=body["ids"]
+                    if body["confirm"] is not True or not isinstance(ids,list) or not 1 <= len(ids) <= 32 or any(not isinstance(x,str) for x in ids):
+                        raise Conflict("请选择最多 32 项并确认接入")
+                    result=self.server.manager.enroll(ids)
+                else:
+                    bid=body["bindingId"]
+                    if not isinstance(bid,str) or len(bid)!=32: raise Conflict("接入标识无效")
+                    if path == "/api/toggle":
+                        if not isinstance(body["enabled"],bool): raise Conflict("启用状态无效")
+                        result=self.server.manager.toggle(bid,body["enabled"])
+                    elif path == "/api/restore":result=self.server.manager.restore(bid)
+                    else:
+                        self.server.runtime.stop(bid);result={"ok":True}
+                self.server.snapshot=self.server.manager.scan()
+                self.reply(200, {**result,"snapshot":self.server.snapshot})
+            except Conflict as exc:
+                self.reply(409,{"error":str(exc)})
+            except (OSError,ValueError,KeyError,TypeError):
+                self.reply(500,{"error":"操作未完成；请检查文件权限。备份保留在本机。"})
+            return
         if path == "/api/session":
             self.reply(200, {"ok": True}, cookie=True)
         elif path == "/api/rescan":
@@ -175,10 +221,10 @@ class Handler(BaseHTTPRequestHandler):
                 if time.monotonic() - self.server.last_scan < 2:
                     self.reply(429, {"error": "rescan_cooldown"})
                 else:
-                    self.server.snapshot = self.server.scanner.scan()
+                    self.server.snapshot = self.server.manager.scan()
                     self.server.last_scan = time.monotonic()
                     self.reply(200, self.server.snapshot)
             finally:
                 self.server.lock.release()
         else:
-            self.reply(404, {"error": "no_execution_or_write_endpoint"})
+            self.reply(404, {"error": "not_found"})

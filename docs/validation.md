@@ -1,39 +1,24 @@
-# Validation record · 2026-10-16
+# 0.2 validation · 2026-10-17
 
-## Executed in this development environment
+## Executed
 
-- Linux, Python 3.13.5: `python -m unittest discover -s tests -v` — **55 tests passed**.
-- `node --check mcpcell/web/app.js` — syntax check passed. Node is a development check only, not an application runtime dependency.
-- Chromium + Playwright: **17 offline UI smoke checks passed**, no JavaScript page errors. Desktop viewport 1440×1100; narrow viewport 390×844. Cards stay within the narrow viewport; data tables scroll inside their own containers.
-- Demo mode runs only synthetic configurations in an isolated temporary directory: 7 client families with found configs, 12 bindings, 1 equal-configuration candidate group. These are sample counts, not measurements from the user's computer.
+- Linux, Python 3.13.5: **87 unit / integration / HTTP tests passed**.
+- Node `--check mcpcell/web/app.js`: passed (development-only syntax check).
+- Chromium / Playwright: **16 offline UI checks passed**, no JavaScript page errors.
+- Read-back and byte-exact restore tests use isolated temporary source files, never the user's real AI configurations.
 
-## Coverage
+New tests actually execute a harmless local fixture MCP through the broker and through the installed-style bridge command. Coverage includes JSON-RPC initialization/list/call, unchanged IDs, separate processes for concurrent clients, environment filtering, authorization rejection, delayed process creation, EOF cleanup, pause, persistence, prepare/recovery, same-file batch enrollment, reverse and forward restore order, source conflicts, JSONC comments, Codex TOML, OpenCode arrays, and the authenticated enrollment/pause/restore HTTP endpoints.
 
-Unit/API tests cover JSON/JSONC/TOML, comments and escaped strings, repeated keys, invalid/non-finite/deep input, file/node/binding limits, symbolic links and FIFO handling, secret-value omission, source immutability, account/config separation, same-physical-file handling, explicit workspace scopes, no command execution, and non-applicable review plans.
+Dependencies present during execution: tomlkit 0.13.3, psutil 7.2.2. The application accepts psutil 7.x; other patch versions were not separately tested.
 
-API tests use a real loopback HTTP server through Python's HTTP client: authentication, cookies, Host/Origin checks, cross-site rejection, invalid request shapes, body limits, rescan throttling, static-file allowlist and absent execution endpoints.
+## UI
 
-UI checks use a self-contained demo document: service search, disabled/client filters, selection, detail dialogs, Escape, plan download, 11 client cards, source details, review findings, CLI/capability boundary labels, Ctrl+K, narrow-screen card bounds and reduced-motion preference. The reduced-motion test confirms the preference can be supplied; it is not a full accessibility certification.
+1100×790 screenshot contains a 960×660 tool window. Also checked 390×844 with no page-width overflow. Tests cover detection-source grouping, search, client filter, selection counts, explicit confirmation, managed tab, pause/enable/restore, source detail, Escape, settings, keyboard search and reduced-motion preference. Offline mutation tests are UI simulations, not substitutes for the actual backend tests above.
 
-## Explicitly not verified
+## Environment restriction
 
-The browser environment blocked navigation to loopback with `ERR_BLOCKED_BY_ADMINISTRATOR`. No attempt was made to disable that policy. Browser rendering and interactions were therefore tested with the offline document, while HTTP integration was tested separately. A full browser-to-running-server integration test remains outstanding.
+The actual browser-to-loopback test was attempted, but Chromium returned `ERR_BLOCKED_BY_ADMINISTRATOR`. Browser policy was not altered. The full browser → running server path therefore remains unverified in this environment; backend HTTP tests and offline UI checks were performed separately. Temporary access tokens are not included in this report.
 
-Windows/macOS native execution and real installed AI-client configurations were not tested. Platform path fixtures are not a substitute for native tests. No live MCP/CLI execution, migration, sandbox, process reuse, cgroups/Job Objects, OOM prevention or measured memory savings are claimed.
+## Not claimed
 
-## Reproduce
-
-```sh
-python -m unittest discover -s tests -v
-python scripts/build_preview.py
-```
-
-Optional UI development test (Playwright is not required to run MCP-cell):
-
-```sh
-python -m pip install playwright
-python -m playwright install chromium
-python scripts/ui_smoke.py
-```
-
-To use an already installed Chromium, set `CHROMIUM_PATH` to its executable. The script does not remove administrator browser policies. Generated previews, screenshots and test reports go to ignored `dist/`.
+No Windows/macOS native execution, production AI-client session, remote MCP proxy, cross-session shared process, memory-savings benchmark, cgroups, hard memory limit, full security sandbox, CLI execution or Windows executable packaging has been verified or delivered. Linux process-group cleanup is not containment for hostile processes that deliberately escape the group. Windows suspended-start + Job Object implementation remains subject to native validation.
