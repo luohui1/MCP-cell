@@ -1,15 +1,67 @@
-# MCP-cell
+# MCPcell
 
-A local-first control plane for discovering and governing MCP tools across AI clients, with a shared execution contract for future CLI adapters.
+**本机 MCP 运行时：每个服务只跑必要的那几份进程，所有 Agent 共用。**
 
-## Development status
+A local MCP runtime that lets every AI agent session on a machine share MCP server processes instead of spawning its own set.
 
-The discovery and liquid-minimal console prototype is being developed on a feature branch. No managed runtime, process sharing, automatic client migration, sandbox, or memory savings have been verified yet.
+`0.6.0-dev` · Go 新内核。0.5 的 Python 原型保存在 [`legacy/python-0.5/`](legacy/python-0.5/)。
 
-## Principles
+## 为什么
 
-- Discover known client configuration locations without executing configured commands.
-- Preserve client-specific scope, authorization, workspace, and unknown configuration fields.
-- Treat duplicate definitions as review candidates, never proof of safe process sharing.
-- Keep secrets out of browser responses and exported reports.
-- Make every resource and isolation guarantee explicit and testable.
+Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 stdio MCP 全部启动一遍。开发机上同时开着几个 Agent 时，进程数和内存都按"会话数 × 服务数"增长。一台开发机上实测（2026-10-17，8 个会话）：
+
+- 71 个 MCP 相关进程，约 **2.9 GB 私有提交**（任务管理器的工作集只显示约 0.8 GB）
+- 在 Windows 上，每个用 npx 启动的服务要 3–4 个进程，npx 自身的 node 就占约 137 MB
+- npx 冷启动慢，同一次会话里 5 个服务撞上客户端的 30 秒连接超时
+
+## 现在能做什么（M1）
+
+- 一个守护进程通过 loopback 上的 Streamable HTTP 暴露每个服务：`http://127.0.0.1:47621/s/<服务名>`
+- 所有连到同一服务的会话**共用一个上游进程**。实测 6 个 SDK 客户端加 2 个真实 Claude Code 会话共用一个 context7。协议层只改写 id、进度令牌和取消通知的归属，不改工具名，不重放调用
+- 上游进程放在 Windows Job Object 里，守护进程无论怎么退出，整棵进程树都会被清理
+- 闲置超时后自动回收（默认 10 分钟），下一次调用自动重新拉起
+- 状态页和 `mcpcell ps` 显示每个服务的实例、会话和私有提交
+
+尚未实现：调用时才启动（目前首个会话连接时启动）、npx 扁平化、自动接管客户端配置、按会话隔离的服务。见 [里程碑](docs/roadmap.md)。
+
+## 试用
+
+```sh
+go build -o bin/mcpcell.exe ./cmd/mcpcell
+bin/mcpcell.exe daemon        # 首次运行生成 ~/.mcpcell/config.json 和 token
+```
+
+在 `~/.mcpcell/config.json` 的 `services` 里添加服务，写法与客户端的 `mcpServers` 条目相同，然后重启守护进程：
+
+```json
+{
+  "services": {
+    "context7": { "command": "cmd", "args": ["/c", "npx", "@upstash/context7-mcp"] }
+  }
+}
+```
+
+运行 `bin/mcpcell.exe ui` 打开管理页，点"接入"，复制 Claude Code、Codex 或 Cursor 的配置，替换客户端里原来的同名条目，再重启客户端。工具全名保持不变。
+
+| 命令 | 作用 |
+|---|---|
+| `mcpcell daemon [--port N]` | 前台运行守护进程，Ctrl+C 退出 |
+| `mcpcell ps` | 服务、实例、会话、私有提交 |
+| `mcpcell ui` | 用一次性链接打开管理页 |
+
+## 开发
+
+```sh
+go vet ./... && go test ./...
+go run ./tools/mcpprobe -service context7 -n 6 -tool resolve-library-id -args '{"libraryName":"react"}'
+pwsh scripts/measure-mcp.ps1          # 测量本机所有 Agent 的 MCP 进程与内存
+```
+
+设计见 [架构](docs/architecture.md)。
+
+## 原则
+
+- 不同凭据、不同工作区的服务绝不共用实例；同名或配置相同只是合并候选，不代表可以共享
+- 路由只改写 id 这类归属字段，不重放调用；上游中途退出时报告"结果未知"
+- 只监听 loopback，校验 Host 和 Origin，每个请求都要 token
+- 改写客户端配置前先备份，只改所选的客户端和条目

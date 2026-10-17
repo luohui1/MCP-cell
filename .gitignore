@@ -1,0 +1,17 @@
+# Go build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Local measurements list the user's installed MCP servers; the repo is public
+/bench/
+
+# Runtime state (tokens, backups) must never be committed
+.mcpcell/
+*.bin
+
+.DS_Store
+*.log

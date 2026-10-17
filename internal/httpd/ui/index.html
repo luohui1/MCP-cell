@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MCPcell</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <div class="brand">MCPcell</div>
+    <div class="daemon" id="daemon" aria-live="polite"><span class="dot dot-gray"></span>连接中…</div>
+  </div>
+</header>
+<main class="wrap">
+  <section class="stats" id="stats" aria-label="概览"></section>
+  <section class="panel" aria-labelledby="svc-title">
+    <div class="panel-head">
+      <h2 id="svc-title">服务</h2>
+      <span class="muted" id="config-path"></span>
+    </div>
+    <div class="table-head" aria-hidden="true">
+      <span>服务</span><span>状态</span><span>会话</span><span>内存</span><span>活动</span><span></span>
+    </div>
+    <div id="services"></div>
+  </section>
+  <p class="foot">内存为私有提交（Private Bytes），包含每个服务的整棵进程树。任务管理器默认显示的工作集会比它小，但不代表占用更少。</p>
+</main>
+</body>
+</html>
