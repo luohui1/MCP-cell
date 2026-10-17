@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -19,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/luohui1/MCP-cell/internal/autostart"
+	"github.com/luohui1/MCP-cell/internal/clients"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/proc"
 )
@@ -37,6 +40,14 @@ type Options struct {
 	// MaxInstances is reported on the settings page.
 	MaxInstances int
 	Log          *slog.Logger
+
+	// Clients and Takeovers enable pointing client configs at MCPcell.
+	Clients   []clients.Client
+	Takeovers *clients.Store
+	// Exe is the running binary, for registering autostart.
+	Exe string
+	// Shutdown stops the daemon (mcpcell stop).
+	Shutdown func()
 }
 
 type Server struct {
@@ -49,7 +60,8 @@ type Server struct {
 	sessions map[string]*session
 	codes    map[string]time.Time // one-time UI login codes
 
-	cfgMu sync.Mutex // serializes config.json edits
+	cfgMu  sync.Mutex // serializes config.json edits
+	takeMu sync.Mutex // serializes client config takeovers
 }
 
 func New(p *pool.Pool, opts Options) *Server {
@@ -79,6 +91,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/services", s.api(s.handleSaveService))
 	mux.HandleFunc("PUT /api/services/{name}", s.api(s.handleSaveService))
 	mux.HandleFunc("DELETE /api/services/{name}", s.api(s.handleDeleteService))
+	mux.HandleFunc("GET /api/clients", s.api(s.handleClients))
+	mux.HandleFunc("POST /api/clients/{client}/attach", s.api(s.handleAttach))
+	mux.HandleFunc("POST /api/clients/{client}/restore", s.api(s.handleRestore))
+	mux.HandleFunc("GET /api/autostart", s.api(s.handleAutostart))
+	mux.HandleFunc("POST /api/autostart", s.api(s.handleAutostart))
+	mux.HandleFunc("POST /api/shutdown", s.api(s.handleShutdown))
 	mux.HandleFunc("POST /api/login-code", s.handleLoginCode)
 	mux.HandleFunc("GET /ui/login", s.handleLogin)
 	sub, _ := fs.Sub(uiFiles, "ui/dist")
@@ -269,6 +287,40 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		out["error"] = firstLine(err.Error())
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type autostartStatus = autostart.Status
+
+func (s *Server) autostart() autostartStatus { return autostart.Get() }
+
+func (s *Server) handleAutostart(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var req struct{ Enabled bool }
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
+			return
+		}
+		var err error
+		if req.Enabled {
+			err = autostart.Enable(s.opts.Exe)
+		} else {
+			err = autostart.Disable()
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, s.autostart())
+}
+
+func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Shutdown == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "不支持"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"stopping": true})
+	go s.opts.Shutdown()
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

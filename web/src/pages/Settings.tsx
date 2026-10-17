@@ -1,19 +1,38 @@
+import { useEffect, useState } from 'react';
 import { Settings as SettingsIcon } from 'lucide-react';
+import { takeover, type AutostartStatus } from '../api';
 import { useStatus } from '../App';
 import { masked } from '../clients';
 import { bytes, since } from '../format';
-import { CodeBlock, CopyButton, Dot, PageHeader, Section } from '../ui';
+import { CodeBlock, CopyButton, Dot, PageHeader, Section, Switch, useToast } from '../ui';
 import { Row, Rows } from './ServiceDetail';
 
 const commands = [
-  'mcpcell daemon         # 前台运行守护进程',
-  'mcpcell ps             # 服务、实例、会话与内存',
-  'mcpcell ui             # 打开本管理页',
-  'mcpcell update <服务>  # 更新 npx 服务的 npm 包',
+  'mcpcell start           # 在后台启动守护进程（无窗口）',
+  'mcpcell stop            # 停止守护进程',
+  'mcpcell ps              # 服务、实例、会话与内存',
+  'mcpcell ui              # 打开本管理页',
+  'mcpcell clients         # 各客户端的 MCP 条目与接管状态',
+  'mcpcell restore --all   # 还原所有被接管的客户端配置（不需要守护进程）',
+  'mcpcell autostart on    # 开机自启',
+  'mcpcell update <服务>   # 更新 npx 服务的 npm 包',
 ].join('\n');
 
 export function SettingsPage() {
   const { status } = useStatus();
+  const toast = useToast();
+  const [auto, setAuto] = useState<AutostartStatus | null>(null);
+  useEffect(() => {
+    takeover.autostartStatus().then(setAuto).catch(() => setAuto(null));
+  }, []);
+  async function toggle(on: boolean) {
+    try {
+      setAuto(await takeover.autostart(on));
+      toast(on ? '已开启开机自启' : '已关闭开机自启');
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  }
   return (
     <>
       <PageHeader icon={<SettingsIcon className="size-6 text-zinc-700 dark:text-zinc-300" />} title="设置" />
@@ -35,6 +54,22 @@ export function SettingsPage() {
             </Row>
             <Row label="实例上限">同时最多 {status.maxInstances} 个服务实例；满了先回收最久未用的空闲实例</Row>
           </Rows>
+        </Section>
+
+        <Section title="开机自启">
+          <div className="flex items-center gap-4">
+            <div className="flex-1 text-sm leading-6">
+              {auto?.supported === false ? (
+                <span className="text-zinc-500">{auto.error}</span>
+              ) : (
+                <>
+                  登录 Windows 时在后台启动 MCPcell（无窗口，日志写到 ~/.mcpcell/daemon.log）。接管客户端后建议开启，否则守护进程没运行时这些 MCP 不可用。
+                  {auto?.enabled && auto.command && <div className="mt-1 truncate font-mono text-xs text-zinc-400">{auto.command}</div>}
+                </>
+              )}
+            </div>
+            {auto?.supported && <Switch checked={auto.enabled} onChange={toggle} label="开机自启" />}
+          </div>
         </Section>
 
         <Section title="访问令牌">

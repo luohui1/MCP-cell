@@ -23,7 +23,7 @@ func daemonCall(method, path string, out any) error {
 	}
 	info, err := registry.ReadDaemonInfo(home)
 	if err != nil {
-		return errors.New("守护进程没有运行。启动：mcpcell daemon")
+		return errors.New("守护进程没有运行。启动：mcpcell start")
 	}
 	token, err := registry.Token(home)
 	if err != nil {

@@ -46,7 +46,11 @@ bin/mcpcell.exe daemon        # 首次运行生成 ~/.mcpcell/config.json 和 to
 
 | 命令 | 作用 |
 |---|---|
+| `mcpcell start` / `stop` | 在后台启动（无窗口）/ 停止守护进程 |
 | `mcpcell daemon [--port N]` | 前台运行守护进程，Ctrl+C 退出 |
+| `mcpcell clients` | 各客户端的 MCP 条目、分类与接管状态 |
+| `mcpcell restore --all` | 还原所有被接管的客户端配置，不需要守护进程 |
+| `mcpcell autostart on` | 开机自启 |
 | `mcpcell ps` | 服务、实例、会话、私有提交 |
 | `mcpcell ui` | 用一次性链接打开管理页 |
 | `mcpcell update <服务>` | 把 npx 服务的 npm 包更新到最新版并重新锁定 |

@@ -20,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/luohui1/MCP-cell/internal/catalog"
+	"github.com/luohui1/MCP-cell/internal/clients"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/proc"
 	"github.com/luohui1/MCP-cell/internal/registry"
@@ -568,5 +569,62 @@ func TestServiceEditingAPI(t *testing.T) {
 	}
 	if n := len(h.status(t).Services); n != 1 {
 		t.Fatalf("services after delete = %d", n)
+	}
+}
+
+func TestTakeoverAPI(t *testing.T) {
+	h, home := startWithHome(t)
+	userHome := t.TempDir()
+	cursorFile := filepath.Join(userHome, ".cursor", "mcp.json")
+	original := `{
+  "mcpServers": {
+    "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+    "mine": { "command": "python", "args": ["my_server.py"] },
+    "remote": { "url": "https://example.com/mcp" }
+  }
+}
+`
+	_ = os.MkdirAll(filepath.Dir(cursorFile), 0o700)
+	_ = os.WriteFile(cursorFile, []byte(original), 0o600)
+	store, _ := clients.OpenStore(home)
+	h.srv.opts.Clients = []clients.Client{clients.NewCursor(userHome, filepath.Join(home, "backups"))}
+	h.srv.opts.Takeovers = store
+
+	_, body := h.apiCall(t, "POST", "/api/clients/cursor/attach", `{"names":["context7","mine","remote"]}`)
+	var out struct {
+		Results []struct {
+			Name, Service, Error string
+			OK, Created          bool
+		}
+	}
+	_ = json.Unmarshal([]byte(body), &out)
+	if len(out.Results) != 3 || !out.Results[0].OK || !out.Results[0].Created || out.Results[0].Service != "context7" {
+		t.Fatalf("attach: %s", body)
+	}
+	if out.Results[1].OK || out.Results[2].OK {
+		t.Fatalf("unknown and remote entries must not be taken over without force: %s", body)
+	}
+	cfg, _ := registry.Load(home)
+	if cfg.Services["context7"] == nil || cfg.Services["context7"].Args[1] != "@upstash/context7-mcp" {
+		t.Fatalf("service not created from the entry: %+v", cfg.Services)
+	}
+	if b, _ := os.ReadFile(cursorFile); !strings.Contains(string(b), h.base+"/s/context7") || !strings.Contains(string(b), `"remote": { "url"`) {
+		t.Fatalf("cursor config after attach:\n%s", b)
+	}
+	if _, body := h.apiCall(t, "POST", "/api/clients/cursor/attach", `{"names":["mine"],"force":true}`); !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("forced attach: %s", body)
+	}
+	_, list := h.apiCall(t, "GET", "/api/clients", "")
+	if !strings.Contains(list, `"takenOver":true`) || strings.Contains(list, "my_server.py\",\"env") {
+		t.Fatalf("overview: %s", list)
+	}
+	if _, body := h.apiCall(t, "POST", "/api/clients/cursor/restore", `{"names":["context7","mine"]}`); strings.Count(body, `"ok":true`) != 2 {
+		t.Fatalf("restore: %s", body)
+	}
+	if b, _ := os.ReadFile(cursorFile); string(b) != original {
+		t.Fatalf("restore not byte-exact:\n%s", b)
+	}
+	if len(store.All()) != 0 {
+		t.Fatal("records kept after restore")
 	}
 }

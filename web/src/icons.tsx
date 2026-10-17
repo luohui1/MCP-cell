@@ -59,12 +59,12 @@ export function brandOf(client: string): string {
   return table.find(([k]) => c.includes(k))?.[1] ?? '';
 }
 
-export function Tile({ children, size = 'md' }: { children: React.ReactNode; size?: 'md' | 'lg' }) {
+export function Tile({ children, size = 'md' }: { children: React.ReactNode; size?: 'sm' | 'md' | 'lg' }) {
   return (
     <div
       className={cx(
         'grid shrink-0 place-items-center border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-zinc-700 dark:bg-zinc-900',
-        size === 'lg' ? 'size-20 rounded-3xl' : 'size-12 rounded-xl',
+        size === 'lg' ? 'size-20 rounded-3xl' : size === 'sm' ? 'size-10 rounded-xl' : 'size-12 rounded-xl',
       )}
     >
       {children}
@@ -90,7 +90,7 @@ function hash(s: string) {
 }
 
 /** A stable lettered avatar for an MCP service. */
-export function ServiceAvatar({ name, size = 'md' }: { name: string; size?: 'md' | 'lg' }) {
+export function ServiceAvatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' | 'lg' }) {
   const letter = (name.match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase();
   return (
     <Tile size={size}>
@@ -98,7 +98,7 @@ export function ServiceAvatar({ name, size = 'md' }: { name: string; size?: 'md'
         className={cx(
           'grid place-items-center font-semibold',
           palette[hash(name) % palette.length],
-          size === 'lg' ? 'size-12 rounded-2xl text-2xl' : 'size-8 rounded-lg text-[15px]',
+          size === 'lg' ? 'size-12 rounded-2xl text-2xl' : size === 'sm' ? 'size-7 rounded-lg text-sm' : 'size-8 rounded-lg text-[15px]',
         )}
       >
         {name ? letter : '+'}

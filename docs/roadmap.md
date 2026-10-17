@@ -89,7 +89,22 @@
 
 ## M3 接管、还原与隔离模式
 
-交付：
+分三步做，先拿到真实机器上的节省：
+
+**M3a 接管与还原（代码完成，待真机验收）**
+- `internal/clients`：读取 Claude Code（`~/.claude.json` 用户级）、Codex（`config.toml`）、Cursor（`mcp.json`）的 MCP 条目；按启动包、参数、环境变量值识别"同一个服务"，Claude Code 和 Codex 的 context7 映射到同一个 MCPcell 服务，凭据不同则分开
+- 分类：可共享（已知无状态清单）/ 需要会话隔离 / 未知（可强制共享）/ 远程 HTTP / 客户端内置（Codex 的 codex、node_repl、cua_repl）/ 已连接 MCPcell
+- 接管：Claude Code 走 `claude mcp remove/add-json -s user`（不和运行中的会话抢写文件，失败时把原条目放回）；Codex 只替换该条目的表块，保留 enabled、超时等客户端策略；Cursor 只替换该条目的 JSON 片段。改前整文件备份到 `~/.mcpcell/backups/`，接管记录在 `takeover.json`
+- 还原：按记录逐字节放回；条目在接管后被改过就拒绝覆盖，可以"忘记记录"保留用户修改。`mcpcell restore --all` 不需要守护进程
+- 开机自启：HKCU Run 键启动无窗口的 `mcpcelld.exe daemon --log`；`mcpcell start/stop`
+- 管理页「客户端接入」改为接管中心；设置页加自启开关
+- 测试：接管→还原后文件逐字节一致（含注释、CRLF）；被改过的条目拒绝还原；真实 `claude` CLI 的接管→还原（临时 `CLAUDE_CONFIG_DIR`，`MCPCELL_REAL_CLAUDE=1` 时运行）
+
+**M3b 按会话隔离**：chrome-devtools、ssh、pencil、playwright 等有状态服务每个会话独立实例，服务端请求转发给所属会话；之后它们也能接管
+
+**M3c**：Claude Desktop 的 shim、shared 端点双版本协议、新版协议上游识别
+
+原 M3 交付清单：
 - `mcpcell import`：从各客户端读取 MCP 配置，合并为服务定义（命令、参数、环境变量值都相同才合并，否则按凭据域分开）
 - `mcpcell attach <client>` / `restore <client>`：先支持 Claude Code、Codex、Cursor（本机实际在用的），优先用客户端自带的 CLI 修改，没有时按 legacy 的局部改写逻辑并备份
 - 隔离模式 `per-session`、`per-workspace` 与内置的已知服务清单；未知服务默认 `per-session`

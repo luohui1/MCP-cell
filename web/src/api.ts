@@ -108,3 +108,59 @@ export const api = {
   update: (name: string) =>
     call<{ version: string; previous?: string; error?: string }>('POST', `/api/services/${encodeURIComponent(name)}/update`),
 };
+
+export type EntryClass = 'shared' | 'stateful' | 'unknown' | 'remote' | 'managed' | 'internal';
+
+export interface ClientEntry {
+  client: string;
+  name: string;
+  kind: string;
+  command?: string;
+  args?: string[];
+  envKeys?: string[];
+  url?: string;
+  enabled: boolean;
+  envVars?: string[];
+  class: EntryClass;
+  reason: string;
+  package?: string;
+  service?: string;
+  serviceExists: boolean;
+  takenOver: boolean;
+  takenAt?: string;
+  changed: boolean;
+}
+
+export interface ClientView {
+  id: string;
+  name: string;
+  path: string;
+  found: boolean;
+  error?: string;
+  entries: ClientEntry[];
+}
+
+export interface AutostartStatus {
+  supported: boolean;
+  enabled: boolean;
+  command?: string;
+  error?: string;
+}
+
+export interface TakeoverResult {
+  name: string;
+  ok: boolean;
+  service?: string;
+  created?: boolean;
+  error?: string;
+}
+
+export const takeover = {
+  overview: () => call<{ clients: ClientView[]; autostart: AutostartStatus }>('GET', '/api/clients'),
+  attach: (client: string, names: string[], force = false) =>
+    call<{ results: TakeoverResult[] }>('POST', `/api/clients/${encodeURIComponent(client)}/attach`, { names, force }),
+  restore: (client: string, names: string[], forget = false) =>
+    call<{ results: TakeoverResult[] }>('POST', `/api/clients/${encodeURIComponent(client)}/restore${forget ? '?forget=1' : ''}`, { names }),
+  autostart: (enabled: boolean) => call<AutostartStatus>('POST', '/api/autostart', { enabled }),
+  autostartStatus: () => call<AutostartStatus>('GET', '/api/autostart'),
+};

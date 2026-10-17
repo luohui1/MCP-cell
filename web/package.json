@@ -4,9 +4,8 @@
   "version": "0.6.0",
   "type": "module",
   "scripts": {
-    "prebuild": "node -e \"require('fs').rmSync('../internal/httpd/ui/dist',{recursive:true,force:true})\"",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node prune-dist.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
