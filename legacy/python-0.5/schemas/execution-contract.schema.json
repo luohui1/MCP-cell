@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MCP-cell execution contract design draft",
+  "description": "Proposal only. This preview does not execute or enforce this contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "definitionId", "adapter", "workspace", "policyRef"],
+  "properties": {
+    "apiVersion": {"const": "mcpcell.execution/v0alpha1"},
+    "definitionId": {"type": "string", "minLength": 1},
+    "workspace": {"type": "string", "minLength": 1},
+    "policyRef": {"type": "string", "minLength": 1},
+    "credentialRefs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "sharing": {"enum": ["exclusive", "scoped_shared", "resettable_pool", "handle_scoped"], "default": "exclusive"},
+    "adapter": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind", "artifactRef", "argv"], "properties": {
+          "kind": {"enum": ["mcp-stdio", "cli-argv"]},
+          "artifactRef": {"type": "string", "minLength": 1},
+          "argv": {"type": "array", "items": {"type": "string"}},
+          "argumentSchemaRef": {"type": "string"},
+          "shell": {"const": false, "default": false}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "endpointRef"], "properties": {
+          "kind": {"const": "mcp-http"}, "endpointRef": {"type": "string", "minLength": 1},
+          "protocolProfileRef": {"type": "string"}
+        }}
+      ]
+    },
+    "budgets": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "memoryBytes": {"type": "integer", "minimum": 1},
+        "maxProcesses": {"type": "integer", "minimum": 1},
+        "maxConcurrency": {"type": "integer", "minimum": 1},
+        "timeoutMs": {"type": "integer", "minimum": 1},
+        "maxOutputBytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

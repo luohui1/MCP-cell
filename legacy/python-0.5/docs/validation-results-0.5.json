@@ -1,0 +1,75 @@
+{
+  "build": {
+    "version": "0.5.0a1",
+    "date": "2026-10-17",
+    "sourceBaseline": "supplied MCP-cell-source-0.4.0a1.zip",
+    "githubSynced": false,
+    "githubPrHeadObserved": "889f0a757da5c2492e44be60fedc76233588eb20",
+    "python": "3.13.5",
+    "platform": "Linux",
+    "validation": {
+      "backendTestsPassed": 130,
+      "offlineUiChecksPassed": 38,
+      "pageErrors": [],
+      "browserToLoopback": "blocked by existing administrator policy",
+      "productionAgentAccounts": "not tested",
+      "nativeWindowsMacOS": "not tested"
+    },
+    "runtimeSharing": "not implemented; one upstream per connection retained",
+    "changes": [
+      "normal default browser without app-window or fixed dimensions",
+      "MCP-first viewport-sized workspace with smaller corners",
+      "no persistent primary or session tab bars; session selector",
+      "source-scoped group operations regression fix",
+      "unification architecture and acceptance plan"
+    ]
+  },
+  "ui": {
+    "checks": [
+      "MCP is the only initial primary view",
+      "workspace uses the normal browser viewport, not a 960px fixed window",
+      "outer window radius is removed and controls use 4px corners",
+      "no persistent function or session tab bars",
+      "demo provenance and nine presentation groups are visible",
+      "all client sources plus all-sources selector remain accessible",
+      "source filter selects Cursor bindings",
+      "REGRESSION: Cursor-only enrollment does not include hidden other clients",
+      "confirmed scoped enrollment mutates only the selected source in demo",
+      "scoped pause is confined to the managed source",
+      "scoped restore preserves unrelated sources",
+      "bulk selection also honors the current source",
+      "all-source grouping still explicitly previews all four source bindings",
+      "state dropdown replaces all/managed tab row",
+      "empty source is not presented as installed or running",
+      "on-demand detection separates MCP configurations from ten Agent entrypoints",
+      "detection search and explicit project-directory dialog are preserved",
+      "Agent collection still requires confirmation and does not launch",
+      "Agent and editor icon collection is retained",
+      "missing Agent opens details, not installation or execution",
+      "collection and pinned filters work without a tab bar",
+      "disabling Agent still blocks new sessions",
+      "manual registration remains structured argv, not shell concatenation",
+      "first terminal opens with one session picker, not a tab strip",
+      "two independent sessions remain available",
+      "demo terminal receives input without executing it",
+      "session picker switches without creating or replaying processes",
+      "renamed session appears in picker",
+      "closing selected session requires confirmation and preserves the other",
+      "stop retains terminal output without a persistent tab",
+      "closing the final session returns to MCP and removes the picker",
+      "editor icon still links to MCP source filtering",
+      "keyboard search works on the primary workspace",
+      "icon gradient IDs and unknown-brand escaping remain valid",
+      "layout expands to 1920px without the old width ceiling",
+      "390px MCP and Agent views stay within viewport",
+      "reduced-motion preference remains supported",
+      "offline preview and icons issue no network requests"
+    ],
+    "errors": []
+  },
+  "browserIntegration": {
+    "status": "blocked",
+    "checks": [],
+    "error": "Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at http://127.0.0.1:34483/#token=[REDACTED]\nCall log:\n  - navigating to \"http://127.0.0.1:34483/#token=[REDACTED]\", waiting until \"networkidle\"\n"
+  }
+}

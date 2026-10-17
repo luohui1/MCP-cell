@@ -1,0 +1,1353 @@
+diff --git a/BUILD-INFO.json b/BUILD-INFO.json
+index 13bcd14..f6225d3 100644
+--- a/BUILD-INFO.json
++++ b/BUILD-INFO.json
+@@ -1,7 +1,25 @@
+ {
+-  "version": "0.3.0a1",
+-  "commit": "889f0a757da5c2492e44be60fedc76233588eb20",
+-  "gitTrackedFiles": 44,
+-  "terminalAssets": "Included; see mcpcell/web/vendor/THIRD_PARTY_NOTICES.md",
+-  "verified": "125 Linux tests and 22 offline Chromium UI checks; production agents and Windows native run not verified"
+-}
+\ No newline at end of file
++  "version": "0.5.0a1",
++  "date": "2026-10-17",
++  "sourceBaseline": "supplied MCP-cell-source-0.4.0a1.zip",
++  "githubSynced": false,
++  "githubPrHeadObserved": "889f0a757da5c2492e44be60fedc76233588eb20",
++  "python": "3.13.5",
++  "platform": "Linux",
++  "validation": {
++    "backendTestsPassed": 130,
++    "offlineUiChecksPassed": 38,
++    "pageErrors": [],
++    "browserToLoopback": "blocked by existing administrator policy",
++    "productionAgentAccounts": "not tested",
++    "nativeWindowsMacOS": "not tested"
++  },
++  "runtimeSharing": "not implemented; one upstream per connection retained",
++  "changes": [
++    "normal default browser without app-window or fixed dimensions",
++    "MCP-first viewport-sized workspace with smaller corners",
++    "no persistent primary or session tab bars; session selector",
++    "source-scoped group operations regression fix",
++    "unification architecture and acceptance plan"
++  ]
++}
+diff --git a/README.md b/README.md
+index 34cbbfc..a2f2689 100644
+--- a/README.md
++++ b/README.md
+@@ -1,84 +1,61 @@
+ # MCPcell
+ 
+-**一个小窗口，收纳 Agents，接管 MCP，独立运行多个会话。**
++**检测已有 MCP，按来源接入，在一个工作区管理。**
+ 
+-`0.4.0a1 · 图标式小窗口`
++`0.5.0a1 · 本地开发预览`
+ 
+-三个主页：**检测 / Agents / MCP**。Claude Code、Pi 等 Agent 的交互会话在独立页签里打开，切页不会重复启动。保留 0.2 的本地 stdio MCP 接入、暂停及冲突安全还原能力，不把它们和 Agent 程序混为一张表。
++## 本轮变化
+ 
+-## 0.4 界面精简
++取消固定小窗、浏览器应用窗口参数和双层页签。默认打开 MCP 主界面，按当前浏览器尺寸布局。外层不带圆角，主要控件 4px。左侧为 AI 来源，中间为服务清单。检测范围和 Agent 工具按需进入，多会话使用一个切换器。
+ 
+-保留检测、Agents、MCP 三个功能页与独立会话页签。顶部合并为一行；工具库改为五列小图标，不再展示大段描述和路径。默认展示现有 10 类终端 Agent，区分已收纳、可收纳和未检测到；提供全部、已收纳和置顶筛选。点击已收纳图标进入启动确认，未收纳图标进入收纳确认，未检测到的入口只打开详情。
++修正来源筛选与动作范围不一致：只查看 Cursor 时，接入、暂停和还原仅影响 Cursor 的绑定，不把同配置的其他客户端一起修改。所有来源视图仍可以明确确认后批量接入。
+ 
+-下方 7 个编辑器/扩展图标只跳转各自的 MCP 配置来源，不伪装成已接入的终端 Agent。MCP 页提供全部 11 类来源的图标筛选。检测行、来源标签与会话页签复用同一份本地图标。配置缺失可查看空结果，不等于未安装产品。
++**本轮没有实现 MCP 进程共享。**运行器仍是每连接独占，首协议消息触发启动；初始化也会触发。统一运行的方案与验收条件见 [unification-plan.md](docs/unification-plan.md)。
+ 
+-品牌图标来源、修改与替代符号说明见 [icon-notices.md](docs/icon-notices.md)。图标不访问 CDN，不新增前端运行时。没有新增或声称完成账号、模型或协议深度集成。未变化的快照不重复重建 Agent 卡片和会话页签，避免轮询夺走键盘焦点。
++## 运行
+ 
+-## 启动
+-
+-需要 Python 3.11+。源码 ZIP 已附本地终端静态资源；解压后进入项目目录：
++Python 3.11 或以上。ZIP 已包含本地终端静态资源。进入项目目录执行：
+ 
+ ```sh
+ python -m pip install -r requirements.txt
+ python -m mcpcell --open
+ ```
+ 
+-Windows 可将 `python` 换成 `py -3`，或运行 `start-windows.cmd`。优先用已有浏览器应用窗口打开约 960×640 的界面，不打包 Electron。Windows Agent 终端使用 pywinpty/ConPTY，原生验证尚未完成。
+-
+-**从 Git 克隆**时，另执行一次 `python scripts/setup_terminal.py` 准备本地 xterm 静态资源。此显式步骤从 npm registry 下载固定版本，验证 registry 提供的完整性值，只提取 JS/CSS/许可证，不运行 npm 生命周期脚本；应用运行时不访问 CDN。该联网准备流程未在本开发环境完成在线验证，见验证记录。ZIP 中已测试的资源来源见 `mcpcell/web/vendor/THIRD_PARTY_NOTICES.md`。
++Windows 可把 `python` 换为 `py -3`。`--open` 使用默认浏览器，尊重现有窗口尺寸，不再生成 960×640 app-window。终端打印的 URL 包含临时访问凭据，请勿分享。
+ 
+ ```sh
+-# 只看隔离演示，不扫描真实配置、不运行 Agent
++# 独立演示：不扫描真实配置、不启动 Agent、不修改本机 MCP
+ python -m mcpcell --demo --open
+ 
+-# 追加明确选择的项目配置；也可在检测页添加目录
+-python -m mcpcell --workspace "D:\work\my-project" --open
+-
+-# 自定义 MCP 配置位置
+-python -m mcpcell --config "cursor=D:\configs\mcp.json" --open
++# 明确指定额外工作区，不递归扫描磁盘
++python -m mcpcell --workspace "D:\work\project" --open
+ ```
+ 
+-终端输出的启动链接含临时访问凭据，不要分享。退出管理器用 Ctrl+C；它会结束自己启动的 Agent 会话。关闭浏览器窗口不等于关闭后台管理器。
+-
+-## 检测页
+-
+-Agent 程序和 MCP 配置分开显示。Agent 检测只查找 PATH 和已知安装目录，不运行 `--version`、不自动安装、不读取登录密钥。找到程序不证明其版本、登录状态或所有插件兼容。
+-
+-Agent 目录包含 Claude Code（检测 `claude`，不会把 C 编译器 `cc` 当成 Agent）、Pi、Codex、Gemini CLI、OpenCode、Factory Droid、Copilot CLI、Aider、Goose、CCS。支持手动登记其他本地 Agent 的绝对可执行路径和结构化参数。
+-
+-MCP 检测继续覆盖 11 类配置适配器，支持 JSON/JSONC/TOML，保留来源和作用域。用户级位置自动检查，项目级仅检查明确选择的目录，不递归遍历磁盘。企业策略、插件注入、远程/WSL 配置和所有覆盖优先级并未完整解析。详见 [客户端矩阵](docs/clients.md)。
++新 Git 克隆的终端资源准备方式见 `mcpcell/web/vendor/README.md`；本 ZIP 沿用前一轮附带资源及许可证。GitHub 分支尚未同步 0.4/0.5 本地改动，直接克隆当前分支不等于拿到本包。
+ 
+-## Agents 页与会话页签
++## 保留的实际能力
+ 
+-检测到的 Agent 经确认后收纳，收纳不会启动。可以置顶、启用/禁用、移除、指定工作目录、打开多个独立会话。禁用仅阻止新会话，不暗中结束正在运行的工作；仍有运行会话时不能直接移除。
++11 类客户端配置发现，JSON/JSONC/TOML；显式确认的本地 stdio MCP 接入、备份、暂停、转发与条目还原；检测文件存在不代表服务运行中。远程 MCP 仅检测。
+ 
+-会话使用原生交互终端，不是将输出伪装成聊天消息。Linux 使用真实 PTY；Windows 的直接 ConPTY 后端为待原生验证预览。保留 Agent 自己的交互、登录、模型设置和批准流程，不增加绕过批准参数，不替用户登录或安装。
++10 类终端 Agent 的入口识别与持久收纳；已有 Agent 终端、工作目录、重命名、结束及关闭功能保留。切换到别的界面或会话不会重启进程。关闭浏览器不停止管理器；退出管理器会终止其 Agent 会话。
+ 
+-会话页签支持切换、重命名、输入、Ctrl+C、调整尺寸、结束和关闭。结束保留本次进程内输出，关闭销毁所选会话；不影响其他会话。界面刷新可重新附着于仍在同一管理器中的会话，不等于管理器重启后的持久恢复。
++不自动安装工具，不改账号，不注入跳过批准的参数。Agent 按启动用户权限运行；工作台不是安全沙箱，部分 Agent 本身没有内置批准机制。输出可能包含原 Agent 打印的敏感信息。
+ 
+-收纳信息与置顶设置持久化；终端输出只存在内存中，不保存聊天记录到磁盘。每会话输出缓冲 1 MiB，最多 8 个并发会话、24 个保留页签。超过输出缓冲会明确报告丢失，不装作历史完整。输入失败不自动重放。目录和可执行程序入口变更需重新核对。
++## 接入边界
+ 
+-## MCP 页
++接管会改写所选来源的启动入口，先确认再备份写入；随后需要重启对应客户端。发生目标配置冲突时不强制覆盖。接管期间不要移动源码、删除 Python 或状态目录；卸载之前先还原。
+ 
+-选中本地 stdio MCP 并确认后，备份原文件并替换其启动入口。保持原服务名、参数、环境声明及批准字段。重启相应 AI 客户端后，由轻量 bridge 接入 MCPcell，再启动原 MCP。暂停阻止新连接并停止所属实例；还原只替换本次托管条目，遇到冲突拒绝覆盖。
++配置同名或内容相同只是显示/审查候选，不构成跨账号、跨工作区或跨会话复用许可。现有 RSS 是未去重的进程树观测量，不是节省比例，也不是内核硬限额。当前不能承诺解决 OOM。
+ 
+-这是**统一接管**，不是全部会话共用一个进程：本版仍按连接独占原 MCP 实例。远程 HTTP/SSE 仅检测，未代理。不要移动已接入的源码目录或删除 Python/状态目录；卸载前先还原。
+-
+-## 重要边界
+-
+-Agent 程序收纳、MCP 配置发现和 MCP 运行托管是三种不同状态。启动 Pi 或 CCS 不代表已向它们注入 MCP 配置；这需要独立的工具接入适配。目录里没有映射客户端的 Agent 会明确显示没有关联配置来源。
+-
+-Agent 按当前用户权限运行，可能读取其本地配置、执行自身插件和操作工作目录。MCPcell 不是权限沙箱；Pi 的默认运行模式尤其不能被包装成有独立审批保护。这里的进程回收、并发与缓冲上限不等于硬内存隔离，不能承诺防止 OOM。
+-
+-尚未交付：自动安装/更新 Agent、账号或模型切换、读取全部历史会话、远程 MCP 代理、跨会话 MCP 安全共享、硬内存预算、完整文件/网络沙箱、任意 CLI 任务平台、原生 EXE。支持的终端 CLI Agent 已可启动，但不开放任意 shell 输入拼接接口。
+-
+-服务仅监听 127.0.0.1，API 要求随机凭据并校验 Host/Origin。静态资源本地提供；脚本 CSP 保持 self，xterm 的动态布局样式需要 inline style。输出会进入认证后的浏览器终端，可能包含 Agent 自己打印的敏感信息；不要分享会话或临时 URL。已控制同一系统账号的恶意程序不在防御保证范围内。
++服务只监听 loopback，管理 API 有随机凭据和 Host/Origin 校验。它不是面向互联网的服务，也不防御已完全控制同一系统账号的程序。
+ 
+ ## 验证
+ 
++本轮 Linux **130 项后端测试、38 项离线 UI 检查通过**，页面 JS 错误 0。真实浏览器访问 loopback 仍被环境策略阻止，未绕过，因此完整浏览器到服务联调不算通过。Windows/macOS 与真实 AI 客户端尚未原生验证。
++
+ ```sh
+ python -m unittest discover -s tests -v
+-python scripts/build_preview.py
++python scripts/ui_smoke.py
+ ```
+ 
+-本轮 Linux 128 项单元/集成/HTTP 测试、32 项 Chromium 离线界面检查通过。包括真正的 HTTP → PTY → 无害测试 Agent 调用，不只是演示按钮。真实 Claude/Pi 等生产 Agent、Windows/macOS 原生运行、完整浏览器到本地服务的联调尚未完成。具体环境和限制见 [验证记录](docs/validation.md)。
++参见 [验证记录](docs/validation.md)、[交互设计](docs/design.md)、[统一运行方案](docs/unification-plan.md)。
+diff --git a/docs/agents.md b/docs/agents.md
+index 2ab89a6..e805767 100644
+--- a/docs/agents.md
++++ b/docs/agents.md
+@@ -1,3 +1,5 @@
++> 0.5 交互更新：会话仍独立运行，但常驻页签已改为会话选择器；未新增执行权限或共享运行。
++
+ # Agent hub · 0.3
+ 
+ ## 分层
+diff --git a/docs/design.md b/docs/design.md
+index 2dab459..0d0474d 100644
+--- a/docs/design.md
++++ b/docs/design.md
+@@ -1,13 +1,13 @@
+-# 0.4 · Icon-first minimal window
++# MCP-first workspace · 0.5
+ 
+-默认窗口约 960×640。白色工作面，浅灰外部背景，轻边框与局部透明；移除大卡片描述、宣传语、指标展示与重复的页面标题。顶栏仅品牌、三个功能页、新会话和设置。
++普通浏览器打开，尊重现有窗口尺寸。不查找 Chrome/Edge 可执行文件，不传 --app 或 --window-size。页面使用当前视口，不设 960px 上限，不强行全屏或接管系统窗口。
+ 
+-Agents 使用五列小图标入口：图标、名称、一行状态，右上角保留管理按钮。支持全部/已收纳/置顶。未检测到的工具仍可查看详情，但不显示成可运行；状态保留文字，不只依赖颜色。路径、权限及危险操作后果仍显示在详情/确认框。
++MCP 管理是唯一默认主界面。来源侧栏保留 AI 图标、名称、配置绑定数量；中间是服务列表和接入操作。检测已有 MCP 是按钮，额外检测范围与 Agent 程序收纳通过辅助视图进入。没有常驻功能页签。
+ 
+-编辑器和扩展在独立的小图标行标明“ MCP 配置入口”，点击直接筛选其来源；不能把品牌展示等同于 Agent 已集成。MCP 页用来源图标筛选，检测页仍是单独的可选择列表。来源行和会话页签使用相同图标映射。
++多 Agent 会话功能保留，用一个选择器切换；从终端返回 MCP 不结束后台会话。终端内提供重命名、Ctrl+C、结束和关闭。选择器只在有会话时出现；最后一个会话关闭后回到 MCP。切换不启动进程，不重放输入。
+ 
+-本地 icons.js 仅包含静态向量。未验证官方图案的工具用明确记录的原创识别符号，不用其他同名产品的标识。没有字体资源、远程图片或 CDN；Gemini 渐变 ID 按实例分区，未知键退回通用图标。
++外层圆角 0；主要按钮、选择器、来源选项 4px；Agent 小卡片 6px；对话框 8px。撤掉悬浮外壳、阴影与大面积玻璃装饰；保留品牌图标用于识别，不让它们占据主任务。
+ 
+-宽屏五列，较窄四列或三列；390px 保留三列和可操作标签。Tab、焦点描边、Alt+1/2/3、Ctrl/Cmd+K、Escape 和 reduced-motion 保留。运行快照相同则保留卡片/页签 DOM，避免反复重绘或夺取焦点。
++默认界面没有 role=tab 元素或 session-strip。筛选使用普通选择器；保留键盘焦点与原有确认步骤。390px 下来源栏只保留有标签的图标，主列表自行滚动，不挤出页面。
+ 
+-终端、配置备份、接入、暂停、还原的后端行为不因视觉精简改变。所有演示数据明确标记。无法测量的内存节省不展示虚构数值。
++本轮同时修正来源作用域：先按所选客户端收窄分组成员，再生成接入、暂停、还原及批量动作。显示归并不是权限归并，更不是运行复用。
+diff --git a/docs/runtime-contract.md b/docs/runtime-contract.md
+index 59d11aa..60da275 100644
+--- a/docs/runtime-contract.md
++++ b/docs/runtime-contract.md
+@@ -1,3 +1,5 @@
++> 0.5 补充：本轮 UI 已改为正常浏览器工作区、按需辅助视图和会话选择器。运行能力边界以 README 与 unification-plan.md 为准；下文为先前版本设计记录。
++
+ # MCPcell execution contract · 0.2 status
+ 
+ This is a project-specific design, not an official MCP standard. The root README and validation record describe the delivered capabilities.
+diff --git a/docs/unification-plan.md b/docs/unification-plan.md
+new file mode 100644
+index 0000000..555b952
+--- /dev/null
++++ b/docs/unification-plan.md
+@@ -0,0 +1,142 @@
++# MCP 统一运行方案：不是把所有配置塞进一个进程
++
++日期：2026-10-17。状态：架构提案，尚未实现共享运行。基线：0.5.0a1 本地交付，运行层沿用 0.3/0.4 的独占 stdio 转发。
++
++## 决策摘要
++
++MCPcell 是 MCP 运行管理器，不扩张成另一个综合 IDE。MCP 主界面负责服务清单、来源、接入、暂停与还原；检测范围、AI 工具和原有终端是按需进入的辅助功能。界面不掌握实例生命周期，前端操作调用管理 API；执行核心需要能够在没有打开 UI 的情况下工作。
++
++统一分四层：**服务定义统一、客户端绑定独立、协议入口统一、合格实例受控复用**。不能把“列表折叠成一行”或“经过同一个端口”当成进程复用。一个管理器也不意味着一个超级权限域。
++
++## 1. 代码现状与必须修正的方向
++
++| 位置 | 已有实现 | 缺口 |
++|---|---|---|
++| `discovery.py` | 有界读取，多客户端配置解析，候选指纹 | 进程内 HMAC 是候选比较键，不是长期 Service ID；不代表安全共享 |
++| `management.py` | 源配置备份、接入绑定、变更检查与条目还原 | 绑定仍与各客户端的原始服务项关联；没有独立版本化服务目录及授权视图 |
++| `bridge.py` | 一个 stdio 启动入口连接管理器；无调用自动重放 | 每原始服务/会话仍有 Python 桥，桥本身也有启动和内存成本 |
++| `runtime.py` `Relay.handle` | 收到首个协议帧后创建 `OwnedProcess`；每连接独占 | `initialize` 也会触发启动，不是真正的 tools/call 级按需执行；没有实例池或协议级共享路由 |
++| `Runtime.status` | 进程树 RSS 观测，标注非去重总和 | 不是内核硬限额；8 个连接上限也不能限制每个服务的内存增长 |
++| `server.py` | 同一状态目录的 InstanceLock、本地认证 API | 必须保持管理/数据通道职责分离，不能由普通工具通道修改任意启动策略 |
++| 前端来源过滤 | 0.5 已修正操作范围 | 0.4 中仅显示 Cursor 的分组仍可接入其他同配置客户端；0.5 对分组成员先收窄后操作 |
++
++0.5 未改写上述运行器。只是界面整合、正常浏览器启动及来源操作范围修复，不是 OOM 解决完成版。
++
++## 2. 对象模型：一份定义，多份授权绑定
++
++`ServiceDefinition` 保存稳定 ID、版本、锁定制品摘要、执行类型、本地 argv 或远程端点引用，以及经过核对的能力描述。不保存某一客户端的批准结果。
++
++`ClientBinding` 保存具体客户端、配置文件与条目位置、原别名、作用域、工作区、凭据引用、批准规则、允许的工具集合和迁移备份。只检查/接入某个来源时，操作不得覆盖其他来源。不能按服务名称自动合并不同凭据或项目。
++
++`AccessProfile` 是编译后的授权视图：某个客户端在明确的工作区和授权域中可用的服务与工具。有效授权必须来源于经批准的绑定，不信任桥提交的任意 `cwd` 或客户端自报标签。工作区身份需处理路径别名、大小写、符号链接/重解析点、盘符与 UNC 等平台差异；无法证明等价时分开。
++
++`InstanceKey` 是复用分区：制品摘要 + 已解析启动配置 + 身份/凭据授权域和版本 + 工作区/挂载 + 权限策略版本 + 状态模型 + 协议能力兼容档。它不同于显示分组键。凭据使用受保护引用，禁止将原始密钥写入普通日志或可见摘要。
++
++`Lease` 记录哪个获授权调用方正在使用哪个实例及业务状态。连接、请求、租约和业务状态句柄的生命期分开。策略或凭据撤销后，不能因为已有租约还在就继续给予权限。
++
++示例：同一个文档搜索制品可以只有一个定义，Claude Code 和 Cursor 有两份绑定。如果工作区和授权域相同且该版本已验证可复用，可以指向同一个实例；换成另一个账号或另一个项目时，实例必须重新分区。定义可以共用，权限不能求并集。
++
++## 3. 接入入口：先兼容，再聚合
++
++迁移期保留当前每服务别名的兼容桥，便于小范围试用与还原。但它不是最终轻量形态。
++
++目标是每个客户端/授权配置只连接一个 MCPcell 入口：支持所需 HTTP 语义的客户端直接连接经认证的本地端点；只支持 stdio 的客户端使用尽量小的原生桥，而非每工具一个完整 Python/Node 运行环境。传输能力必须逐客户端验证，不因品牌名称就默认支持。
++
++```
++客户端 A ── 授权入口 A ─┐
++客户端 B ── 授权入口 B ─┼── MCPcell 路由与调度 ── 可共享实例池
++客户端 C ── 授权入口 C ─┘                    ├─ 工作区/会话独占实例
++                                            └─ 远程 MCP 连接
++```
++
++入口可共享监听服务，但每个请求独立鉴权。独占配置目录内的状态锁保持有效；多个自定义状态目录不能被宣传成“整机绝对唯一实例”。
++
++聚合后工具名可能冲突，使用稳定服务 ID 派生的命名空间与持久别名映射，不依赖服务自报的 `serverInfo.name` 唯一。客户端的旧白名单、autoApprove、deny 和工具全名必须一起迁移。**禁止把多个旧服务的批准规则扩大成一个网关的通配批准。**无法等价转换就阻断并要求重新批准，不以“无感”为名跳过。
++
++旧别名兼容与单入口聚合是两种显式迁移模式；不能同时声称任何客户端都保持完全相同的工具标识又自动折叠成一个新服务。
++
++## 4. 真正按需启动：发现能力不必常驻执行进程
++
++当前“首协议帧启动”会被初始化触发。要改成调用时启动，网关必须成为有能力描述的 MCP 服务，而不仅是字节管道。
++
++建议在经用户批准的导入/刷新阶段，用受限探测获得并验证能力目录快照，或使用可信的已锁定清单。探测本身会执行第三方程序，不能伪装为只读配置扫描。目录至少绑定制品、配置、授权上下文、协议版本和有效期。首次未知服务可能必须短暂启动探测，不能承诺从不启动。
++
++客户端 `tools/list` 可以由有效目录响应；`tools/call`、`resources/read` 等需要后端工作的请求才申请实例。只有协议能力允许且快照有效时才这么做；动态或不可缓存的服务走实连接路径。网关只声明能够正确实现的能力，不重放任意旧握手冒充新后端状态。
++
++当前官方规范将 2026-07-28 与之后称为 modern（每请求元数据），2025-11-25 与之前称为 legacy（初始化握手）。实现必须分别处理，同一套“缓存 initialize”不能覆盖两者。[1]
++
++新版目录缓存需尊重方法、参数、`ttlMs`、`cacheScope` 与变更通知。私有缓存不跨授权域；包含 `inputResponses` 或 `requestState` 的续调结果不缓存。TTL 不是让所有后端周期性启动刷新的任务表。[2]
++
++现代工具集合可以随每请求授权不同而不同，但不能靠某次连接里先调用一个搜索工具，悄悄改变后续列表语义。[3]
++
++## 5. 共享只对可证明兼容的配置开放
++
++第一种：`exclusive`，默认。状态不明、浏览器、数据库事务、绑定进程 cwd、客户端回调归属不明等全部保留独占，但仍可按需启动并回收。
++
++第二种：`scoped_shared`，已审核版本与运行配置下的无会话状态服务，同一授权分区内复用。默认不根据“只读”注解自动批准；注解不是安全证明。[3]
++
++第三种：`resettable_pool` 或显式句柄适配，后续专门做。归还池之前必须重置验证；失败销毁。显式句柄还需要调用者归属检查，不是拿到句柄就有权限。
++
++串行化调用只能减少并发竞态，不能消除上一会话的账号、浏览器、cwd 或内存状态。共享模式的安全前提不能由加锁代替。
++
++实现共享时至少覆盖：
++
++- 请求 ID 映射：下游身份 + 连接代次 + 请求 ID → 上游请求 ID，避免不同客户端同为 id=1 时响应串线。
++- 进度、取消、通知、订阅和服务端请求的归属。一个客户端取消不能误杀其他调用，来源不明通知不能默认广播。
++- legacy 能力协商和客户端回调的兼容性；modern 每请求元数据及不透明续调状态保持正确路由。
++- 实例代次与失效处理：重启后旧状态、游标和待处理调用不能继续绑定新实例假装恢复。写调用断线报告结果未知，不自动重放。
++- 租约与在途请求计数：断开一个使用者只释放它的租约；尚有调用或需要保留状态时不能按普通空闲计时回收。
++
++`acquire(key, lease)` 需要单次创建合并，多个并发启动请求等同只排一个创建任务；后端启动并通过能力校验后才发布 ready。清理失败进入隔离，不继续无限重启。
++
++## 6. 资源治理不是多画一个内存数字
++
++既要有全局预算，也要有实例预算和队列/输出字节限额。新实例启动前预留预算，容量不足排入有界队列或拒绝；预热不能无条件创建空闲实例。按客户端公平调度，防止一个会话占满全部槽位。
++
++Linux 使用受委派且实际可用的 cgroup v2 控制器实现进程树级资源限制；不能把无委派权限时的 RSS 轮询杀进程写成同等保障。[4]
++
++Windows 保留并补全 Job Object 的归属、子进程与退出清理，再设置有效的资源上限。Job 内存约束的提交内存语义与工作集/RSS 不同，要分别展示。[5][6]
++
++单个共享进程的内核限制不能变成每请求硬隔离；需要强隔离的工作应使用独立实例。管理器、桥、缓冲和可选终端资源都纳入统计；远程服务内部内存不在本地管理器的保证范围内。
++
++权限限制需要真正的文件系统/网络执行边界与最小权限凭据，不能只检查调用参数。工具返回内容属于数据，不能修改本地策略。已有 Docker MCP Gateway 的容器生命周期、凭据注入与约束可以作为可选执行后端参考，但不要求所有轻量本地用户必须安装容器环境。[7][8]
++
++## 7. 迁移、恢复和可观测性
++
++客户端配置修改必须显示精确作用域。读取原文并保留未知字段，生成补丁，备份字节及权限，写前核对版本，逐文件原子替换与写后校验。跨文件操作用事务记录恢复，不宣称跨文件天然原子性。外部编辑器不配合锁时仍有竞态，报告冲突而不是强制覆盖。
++
++原先已运行的外部 MCP 无法仅靠配置迁移就安全收养。要求客户端断开/重连，确认入口已切换；只管理证明属于 MCPcell 的进程，不按 node/python 名称全局杀进程。
++
++每条服务详情应显示：绑定哪些客户端、独占还是共享、为什么允许/拒绝共享、实例数、有效资源约束、最近失败/清理结果。日常界面保持简洁，详细证据按需打开。不能从日志里没有错误推导“已安全”，也不能从零观测值推导“零资源开销”。
++
++## 8. 实施顺序与完成定义
++
++| 顺序 | 实际工程交付 | 验收 |
++|---|---|---|
++| A | 稳定服务目录与来源绑定分离，迁移只影响明确来源 | 接入/暂停/还原 Cursor 不改变 CC；同名不同身份不合并 |
++| B | 经验证的授权视图与单入口网关，保留兼容路径 | tools/resources/prompts 不越权；别名和批准规则可审计；缓存失效正确 |
++| C | 一种服务的合格共享配置 + 租约/消息路由 | 6 个同域逻辑客户端只启动 1 个测试服务；两个账号不共享；取消/崩溃/重连不串线 |
++| D | 总预算 + OS 约束 + 启动/回收压力测试 | 大输出有界、闲置可释放、清理失败阻断重启、约束不可用时明确拒绝 |
++| E | 按同一执行契约接入更多 CLI 与适配器 | 原生审批不被扩大，动作结果未知不重放；不增加新的管理页签 |
++
++先完成 A–D，不再为了“全能 Agent 中心”扩张功能菜单。实际开发可以先在现有 Python 核心证明协议正确性，再把高频桥和调度核心拆为小型原生进程；不为了语言标签全仓重写。
++
++基准应对比原始客户端启动、当前独占桥、目录按需启动、受控共享四种模式。记录冷/热延迟、所有自有进程的内存、闲置回收、错误率和隔离测试。实例从 S×M 变为按安全域所需数量只是目标模型，不是已测到的节省百分比。
++
++## 主要依据
++
++[1] MCP Versioning and Compatibility: https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning
++
++[2] MCP Caching: https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching
++
++[3] MCP Tools (authorization, annotations, name collisions): https://modelcontextprotocol.io/specification/2026-07-28/server/tools
++
++[4] Linux kernel cgroup v2: https://docs.kernel.org/admin-guide/cgroup-v2.html
++
++[5] Microsoft Job Objects: https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
++
++[6] Microsoft JOBOBJECT_EXTENDED_LIMIT_INFORMATION: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information
++
++[7] Docker MCP Gateway: https://docs.docker.com/ai/mcp-catalog-and-toolkit/mcp-gateway/
++
++[8] MCP Security Best Practices: https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices
+diff --git a/docs/validation-results-0.5.json b/docs/validation-results-0.5.json
+new file mode 100644
+index 0000000..f7e433d
+--- /dev/null
++++ b/docs/validation-results-0.5.json
+@@ -0,0 +1,75 @@
++{
++  "build": {
++    "version": "0.5.0a1",
++    "date": "2026-10-17",
++    "sourceBaseline": "supplied MCP-cell-source-0.4.0a1.zip",
++    "githubSynced": false,
++    "githubPrHeadObserved": "889f0a757da5c2492e44be60fedc76233588eb20",
++    "python": "3.13.5",
++    "platform": "Linux",
++    "validation": {
++      "backendTestsPassed": 130,
++      "offlineUiChecksPassed": 38,
++      "pageErrors": [],
++      "browserToLoopback": "blocked by existing administrator policy",
++      "productionAgentAccounts": "not tested",
++      "nativeWindowsMacOS": "not tested"
++    },
++    "runtimeSharing": "not implemented; one upstream per connection retained",
++    "changes": [
++      "normal default browser without app-window or fixed dimensions",
++      "MCP-first viewport-sized workspace with smaller corners",
++      "no persistent primary or session tab bars; session selector",
++      "source-scoped group operations regression fix",
++      "unification architecture and acceptance plan"
++    ]
++  },
++  "ui": {
++    "checks": [
++      "MCP is the only initial primary view",
++      "workspace uses the normal browser viewport, not a 960px fixed window",
++      "outer window radius is removed and controls use 4px corners",
++      "no persistent function or session tab bars",
++      "demo provenance and nine presentation groups are visible",
++      "all client sources plus all-sources selector remain accessible",
++      "source filter selects Cursor bindings",
++      "REGRESSION: Cursor-only enrollment does not include hidden other clients",
++      "confirmed scoped enrollment mutates only the selected source in demo",
++      "scoped pause is confined to the managed source",
++      "scoped restore preserves unrelated sources",
++      "bulk selection also honors the current source",
++      "all-source grouping still explicitly previews all four source bindings",
++      "state dropdown replaces all/managed tab row",
++      "empty source is not presented as installed or running",
++      "on-demand detection separates MCP configurations from ten Agent entrypoints",
++      "detection search and explicit project-directory dialog are preserved",
++      "Agent collection still requires confirmation and does not launch",
++      "Agent and editor icon collection is retained",
++      "missing Agent opens details, not installation or execution",
++      "collection and pinned filters work without a tab bar",
++      "disabling Agent still blocks new sessions",
++      "manual registration remains structured argv, not shell concatenation",
++      "first terminal opens with one session picker, not a tab strip",
++      "two independent sessions remain available",
++      "demo terminal receives input without executing it",
++      "session picker switches without creating or replaying processes",
++      "renamed session appears in picker",
++      "closing selected session requires confirmation and preserves the other",
++      "stop retains terminal output without a persistent tab",
++      "closing the final session returns to MCP and removes the picker",
++      "editor icon still links to MCP source filtering",
++      "keyboard search works on the primary workspace",
++      "icon gradient IDs and unknown-brand escaping remain valid",
++      "layout expands to 1920px without the old width ceiling",
++      "390px MCP and Agent views stay within viewport",
++      "reduced-motion preference remains supported",
++      "offline preview and icons issue no network requests"
++    ],
++    "errors": []
++  },
++  "browserIntegration": {
++    "status": "blocked",
++    "checks": [],
++    "error": "Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at http://127.0.0.1:34483/#token=[REDACTED]\nCall log:\n  - navigating to \"http://127.0.0.1:34483/#token=[REDACTED]\", waiting until \"networkidle\"\n"
++  }
++}
+diff --git a/docs/validation.md b/docs/validation.md
+index 2a08872..305f9b1 100644
+--- a/docs/validation.md
++++ b/docs/validation.md
+@@ -1,66 +1,33 @@
+-# 0.4 validation · 2026-10-17
++# Validation · 0.5.0a1 · 2026-10-17
+ 
+-本轮实际执行：
++## This round actually executed
+ 
+-- Linux / Python 3.13.5：128 项 unittest 单元、集成、HTTP 测试通过。
+-- Chromium：32 项离线 UI 检查通过，页面 JS 错误 0。
+-- app.js、hub.js、icons.js 的 node --check 均通过。
+-- 1080×720 浏览器视口中工具窗为 960×640；390×844 视口下没有页面横向溢出，图标入口边界在视口内。
++- `python -m unittest discover -s tests -v`: **130 tests passed**, 29.200 seconds, Linux in this environment. Includes prior real fixture MCP/PTY/HTTP integration tests and two new browser-launch unit tests.
++- `node --check mcpcell/web/app.js` and `node --check mcpcell/web/hub.js`: passed.
++- `python scripts/ui_smoke.py`: **38 checks passed**, zero browser JavaScript page errors, synthetic offline document.
++- Viewports: 1366×900, 1920×1080 and 390×844. Main workspace fills viewport rather than forcing app-window dimensions. Outer radius 0, primary controls 4px. No role=tab or session-strip.
++- Reproduced 0.4 bug before the fix: under Cursor-only filter, context7 enrollment confirmation included Codex, Claude Code, Cursor and Gemini CLI (4 bindings). After the fix it includes only Cursor (1 binding). Added single/bulk enrollment, scoped pause/restore and all-sources behavior checks.
++- UI also verifies icon library, missing Agent behavior, collection/pin/disable/manual form, independent sessions and picker, rename/stop/close, last-session return to MCP, search, source navigation, zero offline requests and reduced-motion preference.
+ 
+-新增检查涵盖：10 个 Agent 向量图标、全部/已收纳/置顶筛选、未找到程序只能查看、7 个编辑器来源入口、11 类 MCP 图标筛选及空结果、会话页签品牌、重复快照保持 DOM、SVG 渐变 ID 唯一性、未知图标键安全回退。离线预览网络请求数为 0。HTTP 测试检查本地图标资源及 Host/路径边界。
++## Browser-to-running-server attempt
+ 
+-界面检查使用标记清楚的合成数据，不代表真实生产 Agent 集成测试。本轮没有完成 Windows/macOS 原生验证、真实账号对话或完整浏览器到运行工作台的联调；HTTP 后端与离线浏览器分别测试。未新增共享进程、硬内存限额或内存节省基准。
++`python scripts/browser_integration.py` starts an isolated demo Workbench and opens its normal authenticated loopback URL. This attempt returned `ERR_BLOCKED_BY_ADMINISTRATOR`. No browser policy was changed or bypassed. Result: **blocked, zero full browser-to-server checks completed**. Do not present separate HTTP and offline UI tests as this end-to-end test passing.
+ 
+-运行：`python -m unittest discover -s tests -v`、`python scripts/ui_smoke.py`。UI 测试需要 Playwright 和可用 Chromium，仅是开发依赖，不是应用运行依赖。
++## Not verified / not implemented
+ 
+----
++Windows/macOS native behavior, production Claude/Pi/model conversations, native window manager behavior and real user installations were not tested. Opening the default browser is unit-tested by mocking its documented Python interface; a real desktop user's browser preference was not exercised here.
+ 
+-## Earlier version record (unchanged)
++No shared instance pool, protocol-aware aggregate gateway, tool-call-only lazy start, hard memory budget, remote MCP relay or complete filesystem/network sandbox was added. These are in `unification-plan.md` as proposals. Source-level limits and process-tree RSS reporting are not equivalent to OOM prevention.
+ 
+-# 0.3 validation · 2026-10-17
++Local source baseline is the supplied 0.4 ZIP. GitHub PR #1 was read and still points to 0.3 commit `889f0a757da5c2492e44be60fedc76233588eb20`; this round does not claim a push or merge. No files or MCP configuration on the user's actual workstation were changed by these container tests.
+ 
+-## Executed on the delivered working source
+-
+-- Linux / Python 3.13.5: **125 unit, integration and HTTP tests passed**.
+-- `node --check` for app.js, hub.js and the locally supplied terminal bundle: passed. Node is a development-only syntax check, not an application server.
+-- Chromium + Playwright: **22 offline UI checks passed**, no JavaScript page errors.
+-- Approx. 1000×710 app window in an 1100×790 screenshot; 390px responsive layout.
+-
+-## Real execution, not only a UI mock
+-
+-The suite retains 0.2's actual MCP fixture, stdio bridge, configuration backup/recovery, pause/restore and conflict tests. New tests actually run a harmless Python Agent fixture in a POSIX PTY. They verify isatty, interactive Unicode input/output, distinct processes/workspaces, environment filtering, idempotent launch, resize notifications, stop, natural exit, cleanup, and closing one session without stopping another.
+-
+-`tests/test_agent_live_http.py` exercises authenticated loopback HTTP registration → launch → real PTY → fixture response → resize → close. The fixture only echoes input; it never executes commands or calls a model. Real user configurations and credentials were not used.
+-
+-## UI checks
+-
+-Dedicated detection page; separate Agent/MCP detection; 10 built-in Agent entries; search; explicit collection without starting; collection cards; pin/disable; custom entry dialog; two independent Claude/Pi demo terminal tabs; input; switch without recreating terminals; rename; close one; stop retaining output; original MCP enrollment/pause/restore UI; explicit workspace selector; keyboard navigation; narrow screen; reduced motion.
+-
+-The UI test uses a self-contained synthetic-data page. Its mutations are simulations and are not proof that production Claude Code, Pi, or other installed Agent applications have been exercised.
+-
+-## Browser integration restriction
+-
+-A normal browser navigation to the authenticated running loopback workbench was attempted again. Chromium returned `net::ERR_BLOCKED_BY_ADMINISTRATOR`. No policy was changed or bypassed. Full browser → live workbench integration therefore remains unverified; real HTTP/PTY tests and offline browser tests were performed separately.
+-
+-## Terminal asset provenance
+-
+-This source ZIP includes a working local terminal bundle sourced from the environment's installed Playwright trace viewer (1.57.0-beta-1764944708000), exposing its bundled Terminal and FitAddon through a small wrapper. Its xterm patch version was not independently established. SHA-256 receipts and MIT/Apache license and modification notices accompany it under mcpcell/web/vendor. No font files are redistributed.
+-
+-Generated assets are not committed to Git. scripts/setup_terminal.py prepares fixed official xterm 5.5.0 and addon-fit 0.10.0 files by extracting verified npm tarball content without running package scripts. This alternative network build was not executed successfully in the isolated environment, so its browser behavior is not claimed as separately tested. ZIP assets are the ones used for the reported UI tests.
+-
+-## Not verified / not delivered
+-
+-Windows/macOS native operation, ConPTY interaction with real Agents, real Claude/Pi login/model conversations, automatic installation/update, credential switching, historical conversation import, hard memory limits, a security sandbox, shared MCP processes, remote MCP forwarding, and measured memory savings are not claimed. Existing MCP Job Object code and the new Agent ConPTY best-effort cleanup have different boundaries. Native-platform validation is required before treating this alpha as production-ready.
+-
+-## Reproduce
++## Reproduction
+ 
+ ```sh
+ python -m unittest discover -s tests -v
+ python scripts/build_preview.py
+-# optional developer browser checks
+-python -m pip install playwright
+-python -m playwright install chromium
+ python scripts/ui_smoke.py
++python scripts/browser_integration.py
+ ```
+ 
+-Set CHROMIUM_PATH only to an existing browser executable when needed. Generated reports and screenshots go to ignored dist/. No real API keys or terminal access tokens belong in test artifacts.
++Playwright/Chromium are optional development dependencies, not required to run the application. Runtime dependencies remain in requirements.txt. The ZIP retains the preceding round's locally bundled terminal assets and notices; their supply provenance was not changed this round.
+diff --git a/mcpcell/__init__.py b/mcpcell/__init__.py
+index dfe2f13..3637055 100644
+--- a/mcpcell/__init__.py
++++ b/mcpcell/__init__.py
+@@ -1 +1 @@
+-__version__ = "0.4.0a1"
++__version__ = "0.5.0a1"
+diff --git a/mcpcell/server.py b/mcpcell/server.py
+index 5005d02..a063439 100644
+--- a/mcpcell/server.py
++++ b/mcpcell/server.py
+@@ -19,7 +19,7 @@ from .agents import AgentHub
+ from .clients import candidates
+ 
+ WEB = Path(__file__).with_name("web")
+-ASSETS = {"/icons.js": ("icons.js", "text/javascript; charset=utf-8"), "/hub.css": ("hub.css", "text/css; charset=utf-8"), "/hub.js": ("hub.js", "text/javascript; charset=utf-8"), "/": ("index.html", "text/html; charset=utf-8"),
++ASSETS = {"/workspace.css": ("workspace.css", "text/css; charset=utf-8"), "/icons.js": ("icons.js", "text/javascript; charset=utf-8"), "/hub.css": ("hub.css", "text/css; charset=utf-8"), "/hub.js": ("hub.js", "text/javascript; charset=utf-8"), "/": ("index.html", "text/html; charset=utf-8"),
+           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+           "/style.css": ("style.css", "text/css; charset=utf-8"),
+           "/vendor/terminal.js": ("vendor/terminal.js", "text/javascript; charset=utf-8"),
+diff --git a/mcpcell/web/app.js b/mcpcell/web/app.js
+index 2b01fcb..2543ddf 100644
+--- a/mcpcell/web/app.js
++++ b/mcpcell/web/app.js
+@@ -13,26 +13,27 @@ async function api(path,body,token){const headers={};if(body!==undefined)headers
+ const clientName=id=>state.data.clients.find(c=>c.id===id)?.name||id;
+ const scope=s=>({user:'用户',workspace:'项目',local:'本地项目',custom:'自定义'})[s]||s;
+ function groups(){const map=new Map();for(const e of state.data.entries){const key=e.candidateKey||e.id;if(!map.has(key))map.set(key,{key,name:e.name,members:[]});map.get(key).members.push(e);}return [...map.values()];}
+-function visible(){return groups().filter(g=>(state.tab!=='managed'||g.members.some(e=>e.managed))&&(state.client==='all'||g.members.some(e=>e.client===state.client))&&(!state.query||`${g.name} ${g.members.map(e=>clientName(e.client)).join(' ')}`.toLowerCase().includes(state.query.toLowerCase())));}
++function scopedGroup(g){return {...g,members:g.members.filter(e=>state.client==='all'||e.client===state.client)};}
++function visible(){return groups().map(scopedGroup).filter(g=>g.members.length&&(state.tab!=='managed'||g.members.some(e=>e.managed))&&(state.tab!=='unmanaged'||available(g).length)&&(!state.query||`${g.name} ${g.members.map(e=>clientName(e.client)).join(' ')}`.toLowerCase().includes(state.query.toLowerCase())));}
+ function available(g){return g.members.filter(e=>!e.managed&&e.canEnroll!==false);}
+ function managed(g){return g.members.filter(e=>e.managed);}
+ function selectedIds(){return [...new Set(visible().filter(g=>state.selected.has(g.key)).flatMap(g=>available(g).map(e=>e.id)))];}
+ function bytes(n){return n===null||n===undefined?'—':`${(n/1048576).toFixed(n<1048576?1:0)} MB`;}
+ function status(g){const m=managed(g),run=state.data.runtime?.instances||[];if(m.some(e=>e.managementState==='conflict'))return ['配置变化','conflict'];if(m.some(e=>run.some(r=>r.bindingId===e.bindingId)))return ['运行中','running'];if(m.length&&m.every(e=>e.enabled===false))return ['已暂停','paused'];if(m.length)return [m.length===g.members.length?'已接入':`${m.length}/${g.members.length} 已接入`,'ready'];return [available(g).length?'待接入':'仅检测',''];}
+-function renderRows(){const shown=visible();$('#list').innerHTML=shown.length?shown.map(g=>{const m=managed(g),a=available(g),s=status(g),names=[...new Set(g.members.map(e=>clientName(e.client)))];return `<div class="row ${state.selected.has(g.key)?'selected':''}" data-group="${esc(g.key)}"><div class="service"><input type="checkbox" data-select="${esc(g.key)}" aria-label="选择 ${esc(g.name)}" ${state.selected.has(g.key)?'checked':''} ${!a.length?'disabled':''}><span class="glyph">${window.MCPcellIcons.render('tool')}</span><div class="service-copy"><button class="name" data-detail="${esc(g.key)}">${esc(g.name)}</button><div class="sources">${[...new Set(g.members.map(e=>e.client))].slice(0,2).map(id=>`<span class="source">${window.MCPcellIcons.render(id,'small')}${esc(clientName(id))}</span>`).join('')}${names.length>2?`<span class="meta">+${names.length-2}</span>`:''}<span class="meta">${g.members[0].transport==='remote'?'HTTP':'STDIO'}</span></div></div></div><div><span class="state ${s[1]}">${s[1]?'<i></i>':''}${s[0]}</span></div><div class="row-actions">${a.length?`<button class="row-button" data-enroll="${esc(g.key)}">接入</button>`:m.length?`<button class="row-button" data-toggle="${esc(g.key)}">${m.every(e=>e.enabled===false)?'启用':'暂停'}</button>`:`<button class="row-button" data-detail="${esc(g.key)}">详情</button>`}${m.length?`<button class="text-action" data-restore="${esc(g.key)}">还原</button>`:a.length?`<button class="text-action" data-detail="${esc(g.key)}">详情</button>`:''}</div></div>`;}).join(''):`<div class="empty">${icon('search')}<h2>${state.tab==='managed'?'还没有接入的 MCP':'没有找到 MCP'}</h2><p>${state.query||state.client!=='all'?'换个搜索词或来源试试。':state.tab==='managed'?'在“全部”中选择已有 MCP，点击接入。':'点击“检测 MCP”查找已有配置。项目配置可通过启动参数指定目录。'}</p></div>`;updateSelection();}
++function renderRows(){const shown=visible();$('#list').innerHTML=shown.length?shown.map(g=>{const m=managed(g),a=available(g),s=status(g),names=[...new Set(g.members.map(e=>clientName(e.client)))];return `<div class="row ${state.selected.has(g.key)?'selected':''}" data-group="${esc(g.key)}"><div class="service"><input type="checkbox" data-select="${esc(g.key)}" aria-label="选择 ${esc(g.name)}" ${state.selected.has(g.key)?'checked':''} ${!a.length?'disabled':''}><span class="glyph">${window.MCPcellIcons.render('tool')}</span><div class="service-copy"><button class="name" data-detail="${esc(g.key)}">${esc(g.name)}</button><div class="sources">${[...new Set(g.members.map(e=>e.client))].slice(0,2).map(id=>`<span class="source">${window.MCPcellIcons.render(id,'small')}${esc(clientName(id))}</span>`).join('')}${names.length>2?`<span class="meta">+${names.length-2}</span>`:''}<span class="meta">${g.members[0].transport==='remote'?'远程':'STDIO'}</span></div></div></div><div><span class="state ${s[1]}">${s[1]?'<i></i>':''}${s[0]}</span></div><div class="row-actions">${a.length?`<button class="row-button" data-enroll="${esc(g.key)}">接入</button>`:m.length?`<button class="row-button" data-toggle="${esc(g.key)}">${m.every(e=>e.enabled===false)?'启用':'暂停'}</button>`:`<button class="row-button" data-detail="${esc(g.key)}">详情</button>`}${m.length?`<button class="text-action" data-restore="${esc(g.key)}">还原</button>`:a.length?`<button class="text-action" data-detail="${esc(g.key)}">详情</button>`:''}</div></div>`;}).join(''):`<div class="empty">${icon('search')}<h2>${state.tab==='managed'?'还没有接入的 MCP':'没有找到 MCP'}</h2><p>${state.query||state.client!=='all'?'换个搜索词或来源试试。':state.tab==='managed'?'在“全部”中选择已有 MCP，点击接入。':'点击“检测 MCP”查找已有配置。项目配置可通过启动参数指定目录。'}</p></div>`;updateSelection();}
+ function updateSelection(){const ids=selectedIds();$('#enroll-selected').disabled=!ids.length||state.busy;$('#selected-count').textContent=ids.length?String(ids.length):'';$('#selection').innerHTML=ids.length?`已选 <strong>${ids.length}</strong> 条配置`:'选择要接入的 MCP';const all=visible().filter(g=>available(g).length);const num=all.filter(g=>state.selected.has(g.key)).length;$('#select-all').checked=Boolean(all.length)&&num===all.length;$('#select-all').indeterminate=num>0&&num<all.length;$('#select-all').disabled=!all.length||state.busy;}
+-function render(){if(!state.data)return;const gs=groups();$('#tab-all span').textContent=gs.length;$('#tab-managed span').textContent=gs.filter(g=>managed(g).length).length;d.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===state.tab)));const clients=state.data.clients;$('#client').innerHTML='<option value="all">所有来源</option>'+clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');$('#client').value=state.client;const demo=offline||state.data.mode==='demo';$('#connection').className=`connection ${demo?'demo':''}`;$('#connection').innerHTML=`<i></i>${demo?'交互演示':'管理器在线'}`;$('#summary').textContent=demo?'演示数据 · 不修改本机':`已检测 ${clients.length} 类客户端 · ${gs.length} 个 MCP`;const errors=state.data.errors||[];$('#diagnostics').hidden=!errors.length;$('#diagnostics').textContent=`${errors.length} 项检测异常`;renderSourceFilters();renderRows();runtime();d.body.dataset.ready='true';d.dispatchEvent(new CustomEvent('mcpcell:snapshot',{detail:state.data}));}
++function render(){if(!state.data)return;const gs=groups();$('#inventory-count').textContent=`${gs.length} 个配置组 · ${gs.filter(g=>managed(g).length).length} 组已接入`;$('#management-filter').value=state.tab;const clients=state.data.clients;$('#client').innerHTML='<option value="all">所有来源</option>'+clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');$('#client').value=state.client;const demo=offline||state.data.mode==='demo';$('#connection').className=`connection ${demo?'demo':''}`;$('#connection').innerHTML=`<i></i>${demo?'交互演示':'管理器在线'}`;$('#summary').textContent=demo?'演示数据 · 不修改本机':`已检测 ${clients.length} 类客户端 · ${gs.length} 个 MCP`;const errors=state.data.errors||[];$('#diagnostics').hidden=!errors.length;$('#diagnostics').textContent=`${errors.length} 项检测异常`;renderSourceFilters();renderRows();runtime();d.body.dataset.ready='true';d.dispatchEvent(new CustomEvent('mcpcell:snapshot',{detail:state.data}));}
+ function runtime(){const r=state.data.runtime||{running:0,rssBytes:0};$('#runtime').innerHTML=`MCP ${r.running||0}<span class="separator">/</span>${esc(bytes(r.rssBytes))}`;}
+ function renderSourceFilters(){
+  const clients=state.data.clients;
+- $('#mcp-source-icons').innerHTML=`<button data-source-client="all" aria-pressed="${state.client==='all'}" class="source-all">全部来源</button>`+clients.map(c=>`<button data-source-client="${esc(c.id)}" aria-label="${esc(c.name)} 的 MCP" title="${esc(c.name)} · ${state.data.entries.filter(e=>e.client===c.id).length} 条配置" aria-pressed="${state.client===c.id}">${window.MCPcellIcons.render(c.id,'small')}</button>`).join('');
++ $('#mcp-source-icons').innerHTML=`<button data-source-client="all" aria-pressed="${state.client==='all'}" class="source-all">${window.MCPcellIcons.render('tool','small')}<span>全部来源</span><b>${state.data.entries.length}</b></button>`+clients.map(c=>{const count=state.data.entries.filter(e=>e.client===c.id).length;return `<button data-source-client="${esc(c.id)}" aria-label="${esc(c.name)} 的 MCP" title="${esc(c.name)} · ${count} 条配置" aria-pressed="${state.client===c.id}">${window.MCPcellIcons.render(c.id,'small')}<span>${esc(c.name)}</span><b>${count}</b></button>`;}).join('');
+ }
+ function filterClient(id){state.client=id;state.tab='all';state.query='';state.selected.clear();$('#search').value='';render();}
+ const dialog=$('#dialog');
+ function show(title,content,buttons='',subtitle=''){ $('#dialog-content').innerHTML=`<div class="dialog-head"><div><h2 id="dialog-title">${esc(title)}</h2>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div><button class="icon-button" data-close aria-label="关闭">${icon('close')}</button></div>${content}${buttons?`<div class="dialog-buttons">${buttons}</div>`:''}`;if(!dialog.open)dialog.showModal();}
+ const cancel='<button class="button" data-close>取消</button>';
+-function getGroup(key){return groups().find(g=>g.key===key);}
+-function detail(key){const g=getGroup(key);if(!g)return;show(g.name,g.members.map(e=>`<div class="detail-item"><div class="detail-label">${esc(clientName(e.client))} · ${esc(scope(e.scope))}</div><div class="detail-value">${e.managed?(e.enabled===false?'已接入 · 暂停中':'已接入 · 独占转发'):(e.reason||'可以接入 MCPcell')}</div><div class="file-path">${esc(e.source)}</div>${e.managed?`<div class="detail-actions"><button data-single-stop="${esc(e.bindingId)}">停止运行实例</button><button data-single-restore="${esc(e.bindingId)}">还原此来源</button></div>`:''}</div>`).join('')+`<div class="notice">接入会备份原配置并替换启动入口。原 MCP 名称、参数和客户端批准设置保留。重启对应 AI 客户端后生效。</div>`,'',`${g.members.length} 条配置来源`);}
++function getGroup(key){const g=groups().find(g=>g.key===key);return g?scopedGroup(g):null;}
++function detail(key){const g=getGroup(key);if(!g||!g.members.length)return;show(g.name,g.members.map(e=>`<div class="detail-item"><div class="detail-label">${esc(clientName(e.client))} · ${esc(scope(e.scope))}</div><div class="detail-value">${e.managed?(e.enabled===false?'已接入 · 暂停中':'已接入 · 独占转发'):(e.reason||'可以接入 MCPcell')}</div><div class="file-path">${esc(e.source)}</div>${e.managed?`<div class="detail-actions"><button data-single-stop="${esc(e.bindingId)}">停止运行实例</button><button data-single-restore="${esc(e.bindingId)}">还原此来源</button></div>`:''}</div>`).join('')+`<div class="notice">接入会备份原配置并替换启动入口。原 MCP 名称、参数和客户端批准设置保留。重启对应 AI 客户端后生效。</div>`,'',`${g.members.length} 条配置来源`);}
+ let pending=[];
+ function confirmEnroll(ids){if(!ids.length)return;pending=ids;const entries=state.data.entries.filter(e=>ids.includes(e.id));show(`接入 ${entries.length} 条 MCP 配置？`,`<p class="explain">将为 <strong>${esc([...new Set(entries.map(e=>clientName(e.client)))].join('、'))}</strong> 保存备份，并把所选 MCP 的启动入口交给 MCPcell。</p><div class="notice">接入后请重启对应客户端。工具按连接启动，退出时回收；不同会话仍独立运行，不合并权限。</div>${offline?'<div class="notice warn">这是交互演示，只改变当前页面，不读取或修改本机配置。</div>':''}`,cancel+'<button class="button primary" id="confirm-enroll">备份并接入</button>');}
+ function confirmRestore(bids){pending=bids;show('还原为原来的启动方式？','<p class="explain">停止选中来源的托管实例，恢复原 MCP 配置。其他客户端设置保持不变。</p><div class="notice warn">进行中的调用可能中断。配置若被外部修改，会停止还原并报告冲突，不强行覆盖。</div>',cancel+'<button class="button danger" id="confirm-restore">还原配置</button>');}
+@@ -40,15 +41,16 @@ async function mutate(path,body){if(offline){if(path==='/api/enroll'){for(const
+ async function busy(task){if(state.busy)return;state.busy=true;updateSelection();d.querySelectorAll('#dialog button').forEach(b=>b.disabled=true);try{await task();}catch(err){toast(err.message);}finally{state.busy=false;d.querySelectorAll('#dialog button').forEach(b=>b.disabled=false);render();}}
+ async function restore(bids){const failures=[];for(const bindingId of [...new Set(bids)]){try{const r=await mutate('/api/restore',{bindingId});state.data=r.snapshot;}catch(e){failures.push(e.message);}}if(failures.length)show('有配置未能还原',failures.map(t=>`<div class="failure">${esc(t)}</div>`).join(''));else{dialog.close();toast(offline?'演示：已还原，不涉及本机文件。':'已还原。重启对应 AI 客户端后生效。');}}
+ d.addEventListener('click',event=>{const b=event.target.closest('button');if(!b||state.busy)return;if(b.hasAttribute('data-close')){dialog.close();return;}if(b.dataset.sourceClient){state.client=b.dataset.sourceClient;$('#client').value=state.client;state.selected.clear();renderSourceFilters();renderRows();return;}if(b.dataset.tab){state.tab=b.dataset.tab;state.selected.clear();render();return;}if(b.dataset.detail){detail(b.dataset.detail);return;}if(b.dataset.enroll){confirmEnroll(available(getGroup(b.dataset.enroll)).map(e=>e.id));return;}if(b.dataset.restore){confirmRestore(managed(getGroup(b.dataset.restore)).map(e=>e.bindingId));return;}if(b.dataset.singleRestore){confirmRestore([b.dataset.singleRestore]);return;}if(b.dataset.singleStop){busy(async()=>{const r=await mutate('/api/stop',{bindingId:b.dataset.singleStop});if(r.snapshot)state.data=r.snapshot;toast('已请求停止；当前调用不会自动重试。');});return;}if(b.dataset.toggle){const rows=managed(getGroup(b.dataset.toggle)),enabled=rows.every(e=>e.enabled===false);busy(async()=>{for(const e of rows){const r=await mutate('/api/toggle',{bindingId:e.bindingId,enabled});state.data=r.snapshot;}toast(enabled?'已启用；重新连接客户端即可调用。':'已暂停，阻止新连接并停止托管实例。');});return;}if(b.id==='confirm-enroll'){const ids=[...pending];busy(async()=>{const r=await mutate('/api/enroll',{ids,confirm:true});state.data=r.snapshot;state.selected.clear();const failed=(r.results||[]).filter(x=>!x.ok);if(failed.length)show('部分配置未接入',failed.map(x=>`<div class="failure">${esc(x.error)}</div>`).join(''));else{dialog.close();toast(offline?'演示：已接入，不涉及本机文件。':'已备份并接入。请重启对应的 AI 客户端。');}});}if(b.id==='confirm-restore')busy(()=>restore([...pending]));});
++$('#management-filter').onchange=e=>{state.tab=e.target.value;state.selected.clear();render();};
+ $('#enroll-selected').onclick=()=>confirmEnroll(selectedIds());
+ $('#select-all').onchange=e=>{for(const g of visible().filter(g=>available(g).length)){if(e.target.checked)state.selected.add(g.key);else state.selected.delete(g.key);}renderRows();};
+ d.addEventListener('change',e=>{if(e.target.dataset.select){const key=e.target.dataset.select;if(e.target.checked)state.selected.add(key);else state.selected.delete(key);renderRows();}});
+ $('#search').oninput=e=>{state.query=e.target.value;state.selected.clear();renderRows();};$('#client').onchange=e=>{state.client=e.target.value;state.selected.clear();renderSourceFilters();renderRows();};
+ $('#scan').onclick=()=>busy(async()=>{if(offline){toast('演示清单已刷新；真实检测请运行源码中的启动程序。');return;}$('#scan-icon').classList.add('spin');try{state.data=await api('/api/rescan',{});state.selected.clear();toast('检测完成。未自动修改任何配置。');}finally{$('#scan-icon').classList.remove('spin');}});
+-function settings(){const x=state.data;show('设置与诊断',`<div class="detail-item"><div class="detail-label">运行模式</div><div class="detail-value">本地 stdio 接管 · 每连接独占 · 最多 8 个连接</div></div><div class="detail-item"><div class="detail-label">配置与备份</div><div class="detail-value">仅在确认后修改选中配置；本机状态默认保存在 ~/.mcpcell。Windows 使用 DPAPI，Linux/macOS 使用私有文件权限。</div></div><div class="detail-item"><div class="detail-label">检测更多项目</div><div class="file-path">python -m mcpcell --workspace "你的项目目录" --open</div></div><div class="detail-item"><div class="detail-label">尚未提供</div><div class="detail-value">跨会话进程共享、远程 MCP 代理、通用 CLI 作业、内核内存硬限制和完整沙箱。RSS 是进程树观测值，不是节省量。</div></div>${(x.errors||[]).length?`<div class="detail-item"><div class="detail-label">检测异常</div>${x.errors.map(e=>`<p class="failure">${esc(e.message)}<br><span class="file-path">${esc(e.source)}</span></p>`).join('')}</div>`:''}`,'','MCPcell 0.4 · 图标工作台');}
++function settings(){const x=state.data;show('设置与诊断',`<div class="detail-item"><div class="detail-label">运行模式</div><div class="detail-value">本地 stdio 接管 · 每连接独占 · 最多 8 个连接</div></div><div class="detail-item"><div class="detail-label">配置与备份</div><div class="detail-value">仅在确认后修改选中配置；本机状态默认保存在 ~/.mcpcell。Windows 使用 DPAPI，Linux/macOS 使用私有文件权限。</div></div><div class="detail-item"><div class="detail-label">检测更多项目</div><div class="file-path">python -m mcpcell --workspace "你的项目目录" --open</div></div><div class="detail-item"><div class="detail-label">尚未提供</div><div class="detail-value">跨会话进程共享、远程 MCP 代理、通用 CLI 作业、内核内存硬限制和完整沙箱。RSS 是进程树观测值，不是节省量。</div></div>${(x.errors||[]).length?`<div class="detail-item"><div class="detail-label">检测异常</div>${x.errors.map(e=>`<p class="failure">${esc(e.message)}<br><span class="file-path">${esc(e.source)}</span></p>`).join('')}</div>`:''}`,'','MCPcell 0.5 · MCP 工作区');}
+ $('#settings').onclick=settings;$('#diagnostics').onclick=settings;
+ dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();}});
+ d.addEventListener('keydown',e=>{if((!window.mcpcellPage||window.mcpcellPage==='mcp')&&(e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();dialog.close();$('#search').focus();}});
+ window.mcpcell={get snapshot(){return state.data;},setSnapshot(x){state.data=x;render();},api,toast,show,confirmEnroll,detail,groups,filterClient};
+-(async()=>{try{if(offline){state.data=structuredClone(window.__MCPCELL_PREVIEW__);for(const e of state.data.entries){if(e.canEnroll===undefined)e.canEnroll=e.transport==='stdio'&&e.configuredState!=='disabled';}state.data.runtime??={running:0,rssBytes:0,instances:[]};}else{const token=new URLSearchParams(location.hash.slice(1)).get('token');if(token){history.replaceState(null,'',location.pathname);await api('/api/session',{},token);}state.data=await api('/api/snapshot');}render();if(!offline)setInterval(async()=>{if(d.hidden||state.busy)return;try{state.data.runtime=await api('/api/runtime');runtime();if(!dialog.open&&window.mcpcellPage==='mcp')renderRows();}catch{/* Do not invent zero usage when the backend disconnects. */$('#connection').innerHTML='<i></i>管理器已断开';}},3000);}catch(err){$('#list').innerHTML=`<div class="empty"><h2>未连接到管理器</h2><p>${esc(err.message)}</p><p>运行 <code>python -m mcpcell --open</code> 打开本机工具窗。</p></div>`;$('#connection').textContent='未连接';}})();
++(async()=>{try{if(offline){state.data=structuredClone(window.__MCPCELL_PREVIEW__);for(const e of state.data.entries){if(e.canEnroll===undefined)e.canEnroll=e.transport==='stdio'&&e.configuredState!=='disabled';}state.data.runtime??={running:0,rssBytes:0,instances:[]};}else{const token=new URLSearchParams(location.hash.slice(1)).get('token');if(token){history.replaceState(null,'',location.pathname);await api('/api/session',{},token);}state.data=await api('/api/snapshot');}render();if(!offline)setInterval(async()=>{if(d.hidden||state.busy)return;try{state.data.runtime=await api('/api/runtime');runtime();if(!dialog.open&&window.mcpcellPage==='mcp')renderRows();}catch{/* Do not invent zero usage when the backend disconnects. */$('#connection').innerHTML='<i></i>管理器已断开';}},3000);}catch(err){$('#list').innerHTML=`<div class="empty"><h2>未连接到管理器</h2><p>${esc(err.message)}</p><p>运行 <code>python -m mcpcell --open</code> 打开本机工作区。</p></div>`;$('#connection').textContent='未连接';}})();
+ })();
+diff --git a/mcpcell/web/hub.js b/mcpcell/web/hub.js
+index 63e9189..2383775 100644
+--- a/mcpcell/web/hub.js
++++ b/mcpcell/web/hub.js
+@@ -3,8 +3,8 @@
+ const d=document,$=s=>d.querySelector(s),M=window.mcpcell;
+ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const offline=Boolean(window.__MCPCELL_PREVIEW__);
+-const state={page:'detection',hub:null,kind:'agents',query:'',agentQuery:'',agentFilter:'all',selected:new Set(),busy:false,active:null,terminals:new Map(),polling:false};
+-window.mcpcellPage='detection';
++const state={page:'mcp',hub:null,kind:'mcp',query:'',agentQuery:'',agentFilter:'all',selected:new Set(),busy:false,active:null,terminals:new Map(),polling:false};
++window.mcpcellPage='mcp';
+ const api=(path,body)=>M.api(path,body);
+ const cancel='<button class="button" data-close>取消</button>';
+ const uuid=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
+@@ -19,7 +19,9 @@ function clickButton(label,action,cls='primary'){return `<button class="button $
+ function switchPage(page){
+   if(!['agents','detection','mcp','session'].includes(page))return;
+   state.page=page;window.mcpcellPage=page;
+-  ['agents','detection','mcp'].forEach(p=>{$(`#page-${p}`).hidden=p!==page;$(`#nav-${p}`).setAttribute('aria-selected',String(p===page));});
++  ['agents','detection','mcp'].forEach(p=>{$(`#page-${p}`).hidden=p!==page;});
++  $('#nav-mcp').hidden=page==='mcp';
++  d.body.dataset.page=page;
+   $('#session-panels').hidden=page!=='session';
+   if(page==='agents')renderAgents();if(page==='detection')renderDetection();
+   renderTabs();if(page==='session')activateTerminal();
+@@ -35,7 +37,7 @@ function renderDetection(){
+  const hub=state.hub,data=M.snapshot,found=hub.agents.filter(a=>a.found).length;
+  $('#detect-summary').innerHTML=`<span><strong>${found}</strong> 个 Agent 入口</span><span><strong>${data.entries.length}</strong> 条 MCP 配置</span><span class="summary-mode">${offline||hub.mode==='demo'?'演示数据':'只读检测'} · 未检查登录</span>`;
+  $('#detected-agent-count').textContent=hub.agents.length;$('#detected-mcp-count').textContent=data.entries.length;
+- d.querySelectorAll('[data-detect-kind]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.detectKind===state.kind)));
++ $('#detection-kind').value=state.kind;
+  const rows=foundRows();
+  $('#detection-results').innerHTML=rows.length?rows.map(e=>{
+   const isAgent=state.kind==='agents',eligible=canCollect(e);
+@@ -75,7 +77,7 @@ function renderAgents(){
+  }).join(''):`<div class="panel-empty"><h2>${state.agentFilter==='pinned'?'暂无置顶':state.agentFilter==='enrolled'?'尚未收纳':'没有匹配的工具'}</h2><p>在「全部」中选择工具，或手动添加。</p></div>`;
+  const total=state.hub.agents.filter(a=>a.enrolled).length,open=state.hub.sessions.filter(s=>s.state==='running').length;
+  $('#agent-library-note').textContent=`${total} 个已收纳 · ${open} 个运行中`;
+- d.querySelectorAll('[data-agent-filter]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.agentFilter===state.agentFilter)));
++ $('#agent-filter').value=state.agentFilter;
+  const names={'cursor':'Cursor','windsurf':'Windsurf','kiro':'Kiro','vscode':'VS Code','cline':'Cline','roo':'Roo Code','claude-desktop':'Claude Desktop'};
+  $('#client-dock-items').innerHTML=Object.entries(names).map(([id,name])=>{
+   const count=(M.snapshot?.entries||[]).filter(e=>e.client===id).length;
+@@ -85,10 +87,11 @@ function renderAgents(){
+ function renderTabs(){
+  if(!state.hub)return;
+  const sessions=state.hub.sessions;
+- const key=JSON.stringify([state.page,state.active,sessions.map(s=>[s.id,s.agentId,s.title,s.state])]);
++ const key=JSON.stringify([state.page,state.active,sessions.map(s=>[s.id,s.title,s.state])]);
+  if(key===tabsRenderKey)return;tabsRenderKey=key;
+- $('#session-strip').hidden=!sessions.length;
+- $('#session-tabs').innerHTML=sessions.map(s=>`<div class="session-chip ${state.page==='session'&&state.active===s.id?'active':''}"><button role="tab" aria-selected="${state.page==='session'&&state.active===s.id}" data-session-tab="${s.id}" title="${esc(s.title)}">${window.MCPcellIcons.render(s.agentId,'tab')}<span>${esc(s.title)}</span><i class="${s.state==='exited'?'exited':''}"></i></button><button class="close-session" data-session-close="${s.id}" aria-label="关闭 ${esc(s.title)}">×</button></div>`).join('');
++ $('#session-control').hidden=!sessions.length;
++ $('#session-picker').innerHTML=`<option value="">${sessions.length} 个会话</option>`+sessions.map(s=>`<option value="${esc(s.id)}">${esc(s.title)}${s.state==='exited'?' · 已结束':''}</option>`).join('');
++ $('#session-picker').value=state.page==='session'?(state.active||''):'';
+ }
+ function refreshHub(hub){
+  state.hub=hub;$('#agent-total').textContent=hub.agents.filter(a=>a.enrolled).length;
+@@ -115,21 +118,21 @@ function agentInfo(id){
+ function launchDialog(id){
+  if(!window.MCPcellTerminal){modal('先准备终端组件','<div class="notice">当前缺少本地终端资源，尚未启动 Agent。<br>运行 <code>python scripts/setup_terminal.py</code> 后刷新，或使用附带资源的源码 ZIP。</div>');return;}
+  const available=state.hub.agents.filter(a=>a.enrolled&&a.enabled&&a.launchable);
+- if(!available.length){M.toast('先在检测页收纳一个可启动的 Agent。');switchPage('detection');return;}
++ if(!available.length){M.toast('先收纳一个可启动的 Agent。');switchPage('agents');return;}
+  const a=available.find(a=>a.id===id)||available[0];
+  pending={requestId:uuid()};
+- modal('开启 Agent 会话',`<label class="form-field"><span>Agent</span><select id="launch-agent">${available.map(x=>`<option value="${esc(x.id)}" ${x.id===a.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label><label class="form-field"><span>工作目录</span><input id="launch-cwd" value="${esc(a.lastCwd||state.hub.defaultCwd)}" placeholder="绝对路径，如 D:\\work\\project" autocomplete="off" spellcheck="false"><small>使用独立进程与终端；不会自动创建 Git worktree。</small></label><div class="notice warn">将运行本机 Agent。它可能访问工作目录、使用已有账号并产生模型费用；本窗口不是执行沙箱。${offline||state.hub.mode==='demo'?'<br><strong>当前为演示模式，不会真正启动或发送请求。</strong>':''}</div>`,cancel+clickButton('启动并打开页签','launch'));
++ modal('开启 Agent 会话',`<label class="form-field"><span>Agent</span><select id="launch-agent">${available.map(x=>`<option value="${esc(x.id)}" ${x.id===a.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label><label class="form-field"><span>工作目录</span><input id="launch-cwd" value="${esc(a.lastCwd||state.hub.defaultCwd)}" placeholder="绝对路径，如 D:\\work\\project" autocomplete="off" spellcheck="false"><small>使用独立进程与终端；不会自动创建 Git worktree。</small></label><div class="notice warn">将运行本机 Agent。它可能访问工作目录、使用已有账号并产生模型费用；本窗口不是执行沙箱。${offline||state.hub.mode==='demo'?'<br><strong>当前为演示模式，不会真正启动或发送请求。</strong>':''}</div>`,cancel+clickButton('启动会话','launch'));
+  $('#launch-agent').addEventListener('change',e=>{const a=agent(e.target.value);$('#launch-cwd').value=a.lastCwd||state.hub.defaultCwd;});
+ }
+ function registerDialog(){
+  modal('手动添加 Agent',`<label class="form-field"><span>名称</span><input id="custom-name" maxlength="60" placeholder="例如：我的 Pi 工作配置"></label><label class="form-field"><span>可执行文件的绝对路径</span><input id="custom-exe" placeholder="例如 C:\\tools\\agent.exe" spellcheck="false"></label><label class="form-field"><span>附加参数 · JSON 数组</span><textarea id="custom-args" spellcheck="false">[]</textarea><small>不接受拼接 shell 命令；不要在参数中填写 API 密钥。</small></label><div class="notice">登记前只检查文件。启动时才运行；账号登录仍由原 Agent 完成。</div>`,cancel+clickButton('保存到收纳','register'));
+ }
+-function confirmClose(id){const s=session(id);if(!s)return;pending={sessionId:id};if(s.state==='exited'){busy(()=>closeSession(id));return;}modal('结束会话并关闭页签？',`<p class="explain">${esc(s.title)}</p><div class="notice warn">会终止此页签所属的 Agent。进行中的操作可能已产生副作用，不会自动撤销。其他页签不受影响。</div>`,cancel+clickButton('结束并关闭','close','danger'));}
+-async function closeSession(id){if(offline)state.hub.sessions=state.hub.sessions.filter(s=>s.id!==id);else state.hub=await api('/api/agents/close',{sessionId:id,confirm:true});const terminal=state.terminals.get(id);terminal?.observer?.disconnect();terminal?.term?.dispose();state.terminals.delete(id);$(`[data-panel="${id}"]`)?.remove();$('#dialog').close();refreshHub(state.hub);if(state.active===id){state.active=state.hub.sessions.at(-1)?.id||null;switchPage(state.active?'session':'agents');}}
++function confirmClose(id){const s=session(id);if(!s)return;pending={sessionId:id};if(s.state==='exited'){busy(()=>closeSession(id));return;}modal('结束并关闭会话？',`<p class="explain">${esc(s.title)}</p><div class="notice warn">会终止此会话所属的 Agent。进行中的操作可能已产生副作用，不会自动撤销。其他会话不受影响。</div>`,cancel+clickButton('结束并关闭','close','danger'));}
++async function closeSession(id){if(offline)state.hub.sessions=state.hub.sessions.filter(s=>s.id!==id);else state.hub=await api('/api/agents/close',{sessionId:id,confirm:true});const terminal=state.terminals.get(id);terminal?.observer?.disconnect();terminal?.term?.dispose();state.terminals.delete(id);$(`[data-panel="${id}"]`)?.remove();$('#dialog').close();refreshHub(state.hub);if(state.active===id){state.active=state.hub.sessions.at(-1)?.id||null;switchPage(state.active?'session':'mcp');}}
+ function makeTerminal(s){
+  let item=state.terminals.get(s.id);if(item)return item;
+- const pane=d.createElement('section');pane.className='session-panel';pane.dataset.panel=s.id;pane.setAttribute('role','tabpanel');
+- pane.innerHTML=`<div class="terminal-toolbar"><div class="terminal-title"><strong>${esc(s.title)}</strong><small>${esc(s.cwd)} · ${offline||state.hub.mode==='demo'?'演示终端':`PID ${s.pid}`}</small></div><div class="terminal-tools"><button data-session-rename="${s.id}">重命名</button><button data-session-interrupt="${s.id}" aria-label="发送 Ctrl C">Ctrl C</button><button class="stop-button" data-session-stop="${s.id}">结束</button></div></div><div class="terminal-wrap"><div class="terminal-host" id="terminal-${s.id}"></div></div><div class="terminal-note"><span>${offline||state.hub.mode==='demo'?'演示 · 输入不会执行':'原生交互 · 沿用 Agent 的登录和权限机制'}</span><span data-terminal-state>连接中</span></div>`;
++ const pane=d.createElement('section');pane.className='session-panel';pane.dataset.panel=s.id;pane.setAttribute('role','region');
++ pane.innerHTML=`<div class="terminal-toolbar"><div class="terminal-title"><strong>${esc(s.title)}</strong><small>${esc(s.cwd)} · ${offline||state.hub.mode==='demo'?'演示终端':`PID ${s.pid}`}</small></div><div class="terminal-tools"><button data-session-rename="${s.id}">重命名</button><button data-session-interrupt="${s.id}" aria-label="发送 Ctrl C">Ctrl C</button><button class="stop-button" data-session-stop="${s.id}">结束</button><button data-session-close="${s.id}" aria-label="关闭 ${esc(s.title)}">关闭</button></div></div><div class="terminal-wrap"><div class="terminal-host" id="terminal-${s.id}"></div></div><div class="terminal-note"><span>${offline||state.hub.mode==='demo'?'演示 · 输入不会执行':'原生交互 · 沿用 Agent 的登录和权限机制'}</span><span data-terminal-state>连接中</span></div>`;
+  $('#session-panels').append(pane);
+  item={offset:0,term:null,fit:null,pane,queue:[],sending:false,observer:null,connected:true,readBusy:false,demoLine:''};state.terminals.set(s.id,item);
+  if(!window.MCPcellTerminal){pane.querySelector('.terminal-host').innerHTML='<div class="terminal-fallback">缺少终端前端资源。\n请运行 python scripts/setup_terminal.py，再刷新页面。\n\n会话不会因此被自动结束；可以点击“结束”停止。</div>';return item;}
+@@ -141,7 +144,7 @@ function makeTerminal(s){
+  item.term.onData(text=>enqueueInput(s.id,text));
+  item.term.onResize(({cols,rows})=>{if(!offline&&cols>=20&&rows>=5)api('/api/agents/resize',{sessionId:s.id,cols:Math.min(cols,300),rows:Math.min(rows,100)}).catch(()=>{});});
+  item.observer=new ResizeObserver(()=>{if(state.page==='session'&&state.active===s.id)try{item.fit.fit();}catch{}});item.observer.observe(pane.querySelector('.terminal-wrap'));
+- if(offline){item.term.writeln(`\x1b[1;32m${agent(s.agentId)?.name||'Agent'}\x1b[0m  · MCPcell 演示终端`);item.term.writeln('');item.term.writeln('这是独立会话页签的交互演示，不运行真实 Agent。');item.term.writeln('输入不会执行，也不会发送给模型。');item.term.writeln('');item.term.writeln(`工作目录  ${s.cwd}`);item.term.writeln('');item.term.write('\x1b[32m> \x1b[0m');}
++ if(offline){item.term.writeln(`\x1b[1;32m${agent(s.agentId)?.name||'Agent'}\x1b[0m  · MCPcell 演示终端`);item.term.writeln('');item.term.writeln('这是独立会话的交互演示，不运行真实 Agent。');item.term.writeln('输入不会执行，也不会发送给模型。');item.term.writeln('');item.term.writeln(`工作目录  ${s.cwd}`);item.term.writeln('');item.term.write('\x1b[32m> \x1b[0m');}
+  if(offline)item.pane.querySelector('[data-terminal-state]').textContent='演示 · 就绪';
+  return item;
+ }
+@@ -177,13 +180,13 @@ d.addEventListener('click',event=>{
+  if(b.dataset.libraryCollect){collect([b.dataset.libraryCollect],'agents');return;}
+  if(b.dataset.openClient){switchPage('mcp');M.filterClient(b.dataset.openClient);return;}
+  if(b.dataset.agentInfo){agentInfo(b.dataset.agentInfo);return;}
+- if(b.dataset.detectionInfo){const e=M.snapshot.entries.find(e=>e.id===b.dataset.detectionInfo);const group=M.groups().find(g=>g.members.some(x=>x.id===e.id));if(group)M.detail(group.key);return;}
++ if(b.dataset.detectionInfo){const e=M.snapshot.entries.find(e=>e.id===b.dataset.detectionInfo);const group=M.groups().find(g=>g.members.some(x=>x.id===e.id));if(group){M.filterClient('all');M.detail(group.key);};return;}
+  if(b.dataset.launchAgent){launchDialog(b.dataset.launchAgent);return;}
+  if(b.dataset.linkMcp){$('#dialog').close();switchPage('mcp');$('#client').value=b.dataset.linkMcp;$('#client').dispatchEvent(new Event('change'));return;}
+  if(b.dataset.sessionTab){state.active=b.dataset.sessionTab;switchPage('session');return;}
+  if(b.dataset.sessionClose){confirmClose(b.dataset.sessionClose);return;}
+  if(b.dataset.sessionInterrupt){enqueueInput(b.dataset.sessionInterrupt,'\x03');return;}
+- if(b.dataset.sessionStop){pending={sessionId:b.dataset.sessionStop};modal('结束此 Agent 会话？','<div class="notice warn">停止所属进程，不撤销已发生的操作。页签保留以便查看输出，其他会话不受影响。</div>',cancel+clickButton('结束会话','stop','danger'));return;}
++ if(b.dataset.sessionStop){pending={sessionId:b.dataset.sessionStop};modal('结束此 Agent 会话？','<div class="notice warn">停止所属进程，不撤销已发生的操作。保留输出供查看，其他会话不受影响。</div>',cancel+clickButton('结束会话','stop','danger'));return;}
+  if(b.dataset.sessionRename){pending={sessionId:b.dataset.sessionRename};modal('重命名会话',`<label class="form-field"><span>名称</span><input id="session-title" maxlength="80" value="${esc(session(pending.sessionId)?.title)}"></label>`,cancel+clickButton('保存','rename'));return;}
+  const action=b.dataset.hubAction;if(!action||state.busy)return;
+  if(action==='remove-confirm'){const id=pending.agentId;modal('移出 Agent 收纳？','<p class="explain">不会卸载 Agent 或删除它的账号和历史。仍有运行会话时会拒绝移出。</p>',cancel+clickButton('移出收纳','remove','danger'));pending={agentId:id};return;}
+@@ -199,7 +202,11 @@ d.addEventListener('click',event=>{
+   else if(action==='scope'){const workspace=$('#scan-workspace').value.trim();if(offline)throw new Error('离线演示不读取目录；请在本机运行源码。');const result=await api('/api/detection/scope',{workspace,confirm:true});M.setSnapshot(result);$('#dialog').close();M.toast('已纳入本次扫描范围；没有执行项目内程序。');}
+  });
+ });
+-$('#new-session').onclick=()=>launchDialog();$('#session-add').onclick=()=>launchDialog();$('#register-agent').onclick=registerDialog;
++$('#new-session').onclick=()=>launchDialog();$('#register-agent').onclick=registerDialog;
++$('#home-link').onclick=e=>{e.preventDefault();switchPage('mcp');};
++$('#session-picker').onchange=e=>{if(e.target.value){state.active=e.target.value;switchPage('session');}};
++$('#detection-kind').onchange=e=>{state.kind=e.target.value;state.selected.clear();renderDetection();};
++$('#agent-filter').onchange=e=>{state.agentFilter=e.target.value;renderAgents();};
+ $('#agent-search').oninput=e=>{state.agentQuery=e.target.value;renderAgents();};
+ $('#detection-search').oninput=e=>{state.query=e.target.value;state.selected.clear();renderDetection();};
+ $('#collect-selected').onclick=()=>collect(foundRows().filter(e=>canCollect(e)&&state.selected.has(e.id)).map(e=>e.id));
+@@ -212,4 +219,5 @@ setInterval(readActive,250);
+ if(!offline)setInterval(async()=>{if(d.hidden||state.busy||$('#dialog').open)return;try{refreshHub(await api('/api/agents'));}catch{/* Keep last known state; do not infer zero running agents. */}},3500);
+ // No auto-launch on load or reload. Server-owned sessions are listed for explicit reattachment.
+ window.mcpcellHub={switchPage,get hub(){return state.hub;}};
++switchPage('mcp');
+ })();
+diff --git a/mcpcell/web/index.html b/mcpcell/web/index.html
+index 3f52d15..d0241ed 100644
+--- a/mcpcell/web/index.html
++++ b/mcpcell/web/index.html
+@@ -2,48 +2,54 @@
+ <html lang="zh-CN">
+ <head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+-<meta name="color-scheme" content="light"><title>MCPcell · AI 工具</title>
+-<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/hub.css">
++<meta name="color-scheme" content="light"><title>MCPcell · MCP 管理</title>
++<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/hub.css"><link rel="stylesheet" href="/workspace.css">
+ <link rel="stylesheet" href="/vendor/terminal.css">
+ <script defer src="/icons.js"></script><script defer src="/vendor/terminal.js"></script><script defer src="/app.js"></script><script defer src="/hub.js"></script>
+ </head>
+ <body>
+ <div class="window">
+   <header class="titlebar">
+-    <a class="brand" href="#" aria-label="MCPcell"><span class="mark" aria-hidden="true"><i></i><i></i></span>MCPcell<span class="version">0.4</span></a>
+-    <nav class="workspace-nav" aria-label="工作台页签"><div role="tablist" class="primary-tabs">
+-      <button id="nav-detection" role="tab" data-page="detection" aria-controls="page-detection" aria-selected="true"><span data-nav-icon="detect"></span><span>检测</span></button>
+-      <button id="nav-agents" role="tab" data-page="agents" aria-controls="page-agents" aria-selected="false"><span data-nav-icon="agents"></span><span>Agents</span><b id="agent-total">0</b></button>
+-      <button id="nav-mcp" role="tab" data-page="mcp" aria-controls="page-mcp" aria-selected="false"><span data-nav-icon="tool"></span><span>MCP</span><b id="mcp-total">0</b></button>
+-    </div></nav>
+-    <div class="window-tools"><span id="connection" class="connection"><i></i>本机</span><button class="new-session-button" id="new-session" aria-label="新会话"><span aria-hidden="true">＋</span>新会话</button><button id="settings" class="icon-button" aria-label="设置与诊断"></button></div>
++    <a id="home-link" class="brand" href="#" aria-label="返回 MCP 管理"><span class="mark" aria-hidden="true"><i></i><i></i></span>MCPcell<span class="version">0.5</span></a>
++    <div class="window-tools">
++      <button id="nav-mcp" class="header-action" data-page="mcp" hidden>← 返回 MCP</button>
++      <button id="nav-detection" class="header-action" data-page="detection">检测范围</button>
++      <button id="nav-agents" class="header-action" data-page="agents">AI 工具 <span id="agent-total">0</span></button>
++      <label id="session-control" class="session-switch" hidden><span>会话</span><select id="session-picker" aria-label="切换 Agent 会话"></select></label>
++      <button class="header-action" id="new-session" aria-label="新建 Agent 会话">＋ 会话</button>
++      <span id="connection" class="connection"><i></i>本机</span>
++      <button id="settings" class="icon-button" aria-label="设置与诊断"></button>
++    </div>
+   </header>
+-  <div id="session-strip" class="session-strip" hidden><div id="session-tabs" role="tablist" aria-label="Agent 会话页签"></div><button id="session-add" aria-label="再开一个会话">＋</button></div>
+-  <main id="page-detection" class="page panel" role="tabpanel" aria-labelledby="nav-detection">
++  <main id="page-detection" class="page panel" aria-label="检测范围与发现结果" hidden>
+     <div class="heading"><h1>检测本机工具</h1><div class="heading-tools"><button class="button" id="add-scope">添加目录</button><button class="button primary" id="detect-all">重新检测</button></div></div>
+     <div id="detect-summary" class="detection-summary">准备检测</div>
+-    <div class="toolbar"><div class="tabs" role="tablist" aria-label="检测类别"><button role="tab" data-detect-kind="agents" aria-selected="true">Agents <span id="detected-agent-count">0</span></button><button role="tab" data-detect-kind="mcp" aria-selected="false">MCP <span id="detected-mcp-count">0</span></button></div><label class="search"><span aria-hidden="true">⌕</span><input id="detection-search" type="search" placeholder="搜索工具" aria-label="搜索检测结果"></label></div>
++    <div class="toolbar"><label class="control-label">检测类型 <select id="detection-kind" aria-label="检测类型"><option value="mcp">MCP 配置</option><option value="agents">Agent 程序</option></select></label><span id="detected-agent-count" hidden>0</span><span id="detected-mcp-count" hidden>0</span><label class="search"><span aria-hidden="true">⌕</span><input id="detection-search" type="search" placeholder="搜索工具" aria-label="搜索检测结果"></label></div>
+     <div class="detection-columns"><label><input id="detect-select-all" type="checkbox" aria-label="选择全部可接入的检测结果">工具 / 来源</label><span>状态</span><span>操作</span></div>
+     <div id="detection-results" class="detection-results" role="region" aria-label="检测结果"></div>
+     <div class="actionbar"><span id="detection-note">检测不会启动工具</span><button class="button primary" id="collect-selected" disabled>收纳所选</button></div>
+   </main>
+-  <main id="page-agents" class="page panel" role="tabpanel" aria-labelledby="nav-agents" hidden>
++  <main id="page-agents" class="page panel" aria-label="AI 工具收纳" hidden>
+     <div class="heading"><h1>AI 工具</h1><div class="heading-tools"><button class="button" id="register-agent">＋ 手动添加</button><button class="button" data-page="detection">检测工具</button></div></div>
+-    <div class="agent-toolbar"><div class="tabs" role="group" aria-label="Agent 筛选"><button data-agent-filter="all" aria-pressed="true">全部</button><button data-agent-filter="enrolled" aria-pressed="false">已收纳</button><button data-agent-filter="pinned" aria-pressed="false">置顶</button></div><label class="search"><span aria-hidden="true">⌕</span><input id="agent-search" type="search" placeholder="搜索 Agent" aria-label="搜索 Agent"></label></div>
++    <div class="agent-toolbar"><label class="control-label">显示 <select id="agent-filter" aria-label="筛选 Agent"><option value="all">全部工具</option><option value="enrolled">已收纳</option><option value="pinned">已置顶</option></select></label><label class="search"><span aria-hidden="true">⌕</span><input id="agent-search" type="search" placeholder="搜索 Agent" aria-label="搜索 Agent"></label></div>
+     <div id="agent-cards" class="agent-cards" role="region" aria-label="Agent 工具库"></div>
+     <section class="client-dock" aria-label="编辑器与扩展的 MCP 配置"><div class="dock-heading"><strong>编辑器与扩展</strong><span>MCP 配置入口</span></div><div id="client-dock-items" class="client-dock-items"></div></section>
+     <div class="agent-library-footer"><span id="agent-library-note"></span><span>点击图标进入 · 更多操作在 ···</span></div>
+   </main>
+-  <main id="page-mcp" class="page panel" role="tabpanel" aria-labelledby="nav-mcp" hidden>
+-    <div class="heading"><h1>MCP 管理</h1><button class="button" id="scan"><span id="scan-icon"></span><span>重新检测</span></button></div>
+-    <div class="toolbar"><div class="tabs" role="tablist" aria-label="MCP 列表"><button role="tab" id="tab-all" data-tab="all" aria-selected="true">全部 <span>0</span></button><button role="tab" id="tab-managed" data-tab="managed" aria-selected="false">已接入 <span>0</span></button></div><div class="filters"><label class="search"><span id="search-icon"></span><input id="search" placeholder="搜索 MCP" type="search" aria-label="搜索 MCP"></label><select id="client" aria-label="来源客户端"><option value="all">全部来源</option></select></div></div>
+-    <div id="mcp-source-icons" class="source-filters" role="group" aria-label="按 AI 客户端筛选 MCP"></div>
+-    <div class="list-heading"><label class="check-wrap"><input type="checkbox" id="select-all" aria-label="选择当前列表可接入的 MCP"><span>服务 / 来源</span></label><span>状态</span><span class="align-right">操作</span></div>
+-    <div id="list" class="list" role="region" aria-label="MCP 服务列表" tabindex="-1"><div class="empty"><h2>正在检测…</h2></div></div>
+-    <div class="actionbar"><div id="selection">选择要接入的 MCP</div><button id="enroll-selected" class="button primary" disabled>接入所选<span id="selected-count"></span><span id="arrow-icon"></span></button></div>
++  <main id="page-mcp" class="page panel" aria-label="MCP 管理">
++    <div class="heading"><div class="heading-title"><h1>MCP 管理</h1><span id="inventory-count"></span></div><button class="button" id="scan"><span id="scan-icon"></span><span>检测已有 MCP</span></button></div>
++    <div class="mcp-layout">
++      <aside class="source-sidebar" aria-label="来源筛选"><div class="sidebar-label">AI 客户端</div><div id="mcp-source-icons" class="source-filters" role="group" aria-label="按 AI 客户端筛选 MCP"></div><div class="sidebar-note">按来源查看和接入<br>不会扩大到其他客户端</div></aside>
++      <section class="mcp-workspace" aria-label="服务清单">
++        <div class="toolbar"><label class="search"><span id="search-icon"></span><input id="search" placeholder="搜索 MCP" type="search" aria-label="搜索 MCP"></label><label class="control-label">显示 <select id="management-filter" aria-label="按接入状态筛选"><option value="all">全部配置</option><option value="managed">已接入</option><option value="unmanaged">待接入</option></select></label><select id="client" aria-label="来源客户端" hidden><option value="all">全部来源</option></select></div>
++        <div class="list-heading"><label class="check-wrap"><input type="checkbox" id="select-all" aria-label="选择当前来源可接入的 MCP"><span>服务 / 来源</span></label><span>状态</span><span class="align-right">操作</span></div>
++        <div id="list" class="list" role="region" aria-label="MCP 服务列表" tabindex="-1"><div class="empty"><h2>正在检测…</h2></div></div>
++        <div class="actionbar"><div id="selection">选择要接入的 MCP</div><button id="enroll-selected" class="button primary" disabled>接入所选<span id="selected-count"></span><span id="arrow-icon"></span></button></div>
++      </section>
++    </div>
+   </main>
+   <div id="session-panels" class="session-panels" hidden></div>
+-  <footer><div><span class="status-dot"></span><span id="summary">准备就绪</span><button id="diagnostics" hidden></button></div><div><span id="agent-running">Agent 0</span><span class="separator">/</span><span id="runtime">MCP 0</span></div></footer>
++  <footer><div><span class="status-dot"></span><span id="summary">准备就绪</span><span id="mcp-total" hidden>0</span><button id="diagnostics" hidden></button></div><div><span id="agent-running">Agent 0</span><span class="separator">/</span><span id="runtime">MCP 0</span></div></footer>
+ </div>
+ <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+ <div id="toast" class="toast" role="status" aria-live="polite"></div>
+diff --git a/mcpcell/web/workspace.css b/mcpcell/web/workspace.css
+new file mode 100644
+index 0000000..05d714a
+--- /dev/null
++++ b/mcpcell/web/workspace.css
+@@ -0,0 +1,104 @@
++/* 0.5: one MCP workspace, ordinary browser sizing, no decorative window chrome. */
++:root { --ink:#242a30; --muted:#6f7780; --line:#e6e9ed; --bg:#fff; --accent:#284b40; }
++html,body { margin:0; padding:0; width:100%; height:100%; }
++body { display:block; background:#fff; min-height:0; font-size:13px; }
++.window { width:100%; max-width:none; height:100dvh; max-height:none; min-height:0; margin:0; border:0; border-radius:0; background:#fff; box-shadow:none; }
++.titlebar { height:60px; padding:0 28px; gap:24px; background:#fff; border-bottom:1px solid var(--line); }
++.brand { font-size:16px; letter-spacing:-.4px; }
++.mark i,.mark i+i { border-radius:3px; }
++.version { font-size:10px; border-radius:3px; }
++.window-tools { gap:12px; margin-left:auto; min-width:0; }
++.header-action { padding:7px 9px; border:1px solid transparent; border-radius:4px; font-size:12px; white-space:nowrap; }
++.header-action:hover { background:#f3f5f6; border-color:#e9ecef; }
++.header-action>span { margin-left:4px; color:#828990; font-size:11px; }
++.connection { font-size:11px; margin-left:8px; }
++.icon-button { border-radius:4px; width:30px; height:30px; }
++.session-switch { display:flex; align-items:center; gap:7px; color:#737a81; font-size:11px; }
++.session-switch select { max-width:225px; }
++select { background:#fff; border:1px solid #dce1e5; border-radius:4px; padding:7px 9px; font-size:12px; color:#424a52; }
++#client[hidden] { display:none!important; }
++.control-label { display:flex; align-items:center; gap:8px; font-size:12px; color:#747c83; white-space:nowrap; }
++.page { padding:26px 28px 0; min-height:0; }
++.page .heading { margin-bottom:22px; min-height:34px; }
++.page .heading h1 { font-size:23px; letter-spacing:-.5px; line-height:1.5; }
++.heading-title { display:flex; gap:16px; align-items:baseline; }
++#inventory-count { font-size:12px; color:#7c858d; }
++.button { border-radius:4px; min-height:34px; padding:8px 12px; font-size:12px; background:#fff; box-shadow:none; }
++.button:hover:not(:disabled) { transform:none; background:#f5f7f8; }
++.button.primary { background:#294a3f; border-color:#294a3f; color:white; box-shadow:none; }
++.button.primary:hover:not(:disabled) { background:#365d50; }
++.button.primary:disabled { background:#eef1f2; border-color:#e2e6e8; color:#929ba1; }
++.mcp-layout { display:grid; grid-template-columns:190px minmax(0,1fr); gap:0; flex:1; min-height:0; border-top:1px solid var(--line); }
++.source-sidebar { display:flex; flex-direction:column; min-height:0; padding:22px 20px 18px 0; border-right:1px solid var(--line); }
++.sidebar-label { font-size:11px; color:#8a9299; margin:0 0 12px 10px; letter-spacing:.5px; }
++.source-filters { display:flex; flex-direction:column; align-items:stretch; gap:3px; padding:0; margin:0; overflow-x:hidden; overflow-y:auto; border:0; }
++.source-filters button { display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; min-width:0; height:37px; flex-shrink:0; padding:8px 10px; border:1px solid transparent; border-radius:4px; background:transparent; color:#5c6670; }
++.source-filters button:hover { background:#f5f7f8; }
++.source-filters button[aria-pressed=true] { background:#eef4f1; border-color:#e7eeea; color:#274a3d; }
++.source-filters button>span:not(.ai-logo) { font-size:12px; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
++.source-filters button b { font-size:11px; font-weight:450; color:#8c959c; margin-left:auto; }
++.source-filters .ai-logo { flex-shrink:0; width:18px; height:18px; border-radius:2px; padding:0; background:none; border:0; box-shadow:none; }
++.source-filters .ai-logo svg { width:18px; height:18px; }
++.sidebar-note { margin:20px 0 0 10px; padding-top:14px; border-top:1px solid var(--line); font-size:10px; line-height:1.8; color:#89929a; }
++.mcp-workspace { display:flex; flex-direction:column; min-height:0; min-width:0; padding:22px 0 0 25px; }
++.toolbar { margin-bottom:17px; gap:16px; }
++.search { border-radius:4px; width:300px; max-width:55%; height:34px; padding:7px 10px; background:white; }
++.search input { font-size:12px; }
++.list-heading,.row { grid-template-columns:minmax(0,1fr) 140px 130px; }
++.list-heading { font-size:11px; padding-bottom:12px; color:#7a858e; border-bottom:1px solid var(--line); }
++.list { flex:1; min-height:0; overflow:auto; scrollbar-width:thin; scrollbar-color:#cdd3d8 transparent; }
++.row { min-height:69px; padding:12px 0; border-bottom:1px solid #edf0f2; border-radius:0; }
++.row.selected { background:#f4f8f5; }
++.name { font-size:13px; font-weight:600; }
++.sources { margin-top:6px; gap:7px; }
++.sources .source { font-size:10px; border-radius:3px; color:#78828a; }
++.sources .meta { font-size:10px; color:#889199; }
++.glyph { width:30px; height:30px; border-radius:4px; border:1px solid #edf0f2; background:#f8faf9; box-shadow:none; }
++.state { font-size:11px; border-radius:3px; color:#7a828b; }
++.row-button { font-size:12px; border-radius:4px; background:#f7f9f8; }
++.text-action { font-size:11px; }
++.row-actions { gap:14px; }
++.page .actionbar { min-height:64px; padding:15px 0; font-size:12px; border-top:1px solid var(--line); }
++#selection { font-size:12px; color:#7e878e; }
++#selection strong { color:#315346; }
++footer { min-height:35px; padding:8px 28px; background:#fbfcfc; border-top:1px solid var(--line); font-size:10px; }
++footer #summary { color:#7d868e; }
++.agent-toolbar { margin-bottom:20px; }
++.agent-cards { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
++.agent-card { border-radius:6px; box-shadow:none; border-color:#e5e9ec; }
++.agent-card .agent-entry { border-radius:5px; min-height:132px; }
++.agent-entry strong { font-size:13px; }
++.ai-logo,.agent-entry .ai-logo { border-radius:4px; box-shadow:none; }
++.client-entry,.client-dock { border-radius:4px; }
++.client-dock-items { grid-template-columns:repeat(7,minmax(0,1fr)); }
++.detection-summary { border:0; background:#f7f9fa; border-radius:4px; font-size:12px; }
++.detected-row { border-radius:0; }
++.detected-item strong { font-size:13px; }
++.detected-item small { font-size:11px; }
++.session-panels { margin:0; }
++.terminal-tools button { border-radius:4px; padding:6px 9px; font-size:11px; }
++.terminal-toolbar { min-height:58px; padding:10px 28px; }
++.terminal-title strong { font-size:13px; }
++.terminal-title small { font-size:11px; }
++.terminal-wrap { padding:18px 26px 10px; }
++.terminal-note { padding:8px 28px; font-size:10px; }
++dialog { border-radius:8px; max-width:calc(100vw - 32px); }
++.notice,.detail-item,.dialog-status,.form-field input,.form-field select,.form-field textarea,.toast { border-radius:4px; }
++.more-button { border-radius:4px; }
++@media (max-width:900px) {
++ .titlebar { padding:0 18px; gap:12px; }.window-tools { gap:4px; }.session-switch>span { display:none; }.session-switch select { max-width:160px; }
++ .page { padding:22px 18px 0; }.mcp-layout { grid-template-columns:165px minmax(0,1fr); }.source-sidebar { padding-right:12px; }.mcp-workspace { padding-left:18px; }
++ .source-filters button { gap:7px; }.source-filters button>span:not(.ai-logo) { font-size:11px; }.list-heading,.row { grid-template-columns:minmax(0,1fr) 100px 100px; }.row-actions { gap:8px; }.sources .source { max-width:100px; }
++}
++@media (max-width:650px) {
++ .window { width:100%; height:100dvh; max-width:none; min-height:0; border-radius:0; }
++ .titlebar { min-height:57px; height:auto; padding:10px 12px; gap:6px; flex-wrap:wrap; }.brand { font-size:14px; }.version { display:none; }.window-tools { gap:2px; flex-wrap:wrap; justify-content:flex-end; flex:1; }.header-action { padding:6px; font-size:10px; }
++ .connection { font-size:9px; margin-left:3px; }.connection i { display:none; }.session-switch select { width:125px; font-size:10px; padding:5px; }
++ .page { padding:18px 12px 0; }.page .heading { margin-bottom:15px; }.page .heading h1 { font-size:20px; }.heading-title { gap:8px; flex-wrap:wrap; }#inventory-count { font-size:10px; }.button { font-size:11px; min-height:32px; padding:7px 9px; }
++ .mcp-layout { grid-template-columns:52px minmax(0,1fr); }.source-sidebar { padding:14px 8px 0 0; }.sidebar-label,.sidebar-note { display:none; }.source-filters { gap:6px; }.source-filters button { justify-content:center; padding:6px; width:36px; height:36px; }.source-filters button>span:not(.ai-logo),.source-filters button b { display:none; }
++ .mcp-workspace { padding:14px 0 0 10px; }.toolbar { flex-wrap:wrap; gap:8px; margin-bottom:14px; }.search { width:100%; max-width:none; flex:1 1 100%; }.control-label { font-size:10px; }select { padding:5px 7px; font-size:11px; }
++ .list-heading,.row { grid-template-columns:minmax(0,1fr) 58px 49px; column-gap:6px; }.row { min-height:82px; }.glyph { display:none; }.service { gap:7px; }.check-wrap { gap:7px; }.name { font-size:12px; }.state { font-size:9px; padding:0; }.sources { flex-wrap:wrap; gap:3px; }.source { max-width:70px; }.sources .source { font-size:8px; }.sources .meta { font-size:8px; }.row-actions .text-action { display:none; }.row-actions { gap:0; }.row-button { font-size:10px; padding:5px; }.list-heading { font-size:9px; }
++ .page .actionbar { min-height:57px; padding:10px 0; gap:8px; }#selection { font-size:10px; }.actionbar .button { font-size:10px; padding:7px; }
++ .agent-cards { grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }.agent-card .agent-entry { min-height:116px; }.agent-entry strong { font-size:11px; }.client-dock-items { grid-template-columns:repeat(7,minmax(0,1fr)); }
++ .terminal-toolbar { padding:9px 12px; flex-wrap:wrap; gap:8px; }.terminal-title small { max-width:calc(100vw - 24px); }.terminal-tools { gap:6px; }.terminal-tools button { font-size:10px; }.terminal-wrap { padding:10px; }.terminal-note { padding:6px 12px; font-size:9px; }footer { padding:8px 12px; font-size:9px; }
++}
+diff --git a/mcpcell/window.py b/mcpcell/window.py
+index eb4532f..591547b 100644
+--- a/mcpcell/window.py
++++ b/mcpcell/window.py
+@@ -1,22 +1,7 @@
+-"""Open a compact browser-app window, without installing another browser engine."""
+-import os
+-from pathlib import Path
+-import shutil
+-import subprocess
++"""Open the workbench in the user's normal browser; never impose window size."""
+ import webbrowser
+ 
+-def open_window(url):
+-    programs=[]
+-    if os.name=='nt':
+-        for base in ['PROGRAMFILES(X86)','PROGRAMFILES','LOCALAPPDATA']:
+-            root=Path(os.environ.get(base,''))
+-            programs += [root/'Microsoft/Edge/Application/msedge.exe',root/'Google/Chrome/Application/chrome.exe']
+-    else:
+-        programs += [Path(p) for n in ['google-chrome','chromium','chromium-browser'] if (p:=shutil.which(n))]
+-    for p in programs:
+-        if p.is_file():
+-            try:
+-                subprocess.Popen([str(p),f'--app={url}','--window-size=960,640'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+-                return
+-            except OSError:pass
+-    webbrowser.open(url)
++
++def open_window(url: str) -> bool:
++    """Reuse the user's browser preference. No app-window or geometry flags."""
++    return webbrowser.open(url, new=0, autoraise=True)
+diff --git a/scripts/browser_integration.py b/scripts/browser_integration.py
+new file mode 100644
+index 0000000..c903167
+--- /dev/null
++++ b/scripts/browser_integration.py
+@@ -0,0 +1,44 @@
++"""Normal browser-to-loopback smoke test, isolated demo only. No policy bypass."""
++import json, os, sys, threading, time
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
++from mcpcell.demo import demo_discovery
++from mcpcell.server import Workbench
++from playwright.sync_api import sync_playwright
++
++def main():
++    temp,scanner=demo_discovery()
++    server=Workbench(scanner,0,state_dir=scanner.home/'.mcpcell',agent_environ={})
++    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
++    result={'status':'not_run','checks':[]}
++    try:
++        with sync_playwright() as p:
++            b=p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox'])
++            pg=b.new_page(viewport={'width':1366,'height':900})
++            errors=[];pg.on('pageerror',lambda e:errors.append(str(e)))
++            try:
++                pg.goto(server.origin+'/#token='+server.token,wait_until='networkidle',timeout=15000)
++                pg.wait_for_selector('body[data-ready="true"]',timeout=8000)
++                assert pg.locator('#page-mcp').is_visible()
++                assert pg.locator('#list .row').count()==9
++                assert '#' not in pg.url
++                result['checks']+=['authenticated launch to normal loopback URL','token removed from URL','real snapshot renders MCP workspace']
++                pg.locator('[data-source-client="cursor"]').click()
++                assert pg.locator('#list .row').count()==2
++                result['checks'].append('source filter on live HTTP-delivered UI')
++                pg.locator('#nav-agents').click()
++                assert pg.locator('.agent-card').count()==10
++                result['checks'].append('live Agent view and local assets')
++                assert not errors,errors
++                result.update(status='passed',pageErrors=errors)
++            except Exception as e:
++                msg=str(e).replace(server.token,'[REDACTED]')
++                result.update(status='blocked' if 'ERR_BLOCKED_BY_ADMINISTRATOR' in msg else 'failed',error=msg[:1000])
++            finally:b.close()
++    finally:
++        server.shutdown();worker.join(timeout=5);server.server_close();temp.cleanup()
++    (ROOT/'dist').mkdir(exist_ok=True)
++    (ROOT/'dist/browser-integration.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
++    print(json.dumps(result,ensure_ascii=False))
++    return 0 if result['status'] in {'passed','blocked'} else 1
++if __name__=='__main__':raise SystemExit(main())
+diff --git a/scripts/build_preview.py b/scripts/build_preview.py
+index 2acbd76..6511230 100644
+--- a/scripts/build_preview.py
++++ b/scripts/build_preview.py
+@@ -28,7 +28,7 @@ def build_preview(output: Path) -> Path:
+     finally:
+         temp.cleanup()
+     html = (web / 'index.html').read_text(encoding='utf-8')
+-    for name in ['style.css', 'hub.css', 'vendor/terminal.css']:
++    for name in ['style.css', 'hub.css', 'workspace.css', 'vendor/terminal.css']:
+         path = web / name
+         css = path.read_text(encoding='utf-8') if path.exists() else ''
+         html = html.replace(f'<link rel="stylesheet" href="/{name}">', '<style>\n' + css + '\n</style>')
+diff --git a/scripts/ui_smoke.py b/scripts/ui_smoke.py
+index 2bcee45..844c48d 100644
+--- a/scripts/ui_smoke.py
++++ b/scripts/ui_smoke.py
+@@ -1,4 +1,4 @@
+-"""Multi-page/agent/session UI smoke checks using explicitly synthetic data."""
++"""MCP-first UI and operation-scope regression checks (synthetic data only)."""
+ import json
+ import os
+ import sys
+@@ -8,180 +8,191 @@ sys.path.insert(0,str(ROOT))
+ from scripts.build_preview import build_preview
+ from playwright.sync_api import sync_playwright
+ 
+-preview=build_preview(ROOT/'dist/agent-workspace-preview.html')
+-checks=[];errors=[]
++preview=build_preview(ROOT/'dist/mcp-workspace-preview.html')
++checks=[];errors=[];requests=[]
++def ok(label): checks.append(label)
+ with sync_playwright() as p:
+     browser=p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox'])
+-    page=browser.new_page(viewport={'width':1080,'height':720},device_scale_factor=1)
++    page=browser.new_page(viewport={'width':1366,'height':900},device_scale_factor=1)
+     page.on('pageerror',lambda e:errors.append(str(e)))
+-    requests=[]
+     page.on('request',lambda r:requests.append(r.url))
+     page.set_content(preview.read_text(encoding='utf-8'),wait_until='load')
+     page.wait_for_selector('body[data-ready="true"]')
+-    assert page.locator('.window').evaluate('(e)=>Math.round(e.getBoundingClientRect().width)')==960
+-    assert page.locator('.window').evaluate('(e)=>Math.round(e.getBoundingClientRect().height)')==640
+-    checks.append('960x640 compact multi-page workspace')
+-    assert page.locator('.primary-tabs [role=tab]').count()==3
+-    assert page.locator('#page-detection').is_visible()
+-    checks.append('dedicated detection page is the initial window')
+-    assert page.locator('.detected-row').count()==10
+-    assert '演示' in page.locator('#connection').inner_text()
+-    checks.append('10 agent-family discovery rows and visible demo provenance')
+-    assert page.locator('.detected-row .ai-logo svg').count()==10
+-    checks.append('all detected Agent rows have local vector icons')
+-    page.screenshot(path=str(ROOT/'dist/detection-window.png'))
+-    page.locator('#nav-agents').click()
+-    assert page.locator('.agent-card').count()==10
+-    assert page.locator('.agent-entry .ai-logo svg').count()==10
+-    checks.append('all ten terminal Agent entries appear as compact icon tiles')
+-    assert page.locator('.agent-card .agent-description').count()==0
+-    assert page.locator('[data-agent-card="droid"]').get_attribute('class').find('unavailable')>=0
+-    assert '未检测到' in page.locator('[data-agent-card="droid"]').inner_text()
+-    checks.append('missing programs are not presented as installed or enrolled')
+-    page.locator('[data-agent-card="droid"] .agent-entry').click()
+-    assert page.locator('#dialog').is_visible()
+-    assert page.locator('[data-hub-action="launch"]').count()==0
+-    page.keyboard.press('Escape')
+-    checks.append('missing tool icon opens details, never silently launches or installs')
+-    assert page.locator('#client-dock-items .client-entry').count()==7
+-    assert page.locator('#client-dock-items .ai-logo svg').count()==7
+-    page.locator('[data-open-client="cursor"]').click()
+     assert page.locator('#page-mcp').is_visible()
+-    assert page.locator('#client').input_value()=='cursor'
++    assert not page.locator('#page-agents').is_visible()
++    ok('MCP is the only initial primary view')
++    assert page.locator('.window').evaluate('(e)=>Math.round(e.getBoundingClientRect().width)')==1366
++    assert page.locator('.window').evaluate('(e)=>Math.round(e.getBoundingClientRect().height)')==900
++    ok('workspace uses the normal browser viewport, not a 960px fixed window')
++    assert page.locator('.window').evaluate('(e)=>getComputedStyle(e).borderRadius')=='0px'
++    assert page.locator('#scan').evaluate('(e)=>getComputedStyle(e).borderRadius')=='4px'
++    ok('outer window radius is removed and controls use 4px corners')
++    assert page.locator('[role=tab]').count()==0
++    assert page.locator('#session-strip').count()==0
++    ok('no persistent function or session tab bars')
++    assert '演示' in page.locator('#connection').inner_text()
++    assert page.locator('#list .row').count()==9
++    ok('demo provenance and nine presentation groups are visible')
++    assert page.locator('[data-source-client]').count()==12
++    ok('all client sources plus all-sources selector remain accessible')
++    page.screenshot(path=str(ROOT/'dist/workspace.png'))
++    page.locator('[data-source-client="cursor"]').click()
+     assert page.locator('#list .row').count()==2
+-    checks.append('editor icon routes to its actual MCP source filter')
+-    assert page.locator('#mcp-source-icons .ai-logo svg').count()==11
++    ok('source filter selects Cursor bindings')
++    row=page.locator('#list .row').filter(has=page.locator('.name',has_text='context7'))
++    row.locator('[data-enroll]').click()
++    text=page.locator('#dialog-content').inner_text()
++    assert '接入 1 条' in text and 'Cursor' in text and 'Codex' not in text and 'Gemini' not in text
++    ok('REGRESSION: Cursor-only enrollment does not include hidden other clients')
++    page.locator('#confirm-enroll').click()
++    data=page.evaluate('window.mcpcell.snapshot.entries.filter(e=>e.managed).map(e=>e.client)')
++    assert data==['cursor'],data
++    ok('confirmed scoped enrollment mutates only the selected source in demo')
++    page.locator('#list .row').filter(has=page.locator('.name',has_text='context7')).locator('[data-toggle]').click()
++    managed=page.evaluate('window.mcpcell.snapshot.entries.filter(e=>e.managed)')
++    assert len(managed)==1 and managed[0]['enabled'] is False
++    ok('scoped pause is confined to the managed source')
++    page.locator('#list .row').filter(has=page.locator('.name',has_text='context7')).locator('[data-restore]').click()
++    page.locator('#confirm-restore').click()
++    assert page.evaluate('window.mcpcell.snapshot.entries.every(e=>!e.managed)')
++    ok('scoped restore preserves unrelated sources')
++    page.locator('#select-all').check()
++    page.locator('#enroll-selected').click()
++    text=page.locator('#dialog-content').inner_text()
++    assert '接入 2 条' in text and 'Codex' not in text
++    page.keyboard.press('Escape')
++    ok('bulk selection also honors the current source')
++    page.locator('[data-source-client="all"]').click()
++    page.locator('#search').fill('context7')
++    assert page.locator('#list .row').count()==1
++    page.locator('[data-enroll]').click()
++    assert '接入 4 条' in page.locator('#dialog-content').inner_text()
++    page.keyboard.press('Escape')
++    ok('all-source grouping still explicitly previews all four source bindings')
++    page.locator('#search').fill('')
++    page.locator('#management-filter').select_option('managed')
++    assert page.locator('#list .row').count()==0
++    page.locator('#management-filter').select_option('unmanaged')
++    assert page.locator('#list .row').count()>0
++    ok('state dropdown replaces all/managed tab row')
++    page.locator('#management-filter').select_option('all')
+     page.locator('[data-source-client="windsurf"]').click()
+     assert page.locator('#list .row').count()==0
+-    assert page.locator('[data-source-client="windsurf"]').get_attribute('aria-pressed')=='true'
+-    checks.append('all eleven client-source icons work, including empty results')
+     page.locator('[data-source-client="all"]').click()
+-    assert page.locator('#list .row').count()==9
+-    page.screenshot(path=str(ROOT/'dist/mcp-window.png'))
+-    page.locator('#nav-agents').click()
+-    page.evaluate('window.__sameCard = document.querySelector(".agent-entry")')
+-    page.evaluate('window.mcpcell.setSnapshot(window.mcpcell.snapshot)')
+-    assert page.evaluate('window.__sameCard === document.querySelector(".agent-entry")')
+-    checks.append('unchanged snapshots preserve tile nodes instead of repainting them')
+-    assert page.evaluate('(() => {const ids=[...document.querySelectorAll("svg [id]")].map(e=>e.id);return new Set(ids).size===ids.length;})()')
+-    assert 'onload' not in page.evaluate('window.MCPcellIcons.render("<img onload=evil>")')
+-    checks.append('SVG gradient IDs are unique and untrusted IDs use a safe fallback')
++    ok('empty source is not presented as installed or running')
+     page.locator('#nav-detection').click()
++    assert page.locator('#page-detection').is_visible()
++    assert page.locator('.detected-row').count()==12
++    page.locator('#detection-kind').select_option('agents')
++    assert page.locator('.detected-row').count()==10
++    ok('on-demand detection separates MCP configurations from ten Agent entrypoints')
+     page.locator('#detection-search').fill('pi')
+     assert any('Pi' in t for t in page.locator('.detected-row').all_inner_texts())
+-    checks.append('agent discovery search works')
+     page.locator('#detection-search').fill('')
+-    page.locator('[data-detect-kind="mcp"]').click()
+-    assert page.locator('.detected-row').count()==12
+-    checks.append('detection separates 12 MCP source bindings from agent executables')
+-    page.locator('[data-detect-kind="agents"]').click()
++    page.locator('#add-scope').click()
++    assert page.locator('#scan-workspace').is_visible()
++    page.keyboard.press('Escape')
++    ok('detection search and explicit project-directory dialog are preserved')
+     page.locator('[data-collect="gemini"]').click()
+     assert '只保存启动入口' in page.locator('#dialog').inner_text()
+     page.locator('[data-hub-action="enroll"]').click()
+     assert page.locator('#page-agents').is_visible()
++    ok('Agent collection still requires confirmation and does not launch')
+     assert page.locator('.agent-card').count()==10
+-    page.locator('[data-agent-filter="enrolled"]').click()
++    assert page.locator('.agent-entry .ai-logo svg').count()==10
++    assert page.locator('#client-dock-items .client-entry').count()==7
++    ok('Agent and editor icon collection is retained')
++    page.locator('[data-agent-card="droid"] .agent-entry').click()
++    assert page.locator('[data-hub-action="launch"]').count()==0
++    page.keyboard.press('Escape')
++    ok('missing Agent opens details, not installation or execution')
++    page.locator('#agent-filter').select_option('enrolled')
+     assert page.locator('.agent-card').count()==4
+-    checks.append('collecting an Agent needs confirmation and opens its library')
+     page.locator('#page-agents [data-agent-info="pi"]').click()
+-    assert '没有内置权限审批' in page.locator('#dialog').inner_text()
+     page.locator('[data-hub-action="pin"]').click()
+-    page.locator('[data-agent-filter="pinned"]').click()
++    page.locator('#agent-filter').select_option('pinned')
+     assert page.locator('.agent-card').count()==1
+-    checks.append('per-agent details and pin filtering')
+-    page.locator('[data-agent-filter="all"]').click()
++    ok('collection and pinned filters work without a tab bar')
++    page.locator('#agent-filter').select_option('all')
+     page.locator('#page-agents [data-agent-info="gemini"]').click()
+     page.locator('[data-hub-action="enable"]').click()
+     assert page.locator('[data-launch-agent="gemini"]').is_disabled()
+-    checks.append('disable prevents new sessions without deleting configuration')
++    ok('disabling Agent still blocks new sessions')
+     page.locator('#register-agent').click()
+-    assert page.locator('#custom-exe').is_visible()
+     assert page.locator('#custom-args').input_value()=='[]'
+     page.keyboard.press('Escape')
+-    checks.append('manual registration form uses executable plus structured argv')
++    ok('manual registration remains structured argv, not shell concatenation')
+     page.locator('[data-launch-agent="claude-code"]').click()
+-    assert page.locator('#launch-cwd').is_visible()
+-    page.locator('#launch-cwd').fill('D:\\work\\CableSimPro')
+     page.locator('[data-hub-action="launch"]').click()
+-    assert page.locator('.session-chip').count()==1
+     assert page.locator('.xterm').count()==1
+-    checks.append('first Agent session opens a genuine terminal emulator in its own tab')
++    assert page.locator('#session-control').is_visible()
++    first=page.locator('#session-picker').input_value()
++    ok('first terminal opens with one session picker, not a tab strip')
+     page.locator('#new-session').click()
+     page.locator('#launch-agent').select_option('pi')
+-    page.locator('#launch-cwd').fill('D:\\work\\MCP-cell')
+     page.locator('[data-hub-action="launch"]').click()
+-    assert page.locator('.session-chip').count()==2
+-    checks.append('Claude Code and Pi have independent simultaneous session tabs')
+-    assert page.locator('.session-chip .ai-logo svg').count()==2
+-    assert page.locator('.session-chip [data-brand="claude"]').count()==1
+-    assert page.locator('.session-chip [data-brand="pi"]').count()==1
+-    checks.append('each independent session tab uses its matching AI icon')
++    second=page.locator('#session-picker').input_value()
++    assert second!=first and page.locator('.xterm').count()==2
++    ok('two independent sessions remain available')
+     page.locator('.session-panel:visible .xterm-helper-textarea').focus()
+-    page.keyboard.type('explain project')
+-    page.keyboard.press('Enter')
+-    page.wait_for_timeout(150)
++    page.keyboard.type('example');page.keyboard.press('Enter');page.wait_for_timeout(100)
+     assert '未执行' in page.locator('.session-panel:visible .xterm-rows').inner_text()
+-    checks.append('demo terminal accepts input but clearly does not execute')
+-    page.screenshot(path=str(ROOT/'dist/session-window.png'))
+-    page.locator('#nav-agents').click()
+-    assert page.locator('.session-chip').count()==2
+-    page.locator('#toast').evaluate('(e)=>e.classList.remove("visible")')
+-    page.screenshot(path=str(ROOT/'dist/agents-window.png'))
+-    first=page.locator('[data-session-tab]').first
+-    first.click()
++    ok('demo terminal receives input without executing it')
++    page.locator('#session-picker').select_option(first)
+     assert page.locator('.session-panel:visible .terminal-title strong').inner_text().startswith('Claude Code')
+     assert page.locator('.session-panel').count()==2
+-    checks.append('switching main/session pages does not create another terminal')
++    ok('session picker switches without creating or replaying processes')
+     page.locator('.session-panel:visible [data-session-rename]').click()
+-    page.locator('#session-title').fill('CC · 电缆项目')
++    page.locator('#session-title').fill('CC · 项目 A')
+     page.locator('[data-hub-action="rename"]').click()
+-    assert 'CC · 电缆项目' in page.locator('#session-tabs').inner_text()
+-    checks.append('session tabs can be renamed')
+-    page.locator('[data-session-close]').first.click()
+-    assert '其他页签不受影响' in page.locator('#dialog').inner_text()
++    assert 'CC · 项目 A' in page.locator('#session-picker').inner_text()
++    ok('renamed session appears in picker')
++    page.locator('#nav-mcp').click()
++    assert page.locator('#page-mcp').is_visible()
++    assert page.locator('#session-picker option').count()==3
++    page.locator('#session-picker').select_option(first)
++    page.locator('.session-panel:visible [data-session-close]').click()
++    assert '其他会话不受影响' in page.locator('#dialog').inner_text()
+     page.locator('[data-hub-action="close"]').click()
+-    assert page.locator('.session-chip').count()==1
+-    assert 'Pi' in page.locator('.session-chip').inner_text()
+-    checks.append('confirmed close removes only the selected session')
++    assert page.locator('#session-picker option').count()==2
++    assert page.locator('#session-picker').input_value()==second
++    ok('closing selected session requires confirmation and preserves the other')
+     page.locator('.session-panel:visible [data-session-stop]').click()
+     page.locator('[data-hub-action="stop"]').click()
+     assert '已结束' in page.locator('.session-panel:visible [data-terminal-state]').inner_text()
+-    checks.append('stopping preserves the tab and its output')
+-    page.locator('#nav-mcp').click()
++    assert page.locator('.xterm').count()==1
++    ok('stop retains terminal output without a persistent tab')
++    page.locator('.session-panel:visible [data-session-close]').click()
+     assert page.locator('#page-mcp').is_visible()
+-    assert page.locator('#list .row').count()==9
+-    page.locator('[data-enroll]').first.click()
+-    page.locator('#confirm-enroll').click()
+-    page.locator('#tab-managed').click()
+-    assert page.locator('#list .row').count()==1
+-    checks.append('existing MCP grouping and enrollment flow still works')
+-    page.locator('[data-toggle]').first.click()
+-    assert '已暂停' in page.locator('#list').inner_text()
+-    page.locator('[data-restore]').first.click()
+-    page.locator('#confirm-restore').click()
+-    assert '还没有接入' in page.locator('#list').inner_text()
+-    checks.append('MCP pause and restore remain functional')
+-    page.locator('#nav-detection').click()
+-    page.locator('#add-scope').click()
+-    assert page.locator('#scan-workspace').is_visible()
+-    page.keyboard.press('Escape')
+-    checks.append('explicit project-directory detection dialog')
+-    page.keyboard.press('Alt+2')
+-    assert page.locator('#page-agents').is_visible()
++    assert page.locator('#session-control').is_hidden()
++    ok('closing the final session returns to MCP and removes the picker')
++    page.locator('#nav-agents').click()
++    page.locator('[data-open-client="cursor"]').click()
++    assert page.locator('#page-mcp').is_visible() and page.locator('#client').input_value()=='cursor'
++    ok('editor icon still links to MCP source filtering')
++    page.locator('[data-source-client="all"]').click()
+     page.keyboard.press('Control+k')
+-    assert page.locator('#agent-search').evaluate('(e)=>document.activeElement===e')
+-    checks.append('page shortcuts and contextual search')
++    assert page.locator('#search').evaluate('(e)=>document.activeElement===e')
++    ok('keyboard search works on the primary workspace')
++    assert page.evaluate('(()=>{const x=[...document.querySelectorAll("svg [id]")].map(e=>e.id);return x.length===new Set(x).size;})()')
++    assert 'onload' not in page.evaluate('window.MCPcellIcons.render("<img onload=evil>")')
++    ok('icon gradient IDs and unknown-brand escaping remain valid')
++    page.set_viewport_size({'width':1920,'height':1080})
++    assert page.locator('.window').evaluate('(e)=>e.getBoundingClientRect().width')==1920
++    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
++    ok('layout expands to 1920px without the old width ceiling')
+     page.set_viewport_size({'width':390,'height':844})
+-    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+-    assert page.locator('.agent-entry').evaluate_all('(els)=>els.every(e=>e.getBoundingClientRect().right <= innerWidth+1)')
+-    page.screenshot(path=str(ROOT/'dist/agents-mobile.png'))
+-    checks.append('390px narrow viewport has no horizontal page overflow')
++    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
++    page.screenshot(path=str(ROOT/'dist/workspace-mobile.png'))
++    page.locator('#nav-agents').click()
++    assert page.locator('.agent-entry').evaluate_all('(els)=>els.every(e=>e.getBoundingClientRect().right<=innerWidth+1)')
++    ok('390px MCP and Agent views stay within viewport')
+     page.emulate_media(reduced_motion='reduce')
+     assert page.evaluate('matchMedia("(prefers-reduced-motion: reduce)").matches')
+-    checks.append('reduced-motion preference supported')
+-    assert not requests, requests
+-    checks.append('offline preview and all brand icons make zero network requests')
++    ok('reduced-motion preference remains supported')
++    assert not requests,requests
++    ok('offline preview and icons issue no network requests')
+     browser.close()
+-assert not errors, errors
++assert not errors,errors
+ (ROOT/'dist/ui-results.json').write_text(json.dumps({'checks':checks,'errors':errors},ensure_ascii=False,indent=2),encoding='utf-8')
+ print(json.dumps({'passed':len(checks),'errors':errors},ensure_ascii=False))
+diff --git a/tests/test_window.py b/tests/test_window.py
+new file mode 100644
+index 0000000..b6f84db
+--- /dev/null
++++ b/tests/test_window.py
+@@ -0,0 +1,15 @@
++"""Opening the UI must not force an app window or a screen size."""
++import unittest
++from unittest.mock import patch
++from mcpcell.window import open_window
++
++class WindowTests(unittest.TestCase):
++    def test_uses_default_browser_without_subprocess_or_geometry(self):
++        with patch('mcpcell.window.webbrowser.open',return_value=True) as browser, \
++             patch('subprocess.Popen',side_effect=AssertionError('no forced app window')):
++            self.assertTrue(open_window('http://127.0.0.1:1234/'))
++            browser.assert_called_once_with('http://127.0.0.1:1234/',new=0,autoraise=True)
++
++    def test_reports_browser_open_failure(self):
++        with patch('mcpcell.window.webbrowser.open',return_value=False):
++            self.assertFalse(open_window('http://127.0.0.1:1234/'))

@@ -1,0 +1,33 @@
+{
+  "version": "0.4.0a1",
+  "baseCommit": "889f0a757da5c2492e44be60fedc76233588eb20",
+  "githubSynced": false,
+  "changedFiles": [
+    "README.md",
+    "docs/design.md",
+    "docs/icon-notices.md",
+    "docs/validation.md",
+    "mcpcell/__init__.py",
+    "mcpcell/discovery.py",
+    "mcpcell/server.py",
+    "mcpcell/web/app.js",
+    "mcpcell/web/hub.css",
+    "mcpcell/web/hub.js",
+    "mcpcell/web/icons.js",
+    "mcpcell/web/index.html",
+    "mcpcell/window.py",
+    "scripts/build_preview.py",
+    "scripts/ui_smoke.py",
+    "tests/test_discovery.py",
+    "tests/test_server.py"
+  ],
+  "validation": {
+    "backendPassed": 128,
+    "uiPassed": 32,
+    "uiPageErrors": 0,
+    "offlineNetworkRequests": 0,
+    "nativeWindowsVerified": false,
+    "fullBrowserToServerVerified": false,
+    "patchApplyAndByteComparison": true
+  }
+}

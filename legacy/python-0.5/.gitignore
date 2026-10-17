@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.DS_Store
+*.log
+mcpcell-inventory.json
+mcpcell-review-plan.json
+dist/
+
+.mcpcell/
+*.bin
+
+mcpcell/web/vendor/*
+!mcpcell/web/vendor/README.md
