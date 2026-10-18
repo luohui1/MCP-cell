@@ -531,7 +531,7 @@ func (h *harness) apiCall(t *testing.T, method, path, body string) (int, string)
 
 func TestServiceEditingAPI(t *testing.T) {
 	h, home := startWithHome(t)
-	form := `{"name":"added","command":"x","args":["a"],"env":{"API_KEY":"s3cret"},"idleTimeout":"5m","flatten":true,"catalog":true}`
+	form := `{"name":"added","command":"x","args":["a"],"env":{"API_KEY":"s3cret"},"idleTimeout":"5m","flatten":true,"catalog":true,"lean":true}`
 	if code, body := h.apiCall(t, "POST", "/api/services", form); code != 200 {
 		t.Fatalf("create: %d %s", code, body)
 	}
@@ -546,7 +546,7 @@ func TestServiceEditingAPI(t *testing.T) {
 		t.Fatalf("env value leaked or missing: %s", list)
 	}
 	// Saving with a null value keeps the stored secret.
-	edit := `{"command":"x","args":["a","b"],"env":{"API_KEY":null},"idleTimeout":"0","flatten":false,"catalog":true}`
+	edit := `{"command":"x","args":["a","b"],"env":{"API_KEY":null},"idleTimeout":"0","flatten":false,"catalog":true,"lean":true}`
 	if code, body := h.apiCall(t, "PUT", "/api/services/added", edit); code != 200 {
 		t.Fatalf("update: %d %s", code, body)
 	}
@@ -626,5 +626,73 @@ func TestTakeoverAPI(t *testing.T) {
 	}
 	if len(store.All()) != 0 {
 		t.Fatal("records kept after restore")
+	}
+}
+
+func TestUnifiedViewAndAddToAgent(t *testing.T) {
+	h, home := startWithHome(t)
+	userHome := t.TempDir()
+	codexHome := filepath.Join(userHome, ".codex")
+	t.Setenv("CODEX_HOME", codexHome) // never the real one
+	cursorFile := filepath.Join(userHome, ".cursor", "mcp.json")
+	_ = os.MkdirAll(filepath.Dir(cursorFile), 0o700)
+	_ = os.MkdirAll(codexHome, 0o700)
+	_ = os.WriteFile(cursorFile, []byte(`{"mcpServers": {"context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]}, "web": {"url": "https://example.com/mcp"}}}`), 0o600)
+	codexOriginal := "model = \"x\"\n"
+	_ = os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(codexOriginal), 0o600)
+	store, _ := clients.OpenStore(home)
+	h.srv.opts.Clients = []clients.Client{clients.NewCursor(userHome, ""), clients.NewCodex(userHome, "")}
+	h.srv.opts.Takeovers = store
+
+	type view struct {
+		Rows []struct {
+			Key, Name, Service string
+			CanAdd             bool
+			Agents             map[string]struct{ State string }
+		}
+	}
+	load := func() view {
+		_, body := h.apiCall(t, "GET", "/api/mcp", "")
+		var v view
+		_ = json.Unmarshal([]byte(body), &v)
+		return v
+	}
+	v := load()
+	var key string
+	for _, r := range v.Rows {
+		if r.Name == "context7" {
+			key = r.Key
+			if r.Agents["cursor"].State != "native" || r.Agents["codex"].State != "" || !r.CanAdd {
+				t.Fatalf("context7 row before add: %+v", r)
+			}
+		}
+	}
+	if key == "" || len(v.Rows) < 3 { // fake service + context7 + web
+		t.Fatalf("rows: %+v", v.Rows)
+	}
+	if code, body := h.apiCall(t, "POST", "/api/agents/codex/add", `{"row":"`+key+`"}`); code != 200 || !strings.Contains(body, "context7") {
+		t.Fatalf("add: %d %s", code, body)
+	}
+	v = load()
+	for _, r := range v.Rows {
+		if r.Name == "context7" && (r.Service != "context7" || r.Agents["codex"].State != "managed" || r.Agents["cursor"].State != "native") {
+			t.Fatalf("context7 row after add: %+v", r)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(codexHome, "config.toml")); !strings.Contains(string(b), h.base+"/s/context7") {
+		t.Fatalf("codex config after add:\n%s", b)
+	}
+	if _, body := h.apiCall(t, "POST", "/api/clients/codex/restore", `{"names":["context7"]}`); !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("remove: %s", body)
+	}
+	if b, _ := os.ReadFile(filepath.Join(codexHome, "config.toml")); string(b) != codexOriginal {
+		t.Fatalf("codex config after remove:\n%q", b)
+	}
+}
+
+func TestArgsTextHidesSecrets(t *testing.T) {
+	got := argsText([]string{"--app", "desktop", "--api-key", "sk-1", "--token=abc", "-y"})
+	if want := "--app desktop --api-key *** --token=*** -y"; got != want {
+		t.Fatalf("argsText = %q, want %q", got, want)
 	}
 }

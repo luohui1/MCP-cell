@@ -152,7 +152,7 @@ cold ──acquire──► starting ──握手+能力校验──► ready �
 ```
 
 - **单次创建合并**：同一个 InstanceKey 的并发 acquire 只触发一次启动，其他请求等它就绪
-- **空闲回收**：shared 默认 10 分钟；per-session 默认在会话结束或空闲 30 分钟后回收，因为回收会丢掉浏览器页面、SSH 连接这类状态
+- **空闲回收**：shared 默认 3 分钟（工具列表有缓存，回收后再调用只多一次冷启动）；per-session 默认在会话结束或空闲 30 分钟后回收，因为回收会丢掉浏览器页面、SSH 连接这类状态
 - **预算**（M2 已实现）：全局实例上限 `limits.maxInstances`（默认 32），满额时先停掉最久未用的空闲实例，全部忙碌就拒绝。每个服务可设 `memoryLimit`，对应整棵进程树的 Job 内存上限（`JOB_OBJECT_LIMIT_JOB_MEMORY`）。实测发现，进程到达上限后只是分配失败，会卡在那里既不退出也不响应，所以 Job 绑定了 I/O 完成端口，收到 `JOB_OBJECT_MSG_JOB_MEMORY_LIMIT` 后立即终止整棵树，并报告"超出内存上限"。总私有提交预算尚未实现
 - **进程归属**：Windows 挂起创建 → 加入 Job（KILL_ON_JOB_CLOSE、禁止脱离）→ 恢复线程，沿用 legacy `processes.py` 的做法。守护进程无论怎么退出，Job 句柄关闭后整棵进程树都会被系统清理
 - **npx 扁平化**（M2 已实现）：第一次启动时把包 `npm install` 到 `~/.mcpcell/pkgs/<name>@<version>/`，从安装结果读出实际版本并锁定，按 `package.json` 的 `bin` 找入口，之后直接 `node <bin> <args>` 启动。安装失败（如断网）时退回原 npx 命令，并在状态里说明原因。`npm_config_*` 环境变量会放行，以支持镜像源。`mcpcell update <服务>` 才升级。服务可设 `"flatten": false` 保留 npx。uvx 尚未处理

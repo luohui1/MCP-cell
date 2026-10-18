@@ -272,10 +272,13 @@ func TestBuildSpecFlattensNpx(t *testing.T) {
 
 	before := p.fingerprint(cfg.Services["srv"])
 	spec, direct, note := p.buildSpec(context.Background(), "srv", cfg.Services["srv"])
-	if !direct || note != "" || len(spec.Argv) != 3 || !strings.HasSuffix(strings.ToLower(filepath.Base(spec.Argv[0])), "node.exe") && filepath.Base(spec.Argv[0]) != "node" {
+	if !direct || note != "" || len(spec.Argv) != 5 || !strings.HasSuffix(strings.ToLower(filepath.Base(spec.Argv[0])), "node.exe") && filepath.Base(spec.Argv[0]) != "node" {
 		t.Fatalf("argv %q direct=%v note=%q", spec.Argv, direct, note)
 	}
-	if !strings.HasSuffix(filepath.ToSlash(spec.Argv[1]), "@x+srv@3.1.4/node_modules/@x/srv/cli.js") || spec.Argv[2] != "--flag" {
+	if strings.Join(spec.Argv[1:3], " ") != "--max-semi-space-size=1 --optimize-for-size" {
+		t.Fatalf("lean node flags missing: %q", spec.Argv)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(spec.Argv[3]), "@x+srv@3.1.4/node_modules/@x/srv/cli.js") || spec.Argv[4] != "--flag" {
 		t.Fatalf("argv %q", spec.Argv)
 	}
 	if spec.MemoryLimit != 256<<20 {
@@ -332,5 +335,25 @@ func TestPutAndRemove(t *testing.T) {
 	case <-again.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("removed service kept running")
+	}
+}
+
+func TestLeanSpec(t *testing.T) {
+	cases := []struct {
+		argv, want string
+		env        bool
+	}{
+		{"node server.js --port 1", "node --max-semi-space-size=1 --optimize-for-size server.js --port 1", false},
+		{`cmd /c C:\n\node.exe s.js`, `C:\n\node.exe --max-semi-space-size=1 --optimize-for-size s.js`, false},
+		{"npx -y pkg", "npx -y pkg", true},
+		{"python server.py", "python server.py", false},
+		{"node --inspect s.js", "node --inspect s.js", true},
+	}
+	for _, c := range cases {
+		got := leanSpec(proc.Spec{Argv: strings.Fields(c.argv)})
+		hasEnv := len(got.Env) > 0 && got.Env[len(got.Env)-1] == "NODE_OPTIONS=--max-semi-space-size=1"
+		if strings.Join(got.Argv, " ") != c.want || hasEnv != c.env {
+			t.Errorf("%q -> %q env=%v", c.argv, got.Argv, got.Env)
+		}
 	}
 }

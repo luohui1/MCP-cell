@@ -1,15 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Activity, Plug, Server, Settings as SettingsIcon } from 'lucide-react';
+import { Activity, Bot, Layers, Settings as SettingsIcon } from 'lucide-react';
 import { api, Unauthorized, type Status } from './api';
 import { bytes, since } from './format';
 import { Logo } from './icons';
 import { go, useRoute } from './router';
 import { Card, cx, Dot, ToastProvider } from './ui';
-import { ServicesPage } from './pages/Services';
+import { McpPage } from './pages/Mcp';
+import { AgentsPage } from './pages/Agents';
 import { ServiceDetail } from './pages/ServiceDetail';
 import { ServiceFormPage } from './pages/ServiceForm';
 import { SessionsPage } from './pages/Sessions';
-import { ClientsPage } from './pages/Clients';
 import { SettingsPage } from './pages/Settings';
 
 interface StatusCtx {
@@ -70,21 +70,22 @@ export function App() {
 
 function Routes() {
   const route = useRoute();
-  const [page = 'services', id, sub] = route;
+  const [page = 'mcp', id, sub] = route;
   switch (page) {
     case 'services':
       if (id === 'new') return <ServiceFormPage />;
       if (id && sub === 'edit') return <ServiceFormPage name={id} />;
       if (id) return <ServiceDetail name={id} />;
-      return <ServicesPage />;
+      return <McpPage />;
+    case 'agents':
+    case 'clients':
+      return <AgentsPage />;
     case 'sessions':
       return <SessionsPage />;
-    case 'clients':
-      return <ClientsPage />;
     case 'settings':
       return <SettingsPage />;
   }
-  return <ServicesPage />;
+  return <McpPage />;
 }
 
 function NavItem({ icon, label, count, active, onClick }: { icon: ReactNode; label: string; count?: number; active: boolean; onClick: () => void }) {
@@ -106,7 +107,7 @@ function NavItem({ icon, label, count, active, onClick }: { icon: ReactNode; lab
 }
 
 function Sidebar({ status, offline }: { status: Status; offline: boolean }) {
-  const [page = 'services'] = useRoute();
+  const [page = 'mcp'] = useRoute();
   const running = status.services.filter((s) => s.instance).length;
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
@@ -115,9 +116,9 @@ function Sidebar({ status, offline }: { status: Status; offline: boolean }) {
         <span className="text-[17px] font-semibold tracking-tight">MCPcell</span>
       </div>
       <nav className="space-y-1 px-3 pt-2">
-        <NavItem icon={<Server className="size-[18px]" />} label="MCP 服务" count={status.services.length} active={page === 'services'} onClick={() => go('services')} />
+        <NavItem icon={<Layers className="size-[18px]" />} label="MCP" active={page === 'mcp' || page === 'services'} onClick={() => go('mcp')} />
+        <NavItem icon={<Bot className="size-[18px]" />} label="Agents" active={page === 'agents' || page === 'clients'} onClick={() => go('agents')} />
         <NavItem icon={<Activity className="size-[18px]" />} label="会话" count={status.sessions.length} active={page === 'sessions'} onClick={() => go('sessions')} />
-        <NavItem icon={<Plug className="size-[18px]" />} label="客户端接入" active={page === 'clients'} onClick={() => go('clients')} />
       </nav>
       <div className="mt-auto px-3 pb-3">
         <Card className="mb-3 px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">

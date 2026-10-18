@@ -92,6 +92,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/services/{name}", s.api(s.handleSaveService))
 	mux.HandleFunc("DELETE /api/services/{name}", s.api(s.handleDeleteService))
 	mux.HandleFunc("GET /api/clients", s.api(s.handleClients))
+	mux.HandleFunc("GET /api/mcp", s.api(s.handleUnified))
+	mux.HandleFunc("POST /api/agents/{client}/add", s.api(s.handleAddToAgent))
 	mux.HandleFunc("POST /api/clients/{client}/attach", s.api(s.handleAttach))
 	mux.HandleFunc("POST /api/clients/{client}/restore", s.api(s.handleRestore))
 	mux.HandleFunc("GET /api/autostart", s.api(s.handleAutostart))

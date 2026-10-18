@@ -18,7 +18,7 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 
 - 一个守护进程通过 loopback 上的 Streamable HTTP 暴露每个服务：`http://127.0.0.1:47621/s/<服务名>`
 - 所有连到同一服务的会话**共用一个上游进程**。实测 6 个 SDK 客户端加 2 个真实 Claude Code 会话共用一个 context7。协议层只改写 id、进度令牌和取消通知的归属，不改工具名，不重放调用
-- **连接不启动进程**：握手和工具列表由缓存的能力目录回答，第一次调用工具时才启动，空闲后回收（默认 10 分钟）
+- **连接不启动进程**：握手和工具列表由缓存的能力目录回答，第一次调用工具时才启动，空闲后回收（默认 3 分钟）
 - **npx 扁平化**：npm 包装进 MCPcell 的缓存并锁定版本，直接用 node 启动。context7 从 4 个进程、约 235 MB 降到 2 个进程、约 84 MB，冷启动开销从 10 秒以上降到约 2.5 秒
 - 上游放在 Windows Job Object 里：守护进程无论怎么退出，整棵进程树都会被清理；可设内存上限，超限立即终止
 - 状态页和 `mcpcell ps` 显示每个服务的实例、会话、私有提交和缓存的工具数
@@ -42,7 +42,7 @@ bin/mcpcell.exe daemon        # 首次运行生成 ~/.mcpcell/config.json 和 to
 }
 ```
 
-运行 `bin/mcpcell.exe ui` 打开管理页：可以直接在页面上添加、编辑、删除服务（带常用预设，也能粘贴客户端里的 JSON 条目），在「客户端接入」里复制 Claude Code、Codex、Cursor 等 11 种客户端的配置，替换客户端里原来的同名条目，再重启客户端。工具全名保持不变。
+运行 `bin/mcpcell.exe ui` 打开管理页。「MCP」页把 MCPcell 的服务和 Claude Code、Codex、Cursor 里配置的 MCP 合成一张表，每个 Agent 一格，点一下就能托管、还原或加入其他 Agent；也可以在页面上添加、编辑、删除服务（带常用预设，也能粘贴客户端里的 JSON 条目）。「Agents」页按 Agent 批量托管和还原，其他客户端给出可复制的配置，替换原来的同名条目后重启即可。工具全名保持不变。
 
 | 命令 | 作用 |
 |---|---|
@@ -63,7 +63,7 @@ bin/mcpcell.exe daemon        # 首次运行生成 ~/.mcpcell/config.json 和 to
   "services": {
     "context7": {
       "command": "npx", "args": ["-y", "@upstash/context7-mcp"],
-      "idleTimeout": "10m",
+      "idleTimeout": "5m",
       "memoryLimit": "1GB"
     }
   }

@@ -23,11 +23,12 @@ type serviceForm struct {
 	MemoryLimit string             `json:"memoryLimit"` // "" none
 	Flatten     bool               `json:"flatten"`
 	Catalog     bool               `json:"catalog"`
+	Lean        bool               `json:"lean"`
 }
 
 func formOf(name string, s *registry.Service) serviceForm {
 	f := serviceForm{Name: name, Command: s.Command, Args: s.Args, Env: map[string]*string{}, Cwd: s.Cwd,
-		Flatten: s.FlattenEnabled(), Catalog: s.CatalogEnabled()}
+		Flatten: s.FlattenEnabled(), Catalog: s.CatalogEnabled(), Lean: s.LeanEnabled()}
 	if f.Args == nil {
 		f.Args = []string{}
 	}
@@ -82,6 +83,9 @@ func (f serviceForm) service(prev *registry.Service) (*registry.Service, error) 
 	}
 	if !f.Catalog {
 		raw["catalog"] = "off"
+	}
+	if !f.Lean {
+		raw["lean"] = false
 	}
 	b, _ := json.Marshal(raw)
 	return registry.ParseService(f.Name, b)

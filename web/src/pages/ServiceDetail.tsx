@@ -17,7 +17,7 @@ export function ServiceDetail({ name }: { name: string }) {
   if (!s) {
     return (
       <>
-        <PageHeader back={() => go('services')} title={name} />
+        <PageHeader back={() => go('mcp')} title={name} />
         <p className="px-8 py-16 text-center text-sm text-zinc-500">这个服务不存在或已被删除。</p>
       </>
     );
@@ -39,7 +39,7 @@ export function ServiceDetail({ name }: { name: string }) {
   return (
     <>
       <PageHeader
-        back={() => go('services')}
+        back={() => go('mcp')}
         icon={<ServiceAvatar name={name} />}
         title={name}
         subtitle={
@@ -147,6 +147,7 @@ export function ServiceDetail({ name }: { name: string }) {
                 <span className="text-amber-600 dark:text-amber-400">{s.note}</span>
               </Row>
             )}
+            <Row label="Node 内存">{s.lean ? '精简（--max-semi-space-size=1 --optimize-for-size）' : '默认'}</Row>
             <Row label="空闲回收">{s.idleTimeoutSec ? `空闲 ${span(s.idleTimeoutSec * 1000)}后结束进程` : '不回收'}</Row>
             <Row label="内存上限">{s.memoryLimit ? `${bytes(s.memoryLimit)}，超出时立即终止整棵进程树` : '不限制'}</Row>
             {s.envNames && s.envNames.length > 0 && <Row label="环境变量">{s.envNames.join('、')}（值已隐藏）</Row>}

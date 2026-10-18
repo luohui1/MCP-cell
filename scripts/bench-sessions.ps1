@@ -16,7 +16,12 @@ param(
   [int]$N = 3,
   [int]$WaitSec = 45,
   [string]$Label = '',
-  [string]$Json
+  [string]$Json,
+  # Load only these servers (--mcp-config ... --strict-mcp-config).
+  [string]$McpConfig,
+  # Send one tiny haiku message at start so Claude Code reports when its MCP
+  # servers were ready and which connected (the init event).
+  [switch]$Ready
 )
 $ErrorActionPreference = 'Stop'
 
@@ -24,22 +29,44 @@ $claude = (Get-Command claude).Source
 $work = Join-Path ([IO.Path]::GetTempPath()) 'mcpcell-bench'
 New-Item -ItemType Directory -Force $work | Out-Null
 
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$events = @{}
 $started = foreach ($i in 1..$N) {
   $psi = [Diagnostics.ProcessStartInfo]::new($claude)
   # stream-json input with stdin held open: Claude Code connects its MCP
   # servers at startup, then waits for a message that never comes. No model
   # call is made, so nothing depends on how a model answers.
-  foreach ($a in @('-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose')) { $psi.ArgumentList.Add($a) }
+  foreach ($a in @('-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--model', 'haiku')) { $psi.ArgumentList.Add($a) }
+  if ($McpConfig) { foreach ($a in @('--mcp-config', $McpConfig, '--strict-mcp-config')) { $psi.ArgumentList.Add($a) } }
   $psi.RedirectStandardInput = $true
   $psi.WorkingDirectory = $work
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
-  [Diagnostics.Process]::Start($psi)
+  $p = [Diagnostics.Process]::Start($psi)
+  $state = [hashtable]::Synchronized(@{ start = $clock.ElapsedMilliseconds; ready = $null; servers = '' })
+  $events[$p.Id] = $state
+  $null = Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -MessageData @{ s = $state; c = $clock } -Action {
+    $line = $EventArgs.Data
+    if (-not $line -or $Event.MessageData.s.ready) { return }
+    try { $ev = $line | ConvertFrom-Json } catch { return }
+    if ($ev.type -eq 'system' -and $ev.subtype -eq 'init') {
+      $Event.MessageData.s.ready = $Event.MessageData.c.ElapsedMilliseconds
+      $Event.MessageData.s.servers = (($ev.mcp_servers | ForEach-Object { "$($_.name)=$($_.status)" }) -join ' ')
+    }
+  }
+  $p.BeginOutputReadLine()
+  if ($Ready) {
+    $p.StandardInput.WriteLine('{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Reply with OK only."}]}}')
+    $p.StandardInput.Flush()
+  }
+  $p
 }
 Write-Host "started $N sessions: $(($started | ForEach-Object Id) -join ', '); waiting $WaitSec s for MCP servers"
-Start-Sleep -Seconds $WaitSec
+# Short sleeps: PowerShell runs event actions only between statements, so a
+# single long sleep would delay (and misdate) the init events.
+while ($clock.ElapsedMilliseconds -lt $WaitSec * 1000) { Start-Sleep -Milliseconds 100 }
 
 $all = Get-CimInstance Win32_Process
 $byPid = @{}
@@ -71,9 +98,12 @@ function MB($procs) { [math]::Round((($procs | ForEach-Object { [double]$_.Priva
 
 $sessions = foreach ($p in $started) {
   $tree = @(Tree $p.Id $true)
+  $st = $events[$p.Id]
   [pscustomobject]@{
     Session  = "claude#$($p.Id)"
     Alive    = -not $p.HasExited
+    ReadySec = if ($st.ready) { [math]::Round(($st.ready - $st.start) / 1000, 1) } else { $null }
+    Connected = $st.servers
     McpProcs = $tree.Count
     McpPrivMB = MB $tree
     Servers  = (($tree | Where-Object Name -ne 'cmd.exe' | ForEach-Object {
@@ -98,6 +128,9 @@ $summary = [pscustomobject]@{
   SessionMcpProcs = ($alive | Measure-Object McpProcs -Sum).Sum
   SessionMcpMB    = $sessionMB
   PerSessionMB    = if ($alive.Count) { [math]::Round($sessionMB / $alive.Count, 1) } else { 0 }
+  MaxReadySec     = ($sessions | Measure-Object ReadySec -Maximum).Maximum
+  AvgReadySec     = [math]::Round(($sessions | Measure-Object ReadySec -Average).Average, 1)
+  FailedServers   = @($sessions | ForEach-Object { ($_.Connected -split ' ') } | Where-Object { $_ -and $_ -notmatch '=connected$' }).Count
   McpcellProcs    = $daemonTree.Count
   McpcellMB       = MB $daemonTree
   TotalMB         = [math]::Round($sessionMB + (MB $daemonTree), 1)

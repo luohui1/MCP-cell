@@ -35,10 +35,33 @@ func NewClaudeCode(home, backups string, run Runner) *ClaudeCode {
 	return c
 }
 
-func (c *ClaudeCode) ID() string             { return "claude-code" }
-func (c *ClaudeCode) Name() string           { return "Claude Code" }
-func (c *ClaudeCode) Path() string           { return c.path }
-func (c *ClaudeCode) List() ([]Entry, error) { return listJSON(c.ID(), c.path) }
+func (c *ClaudeCode) ID() string   { return "claude-code" }
+func (c *ClaudeCode) Name() string { return "Claude Code" }
+func (c *ClaudeCode) Path() string { return c.path }
+
+// List reports enablement the way Claude Code decides it: user-scope servers
+// named in the top-level disabledMcpServers are off. A "disabled" key inside
+// an entry is ignored by Claude Code, so it is ignored here too.
+func (c *ClaudeCode) List() ([]Entry, error) {
+	entries, err := listJSON(c.ID(), c.path)
+	if err != nil || entries == nil {
+		return entries, err
+	}
+	var doc struct {
+		Disabled []string `json:"disabledMcpServers"`
+	}
+	if b, err := os.ReadFile(c.path); err == nil {
+		_ = json.Unmarshal(stripJSONC(b), &doc)
+	}
+	off := map[string]bool{}
+	for _, n := range doc.Disabled {
+		off[n] = true
+	}
+	for i := range entries {
+		entries[i].Enabled = !off[entries[i].Name]
+	}
+	return entries, nil
+}
 
 func (c *ClaudeCode) cli(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -100,6 +123,27 @@ func (c *ClaudeCode) Attach(name, url, token string) (Record, error) {
 	return rec, nil
 }
 
+func (c *ClaudeCode) Add(name, url, token string) (Record, error) {
+	rec := Record{Client: c.ID(), Name: name, Added: true, At: time.Now()}
+	if _, err := c.raw(name); err == nil {
+		return rec, ErrExists
+	}
+	if data, err := os.ReadFile(c.path); err == nil {
+		if rec.Backup, err = keepBackup(c.backups, c.ID(), c.path, data); err != nil {
+			return rec, err
+		}
+	}
+	written, _ := json.Marshal(httpEntry(true, url, token))
+	rec.Written = string(written)
+	if _, err := c.run("mcp", "add-json", "-s", "user", name, rec.Written); err != nil {
+		return rec, err
+	}
+	if now, err := c.raw(name); err != nil || entryFromJSON(c.ID(), name, now).URL != url {
+		return rec, fmt.Errorf("Claude Code 没有保存新的 %s 配置", name)
+	}
+	return rec, nil
+}
+
 func (c *ClaudeCode) Restore(rec Record) error {
 	cur, err := c.raw(rec.Name)
 	if err != nil {
@@ -107,6 +151,15 @@ func (c *ClaudeCode) Restore(rec Record) error {
 	}
 	if !sameJSON(cur, []byte(rec.Written)) {
 		return ErrConflict
+	}
+	if rec.Added {
+		if _, err := c.run("mcp", "remove", "-s", "user", rec.Name); err != nil {
+			return err
+		}
+		if _, err := c.raw(rec.Name); err == nil {
+			return fmt.Errorf("Claude Code 没有移除 %s", rec.Name)
+		}
+		return nil
 	}
 	if err := c.replace(rec.Name, rec.Original); err != nil {
 		return err

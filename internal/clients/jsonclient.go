@@ -144,6 +144,9 @@ func (c *Cursor) Restore(rec Record) error {
 		if !sameJSON(old[start:end], []byte(rec.Written)) {
 			return nil, ErrConflict
 		}
+		if rec.Added {
+			return removeMember(old, []string{"mcpServers"}, rec.Name)
+		}
 		return splice(old, start, end, rec.Original), nil
 	})
 	return err
@@ -154,4 +157,37 @@ func splice(src []byte, start, end int, with string) []byte {
 	out = append(out, src[:start]...)
 	out = append(out, with...)
 	return append(out, src[end:]...)
+}
+
+func (c *Cursor) Add(name, url, token string) (Record, error) {
+	rec := Record{Client: c.ID(), Name: name, Added: true}
+	if err := ensureFile(c.path, "{\n  \"mcpServers\": {}\n}\n"); err != nil {
+		return rec, err
+	}
+	backup, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
+		if _, _, err := valueSpan(old, "mcpServers", name); err == nil {
+			return nil, ErrExists
+		}
+		if _, _, err := valueSpan(old, "mcpServers"); errors.Is(err, ErrNotFound) {
+			if old, _, err = insertMember(old, nil, "mcpServers", map[string]any{}); err != nil {
+				return nil, err
+			}
+		}
+		out, written, err := insertMember(old, []string{"mcpServers"}, name, httpEntry(false, url, token))
+		rec.Written = written
+		return out, err
+	})
+	rec.Backup, rec.At = backup, time.Now()
+	return rec, err
+}
+
+// ensureFile creates path with initial content if it does not exist yet.
+func ensureFile(path, initial string) error {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(initial), 0o600)
 }

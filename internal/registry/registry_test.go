@@ -90,7 +90,7 @@ func TestSaveRoundTrip(t *testing.T) {
 		t.Fatalf("round trip lost data: %+v %+v %+v", again, a, b)
 	}
 	raw, _ := os.ReadFile(ConfigPath(home))
-	if strings.Contains(string(raw), "idleTimeout\": \"10m") {
+	if strings.Contains(string(raw), "idleTimeout\": \"3m") {
 		t.Fatalf("defaults were written back: %s", raw)
 	}
 }

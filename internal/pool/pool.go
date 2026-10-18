@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -294,7 +295,15 @@ func (p *Pool) npxPackage(def *registry.Service) (spec string, args []string, ok
 // buildSpec turns a definition into a process spec, replacing npx with
 // node <bin> from the package cache when possible. If that fails the service
 // still runs through npx and note says why.
-func (p *Pool) buildSpec(ctx context.Context, name string, def *registry.Service) (spec proc.Spec, direct bool, note string) {
+func (p *Pool) buildSpec(ctx context.Context, name string, def *registry.Service) (proc.Spec, bool, string) {
+	spec, direct, note := p.launchSpec(ctx, name, def)
+	if def.LeanEnabled() {
+		spec = leanSpec(spec)
+	}
+	return spec, direct, note
+}
+
+func (p *Pool) launchSpec(ctx context.Context, name string, def *registry.Service) (spec proc.Spec, direct bool, note string) {
 	spec = p.baseSpec(name, def)
 	spec.MemoryLimit = uint64(def.MemoryLimit)
 	pkg, args, ok := p.npxPackage(def)
@@ -311,6 +320,28 @@ func (p *Pool) buildSpec(ctx context.Context, name string, def *registry.Service
 	}
 	spec.Argv = append([]string{node[0], pin.Script()}, args...)
 	return spec, true, ""
+}
+
+// leanNodeFlags shrink a Node.js server's memory without changing what it
+// can do: a 1 MB young generation and size-favoring compilation. Measured
+// 2026-10-17 on three real servers: 27-38% less private commit, all tools
+// still working. --lite-mode and --jitless save more but disable
+// WebAssembly, which breaks Node's built-in fetch ("fetch failed").
+var leanNodeFlags = []string{"--max-semi-space-size=1", "--optimize-for-size"}
+
+// leanSpec adds leanNodeFlags when the command is node itself; for other
+// Node launchers (npx fallback) it uses NODE_OPTIONS, which only accepts the
+// semi-space flag.
+func leanSpec(spec proc.Spec) proc.Spec {
+	argv := proc.UnwrapCmd(spec.Argv)
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(argv[0]), filepath.Ext(argv[0])))
+	switch {
+	case base == "node" && len(argv) > 1 && !strings.HasPrefix(argv[1], "-"):
+		spec.Argv = append(append([]string{argv[0]}, leanNodeFlags...), argv[1:]...)
+	case base == "npx" || base == "npm" || base == "pnpm" || base == "node":
+		spec.Env = append(spec.Env, "NODE_OPTIONS="+leanNodeFlags[0])
+	}
+	return spec
 }
 
 func firstLine(s string) string {
@@ -548,6 +579,7 @@ type ServiceStatus struct {
 	MemoryLimit    uint64             `json:"memoryLimit,omitempty"`
 	Starts         int                `json:"starts"`
 	Direct         bool               `json:"direct"` // running as node <bin>, without npx
+	Lean           bool               `json:"lean"`   // memory-saving node flags enabled
 	Package        *PackageInfo       `json:"package,omitempty"`
 	Catalog        *CatalogInfo       `json:"catalog,omitempty"`
 	Note           string             `json:"note,omitempty"`
@@ -573,6 +605,7 @@ func (p *Pool) Status() []ServiceStatus {
 			Command:        DisplayCommand(e.def),
 			IdleTimeoutSec: int(e.def.Idle().Seconds()),
 			MemoryLimit:    uint64(e.def.MemoryLimit),
+			Lean:           e.def.LeanEnabled(),
 			Starts:         e.starts, Note: e.note, LastError: e.lastErr, StderrTail: e.lastStderr,
 		}
 		for k := range e.def.Env {

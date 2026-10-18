@@ -255,6 +255,24 @@ func fakeClaude(t *testing.T, path string, failAdd *bool) Runner {
 	}
 }
 
+func TestClaudeCodeEnablement(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	write(t, filepath.Join(dir, ".claude.json"), `{"disabledMcpServers": ["off"], "mcpServers": {
+		"off": {"command": "a"}, "flagged": {"command": "b", "disabled": true}, "on": {"command": "c"}}}`)
+	c := NewClaudeCode(t.TempDir(), "", nil)
+	inTemp(t, c.Path())
+	entries, _ := c.List()
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.Name] = e.Enabled
+	}
+	// Claude Code ignores an entry's own "disabled" key and still starts it.
+	if got["off"] || !got["flagged"] || !got["on"] {
+		t.Fatalf("enabled = %v", got)
+	}
+}
+
 func TestClaudeCodeViaCLI(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
@@ -321,6 +339,7 @@ func (f fakeClient) Name() string                                  { return f.id
 func (f fakeClient) Path() string                                  { return "" }
 func (f fakeClient) List() ([]Entry, error)                        { return f.entries, nil }
 func (f fakeClient) Attach(string, string, string) (Record, error) { return Record{}, nil }
+func (f fakeClient) Add(string, string, string) (Record, error)    { return Record{}, nil }
 func (f fakeClient) Restore(Record) error                          { return nil }
 
 func TestOverviewMapsSameServerAcrossClients(t *testing.T) {
@@ -355,5 +374,106 @@ func TestOverviewMapsSameServerAcrossClients(t *testing.T) {
 	}
 	if got["claude-code/feishu"] == got["codex/feishu"] {
 		t.Fatalf("different credentials must not share a service: %v", got)
+	}
+}
+
+func TestCursorAddRemoveIsByteExact(t *testing.T) {
+	fixtures := map[string]string{
+		"members": cursorFixture,
+		"empty":   "{\n  \"mcpServers\": {}\n}\n",
+		"crlf":    strings.ReplaceAll(cursorFixture, "\n", "\r\n"),
+	}
+	for name, fixture := range fixtures {
+		home := t.TempDir()
+		path := filepath.Join(home, ".cursor", "mcp.json")
+		write(t, path, fixture)
+		c := NewCursor(home, "")
+		inTemp(t, c.Path())
+		rec, err := c.Add("ctx", base+"/s/ctx", tok)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		entries, _ := c.List()
+		found := false
+		for _, e := range entries {
+			found = found || e.Name == "ctx" && e.URL == base+"/s/ctx"
+		}
+		if !found || !strings.Contains(read(t, path), "// my MCP servers") == (name != "empty") {
+			t.Fatalf("%s after add:\n%s", name, read(t, path))
+		}
+		if _, err := c.Add("ctx", base+"/s/ctx", tok); !errors.Is(err, ErrExists) {
+			t.Fatalf("%s: adding twice: %v", name, err)
+		}
+		if err := c.Restore(rec); err != nil {
+			t.Fatalf("%s restore: %v", name, err)
+		}
+		if got := read(t, path); got != fixture {
+			t.Fatalf("%s: remove not byte-exact:\n%q\nwant\n%q", name, got, fixture)
+		}
+	}
+	// No config yet: Add creates one.
+	home := t.TempDir()
+	c := NewCursor(home, "")
+	if _, err := c.Add("ctx", base+"/s/ctx", tok); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := c.List(); len(entries) != 1 {
+		t.Fatalf("created config has %d entries", len(entries))
+	}
+}
+
+func TestCodexAddRemoveIsByteExact(t *testing.T) {
+	for _, crlf := range []bool{false, true} {
+		home := t.TempDir()
+		fixture := codexFixture
+		if crlf {
+			fixture = strings.ReplaceAll(fixture, "\n", "\r\n")
+		}
+		path := filepath.Join(home, ".codex", "config.toml")
+		write(t, path, fixture)
+		c := NewCodex(home, "")
+		inTemp(t, c.Path())
+		rec, err := c.Add("my-svc", base+"/s/my-svc", tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			MCPServers map[string]map[string]any `toml:"mcp_servers"`
+		}
+		if _, err := toml.Decode(read(t, path), &doc); err != nil || doc.MCPServers["my-svc"]["url"] != base+"/s/my-svc" || len(doc.MCPServers) != 3 {
+			t.Fatalf("after add (crlf=%v): %v %v", crlf, doc.MCPServers["my-svc"], err)
+		}
+		if _, err := c.Add("context7", base+"/s/x", tok); !errors.Is(err, ErrExists) {
+			t.Fatalf("adding an existing name: %v", err)
+		}
+		if err := c.Restore(rec); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, path); got != fixture {
+			t.Fatalf("remove not byte-exact (crlf=%v):\n%q", crlf, got)
+		}
+	}
+}
+
+func TestClaudeCodeAddRemove(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	path := filepath.Join(dir, ".claude.json")
+	write(t, path, `{"mcpServers": {"other": {"command": "x"}}}`)
+	c := NewClaudeCode(t.TempDir(), t.TempDir(), fakeClaude(t, path, nil))
+	inTemp(t, c.Path())
+	rec, err := c.Add("ctx", base+"/s/ctx", tok)
+	if err != nil || !rec.Added {
+		t.Fatalf("add: %+v %v", rec, err)
+	}
+	if _, err := c.Add("other", base+"/s/other", tok); !errors.Is(err, ErrExists) {
+		t.Fatalf("adding over an existing entry: %v", err)
+	}
+	if err := c.Restore(rec); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := c.List()
+	if len(entries) != 1 || entries[0].Name != "other" {
+		t.Fatalf("after remove: %d entries", len(entries))
 	}
 }

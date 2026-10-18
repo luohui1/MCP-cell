@@ -8,7 +8,7 @@ import { presets, type Preset } from '../presets';
 import { go } from '../router';
 import { Button, Card, cx, Field, IconButton, Input, Switch, Textarea, useToast } from '../ui';
 
-const blank: ServiceForm = { name: '', command: '', args: [], env: {}, cwd: '', idleTimeout: '', memoryLimit: '', flatten: true, catalog: true };
+const blank: ServiceForm = { name: '', command: '', args: [], env: {}, cwd: '', idleTimeout: '', memoryLimit: '', flatten: true, catalog: true, lean: true };
 
 interface EnvRow {
   key: string;
@@ -17,8 +17,8 @@ interface EnvRow {
 }
 
 const idleOptions = [
-  { value: '', label: '默认（10 分钟）' },
-  { value: '5m', label: '5 分钟' },
+  { value: '', label: '默认（3 分钟）' },
+  { value: '10m', label: '10 分钟' },
   { value: '30m', label: '30 分钟' },
   { value: '1h', label: '1 小时' },
   { value: '0', label: '不回收' },
@@ -115,7 +115,7 @@ export function ServiceFormPage({ name }: { name?: string }) {
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-20 flex h-[72px] shrink-0 items-center gap-4 border-b border-zinc-200 bg-white/90 px-8 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
         <button
-          onClick={() => (editing ? go('services', name!) : go('services'))}
+          onClick={() => (editing ? go('services', name!) : go('mcp'))}
           aria-label="返回"
           className="grid size-10 place-items-center rounded-xl border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
         >
@@ -257,6 +257,12 @@ export function ServiceFormPage({ name }: { name?: string }) {
                 desc="首次安装到 MCPcell 的包缓存并锁定版本，之后不经过 npx：少一个约 130 MB 的进程，启动也快得多"
               />
               <Toggle
+                checked={form.lean}
+                onChange={(v) => setForm({ ...form, lean: v })}
+                title="精简 Node 内存"
+                desc="给 Node.js 服务加上 --max-semi-space-size=1 --optimize-for-size，实测私有提交少 27%–38%，功能不变"
+              />
+              <Toggle
                 checked={form.catalog}
                 onChange={(v) => setForm({ ...form, catalog: v })}
                 title="缓存能力目录"
@@ -271,7 +277,7 @@ export function ServiceFormPage({ name }: { name?: string }) {
         <div className="mx-auto flex w-full max-w-[960px] items-center gap-3 px-8 py-4">
           {error && <span className="text-sm text-red-600 dark:text-red-400">{error}</span>}
           <div className="ml-auto flex gap-3">
-            <Button onClick={() => (editing ? go('services', name!) : go('services'))}>取消</Button>
+            <Button onClick={() => (editing ? go('services', name!) : go('mcp'))}>取消</Button>
             <Button variant="primary" busy={saving} disabled={loading} icon={editing ? <Check className="size-4" /> : <Plus className="size-4" />} onClick={submit}>
               {editing ? '保存' : '添加'}
             </Button>

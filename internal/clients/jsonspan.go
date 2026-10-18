@@ -1,9 +1,19 @@
 package clients
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 )
+
+func leadingSpace(b []byte) string {
+	n := 0
+	for n < len(b) && (b[n] == ' ' || b[n] == '\t') {
+		n++
+	}
+	return string(b[:n])
+}
 
 // valueSpan returns the byte range of the value at keys in a JSON or JSONC
 // document (comments and trailing commas allowed), so one value can be
@@ -226,4 +236,112 @@ func sameJSON(a, b []byte) bool {
 	xa, _ := json.Marshal(x)
 	ya, _ := json.Marshal(y)
 	return string(xa) == string(ya)
+}
+
+// memberSpan locates member name of the object at parent: from its key's
+// opening quote to the end of its value.
+func memberSpan(src []byte, parent []string, name string) (keyStart, valueEnd int, err error) {
+	start, _, err := valueSpan(src, parent...)
+	if err != nil {
+		return 0, 0, err
+	}
+	if src[start] != '{' {
+		return 0, 0, errSyntax
+	}
+	s := &scanner{src: src, pos: start + 1}
+	for {
+		s.ws()
+		if s.pos >= len(src) {
+			return 0, 0, errSyntax
+		}
+		if src[s.pos] == '}' {
+			return 0, 0, ErrNotFound
+		}
+		keyStart = s.pos
+		key, err := s.str()
+		if err != nil {
+			return 0, 0, err
+		}
+		s.ws()
+		if s.pos >= len(src) || src[s.pos] != ':' {
+			return 0, 0, errSyntax
+		}
+		s.pos++
+		s.ws()
+		if err := s.skipValue(); err != nil {
+			return 0, 0, err
+		}
+		if key == name {
+			return keyStart, s.pos, nil
+		}
+		s.ws()
+		if s.pos < len(src) && src[s.pos] == ',' {
+			s.pos++
+		}
+	}
+}
+
+// removeMember deletes member name from the object at parent, taking one
+// separating comma with it, so that removing a member added by insertMember
+// restores the original bytes.
+func removeMember(src []byte, parent []string, name string) ([]byte, error) {
+	keyStart, valueEnd, err := memberSpan(src, parent, name)
+	if err != nil {
+		return nil, err
+	}
+	s := &scanner{src: src, pos: valueEnd}
+	s.ws()
+	if s.pos < len(src) && src[s.pos] == ',' {
+		// Not the last member: drop it up to the next member.
+		s.pos++
+		s.ws()
+		return splice(src, keyStart, s.pos, ""), nil
+	}
+	// Last member: drop the comma before it, or everything inside the braces
+	// when it is the only one.
+	i := keyStart - 1
+	for i >= 0 && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r') {
+		i--
+	}
+	if i >= 0 && src[i] == ',' {
+		return splice(src, i, valueEnd, ""), nil
+	}
+	close := s.pos // the closing brace
+	return splice(src, i+1, close, ""), nil
+}
+
+// insertMember adds "name": value as the first member of the object at
+// parent, indented like its siblings.
+func insertMember(src []byte, parent []string, name string, value any) ([]byte, string, error) {
+	start, end, err := valueSpan(src, parent...)
+	if err != nil {
+		return nil, "", err
+	}
+	nl := newline(src)
+	lineStart := bytes.LastIndexByte(src[:start], '\n') + 1
+	parentIndent := leadingSpace(src[lineStart:start])
+	childIndent := parentIndent + "  "
+	inner := stripJSONC(src[start+1 : end-1])
+	empty := len(bytes.TrimSpace(inner)) == 0
+	if !empty {
+		// Match the first existing member's indentation.
+		s := &scanner{src: src, pos: start + 1}
+		s.ws()
+		ls := bytes.LastIndexByte(src[:s.pos], '\n') + 1
+		if ls > start {
+			childIndent = leadingSpace(src[ls:s.pos])
+		}
+	}
+	key, _ := json.Marshal(name)
+	unit := "  "
+	if len(childIndent) > 0 && childIndent[0] == '\t' {
+		unit = "\t"
+	}
+	body, _ := json.MarshalIndent(value, childIndent, unit)
+	written := strings.ReplaceAll(string(body), "\n", nl)
+	member := string(key) + ": " + written
+	if empty {
+		return splice(src, start+1, end-1, nl+childIndent+member+nl+parentIndent), written, nil
+	}
+	return splice(src, start+1, start+1, nl+childIndent+member+","), written, nil
 }

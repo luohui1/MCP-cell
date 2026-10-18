@@ -63,7 +63,7 @@ export function useServiceActions() {
             const name = deleting!;
             await run(name, async () => (await api.remove(name), `已删除 ${name}`));
             setDeleting(null);
-            go('services');
+            go('mcp');
           }}
         >
           删除

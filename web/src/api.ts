@@ -32,6 +32,7 @@ export interface Service {
   memoryLimit?: number;
   starts: number;
   direct: boolean;
+  lean: boolean;
   package?: { name: string; version: string; installedAt: string };
   catalog?: { tools: number; prompts: number; resources: number; fetchedAt: string };
   note?: string;
@@ -79,6 +80,7 @@ export interface ServiceForm {
   memoryLimit: string;
   flatten: boolean;
   catalog: boolean;
+  lean: boolean;
 }
 
 export class Unauthorized extends Error {}
@@ -163,4 +165,46 @@ export const takeover = {
     call<{ results: TakeoverResult[] }>('POST', `/api/clients/${encodeURIComponent(client)}/restore${forget ? '?forget=1' : ''}`, { names }),
   autostart: (enabled: boolean) => call<AutostartStatus>('POST', '/api/autostart', { enabled }),
   autostartStatus: () => call<AutostartStatus>('GET', '/api/autostart'),
+};
+
+export type CellState = 'managed' | 'native' | 'changed' | 'remote' | 'internal';
+
+export interface AgentCell {
+  state: CellState;
+  entry: string;
+  enabled: boolean;
+  added?: boolean;
+  class: EntryClass;
+  reason?: string;
+}
+
+/** One MCP server, merged across MCPcell's services and every agent. */
+export interface McpRow {
+  key: string;
+  name: string;
+  kind: string;
+  launch: string;
+  detail?: string;
+  class: EntryClass;
+  reason: string;
+  service?: string;
+  proposed?: string;
+  agents: Record<string, AgentCell>;
+  canAdd: boolean;
+}
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  path: string;
+  found: boolean;
+  error?: string;
+  total: number;
+  managed: number;
+  shareable: number;
+}
+
+export const unified = {
+  load: () => call<{ agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus }>('GET', '/api/mcp'),
+  add: (client: string, row: string) => call<{ service: string }>('POST', `/api/agents/${encodeURIComponent(client)}/add`, { row }),
 };

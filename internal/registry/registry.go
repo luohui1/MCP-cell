@@ -18,7 +18,7 @@ import (
 
 const (
 	DefaultPort         = 47621
-	DefaultIdleTimeout  = 10 * time.Minute
+	DefaultIdleTimeout  = 3 * time.Minute
 	DefaultMaxInstances = 32
 	ModeShared          = "shared"
 )
@@ -50,6 +50,8 @@ type Service struct {
 	// Flatten runs `npx pkg` as `node <bin>` from MCPcell's package cache.
 	// Default true; set false to keep npx.
 	Flatten *bool `json:"flatten,omitempty"`
+	// Lean starts Node.js servers with memory-saving V8 flags. Default true.
+	Lean *bool `json:"lean,omitempty"`
 	// Catalog "off" disables caching the server's tool/prompt/resource lists,
 	// for servers whose lists change at runtime without notifying.
 	Catalog  string `json:"catalog,omitempty"`
@@ -57,6 +59,7 @@ type Service struct {
 }
 
 func (s *Service) FlattenEnabled() bool { return s.Flatten == nil || *s.Flatten }
+func (s *Service) LeanEnabled() bool    { return s.Lean == nil || *s.Lean }
 
 // Idle is the effective idle timeout: the configured one, or the default.
 // 0 means never reap.

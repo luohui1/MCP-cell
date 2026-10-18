@@ -104,6 +104,45 @@ func (c *Codex) Attach(name, url, token string) (Record, error) {
 	return rec, err
 }
 
+func (c *Codex) Add(name, url, token string) (Record, error) {
+	rec := Record{Client: c.ID(), Name: name, Added: true}
+	if err := ensureFile(c.path, ""); err != nil {
+		return rec, err
+	}
+	backup, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
+		switch _, _, err := tomlBlock(old, name); {
+		case err == nil:
+			return nil, ErrExists
+		case !errors.Is(err, ErrNotFound):
+			return nil, err
+		}
+		nl := newline(old)
+		header := fmt.Sprintf("[mcp_servers.%s]", tomlKeyText(name))
+		rec.Written = codexHTTPBlock(header+nl, url, token, nl)
+		out := append([]byte(nil), old...)
+		if len(out) > 0 && !strings.HasSuffix(string(out), nl) {
+			out = append(out, nl...)
+		}
+		if len(out) > 0 {
+			out = append(out, nl...) // blank line before the new table
+		}
+		out = append(out, rec.Written...)
+		if _, err := toml.Decode(string(out), new(map[string]any)); err != nil {
+			return nil, fmt.Errorf("改写后的 config.toml 无法解析，未写入：%w", err)
+		}
+		return out, nil
+	})
+	rec.Backup, rec.At = backup, time.Now()
+	return rec, err
+}
+
+func tomlKeyText(name string) string {
+	if regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(name) {
+		return name
+	}
+	return fmt.Sprintf("%q", name)
+}
+
 func (c *Codex) Restore(rec Record) error {
 	_, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
 		start, end, err := tomlBlock(old, rec.Name)
@@ -112,6 +151,14 @@ func (c *Codex) Restore(rec Record) error {
 		}
 		if normalizeBlock(string(old[start:end])) != normalizeBlock(rec.Written) {
 			return nil, ErrConflict
+		}
+		if rec.Added {
+			// Also take the blank line Add put before the table.
+			nl := newline(old)
+			if start >= 2*len(nl) && string(old[start-2*len(nl):start]) == nl+nl {
+				start -= len(nl)
+			}
+			return splice(old, start, end, ""), nil
 		}
 		return splice(old, start, end, rec.Original), nil
 	})

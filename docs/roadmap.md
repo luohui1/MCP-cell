@@ -76,7 +76,7 @@
 交付：
 - 目录缓存：`initialize`、`tools/list`、`prompts/list`、`resources/list` 用缓存应答，按配置指纹失效，收到 `list_changed` 时刷新并广播
 - 调用时才获取实例；单次创建合并（并发冷启动只起一个）
-- 空闲回收（默认 10 分钟）；崩溃退避；连续崩溃进入隔离状态，不无限重启
+- 空闲回收（默认 10 分钟，M3a 后改为 3 分钟）；崩溃退避；连续崩溃进入隔离状态，不无限重启
 - npx 扁平化：首次导入时把包装进 MCPcell 的包缓存并锁定版本，之后直接 `node <bin.js>` 启动，去掉 `cmd.exe` 和 npx 自身的 node 进程，也不再每次启动都去查 `@latest`
 - 预算：全局实例上限、按实例的 Job 内存上限（可选），超限时排队或拒绝，先驱逐空闲实例
 - ~~上游协议识别~~ → M3
@@ -107,6 +107,35 @@
 - 剩下的每会话开销来自有状态服务（浏览器调试、桌面应用桥接等），由 M3b 的按会话隔离处理
 - 测量方法：会话用 `--input-format stream-json` 并保持 stdin 打开，不发任何消息，完全不调用模型；测量只计会话自己拉起的 MCP 进程树（排除 shell），以及创建时间晚于父进程的子进程（Windows 不会清除已退出父进程的 PID）
 
+**性能对比**（同日，只加载被接管的 3 个服务：context7、shadcn-ui、一个 npm 的 API 包装服务；`--strict-mcp-config` 排除其他 MCP；"原生"使用接管前的原始条目）
+
+内存与进程（私有提交，测量时刻为会话启动后 30–45 秒）：
+
+| 同时会话数 | 原生 | MCPcell：只连接 | MCPcell：3 个服务都在运行 |
+|---|---|---|---|
+| 1 | 12 个进程，1,264 MB | 0 个进程，守护进程 53 MB | 6 个进程，406 MB |
+| 3 | 36 个进程，3,825 MB | 0 个进程，守护进程 53 MB | 406 MB |
+| 6 | 约 72 个进程、约 7.6 GB（按 1、3 会话线性推算；机器提交余量只剩约 7 GB，没有实测） | 0 个进程，守护进程 56 MB | 406 MB |
+
+会话就绪时间（启动到 Claude Code 报告 MCP 全部连上）：
+
+| 同时会话数 | 原生 | MCPcell |
+|---|---|---|
+| 1 | 15.6 s | 2.2 s |
+| 3 | 平均 23.5 s，最慢 24.1 s | 平均 3.1 s，最慢 3.5 s |
+| 6 | 未测 | 平均 3.8 s，最慢 4.2 s |
+
+原生就绪时间随并发上升，几个 npx 同时启动互相抢资源；再多一些就会撞上 30 秒连接超时，此前测量中已经出现过服务被超时杀掉。
+
+工具调用（`tools/mcpprobe`，各 3 次取中位数）：
+
+| | 原生（每个新会话都是冷启动） | MCPcell 冷启动（空闲回收后第一次调用） | MCPcell 热调用 |
+|---|---|---|---|
+| context7 连接 + 调用 | 11.7 s + 2.3 s = 14.5 s | 0.006 s + 5.3 s = 5.4 s | 1.5 s |
+| shadcn-ui 连接 | 8.8 s | 0.007 s | 0.007 s |
+
+context7 的调用本身要访问外部 API（热调用约 1.1–1.5 s），两种方式都有这部分。shadcn-ui 的原生调用在测试机上因环境中一个失效的 `GITHUB_PERSONAL_ACCESS_TOKEN` 认证失败，没有可比的调用耗时；MCPcell 只向服务传白名单环境变量，因此不受影响。
+
 **M3a 交付内容**
 - `internal/clients`：读取 Claude Code（`~/.claude.json` 用户级）、Codex（`config.toml`）、Cursor（`mcp.json`）的 MCP 条目；按启动包、参数、环境变量值识别"同一个服务"，Claude Code 和 Codex 的 context7 映射到同一个 MCPcell 服务，凭据不同则分开
 - 分类：可共享（已知无状态清单）/ 需要会话隔离 / 未知（可强制共享）/ 远程 HTTP / 客户端内置（Codex 的 codex、node_repl、cua_repl）/ 已连接 MCPcell
@@ -115,6 +144,12 @@
 - 开机自启：HKCU Run 键启动无窗口的 `mcpcelld.exe daemon --log`；`mcpcell start/stop`
 - 管理页「客户端接入」改为接管中心；设置页加自启开关
 - 测试：接管→还原后文件逐字节一致（含注释、CRLF）；被改过的条目拒绝还原；真实 `claude` CLI 的接管→还原（临时 `CLAUDE_CONFIG_DIR`，`MCPCELL_REAL_CLAUDE=1` 时运行）
+
+**统一管理页**（M3a 之后）
+- `GET /api/mcp` 把 MCPcell 的服务和各 Agent 的条目合并成一张表：同一个 MCP 在几个 Agent 里配置就是一行，每个 Agent 一格（托管 / 原生 / 已改动 / 远程 / 内置 / 未配置）；同名但参数不同的行显示参数，疑似密钥的参数值隐藏
+- 管理页只剩 MCP、Agents、会话、设置四页：MCP 页逐格点击即可托管、还原、强制共享或加入其他 Agent（`POST /api/agents/{client}/add`，必要时先从另一个 Agent 的条目建服务）；Agents 页按 Agent 批量托管和还原，其余客户端仍给手动配置
+- 加入 Agent 的条目在还原时整条删除，文件其余部分逐字节不变（Codex 表块、Cursor JSON 成员都有测试）
+- Node 服务默认加 `--max-semi-space-size=1 --optimize-for-size`（服务级 `lean: false` 可关）；`--lite-mode`、`--jitless` 会关掉 WebAssembly 导致 fetch 失败，没有采用
 
 **M3b 按会话隔离**：chrome-devtools、ssh、pencil、playwright 等有状态服务每个会话独立实例，服务端请求转发给所属会话；之后它们也能接管
 

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 
-// Hash routes keep the embedded page a plain static bundle: #/services,
-// #/services/<name>, #/services/<name>/edit, #/services/new, #/sessions,
-// #/clients, #/settings.
+// Hash routes keep the embedded page a plain static bundle: #/mcp,
+// #/services/<name>, #/services/<name>/edit, #/services/new, #/agents,
+// #/sessions, #/settings.
 
 function parse(): string[] {
   return location.hash

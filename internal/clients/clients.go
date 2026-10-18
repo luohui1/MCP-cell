@@ -50,6 +50,9 @@ type Record struct {
 	Written  string    `json:"written"`  // what MCPcell wrote, to detect later edits
 	Backup   string    `json:"backup,omitempty"`
 	At       time.Time `json:"at"`
+	// Added marks an entry MCPcell created in a client that did not have it;
+	// undoing it removes the entry.
+	Added bool `json:"added,omitempty"`
 }
 
 // Client is one AI client's configuration.
@@ -60,14 +63,18 @@ type Client interface {
 	List() ([]Entry, error)
 	// Attach points entry name at url, authorized with token.
 	Attach(name, url, token string) (Record, error)
-	// Restore puts a taken-over entry back. It refuses (ErrConflict) when the
-	// entry is no longer what MCPcell wrote.
+	// Add creates entry name pointing at url in a client that lacks it.
+	Add(name, url, token string) (Record, error)
+	// Restore undoes Attach (puts the original back) or Add (removes the
+	// entry). It refuses (ErrConflict) when the entry is no longer what
+	// MCPcell wrote.
 	Restore(rec Record) error
 }
 
 var (
 	ErrConflict = errors.New("条目已被外部修改")
 	ErrNotFound = errors.New("配置里没有这个条目")
+	ErrExists   = errors.New("这个客户端里已经有同名条目")
 )
 
 // All returns the supported clients for this user. backups is where full
