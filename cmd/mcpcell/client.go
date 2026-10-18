@@ -57,6 +57,7 @@ type psStatus struct {
 	} `json:"daemon"`
 	Services []struct {
 		Name      string     `json:"name"`
+		Mode      string     `json:"mode"`
 		State     string     `json:"state"`
 		LastError string     `json:"lastError"`
 		RetryAt   *time.Time `json:"retryAt"`
@@ -66,20 +67,21 @@ type psStatus struct {
 		Package *struct {
 			Version string `json:"version"`
 		} `json:"package"`
-		Instance *struct {
-			PID          int       `json:"pid"`
-			LastActiveAt time.Time `json:"lastActiveAt"`
-			Inflight     int       `json:"inflight"`
-			Sessions     int       `json:"sessions"`
-			Usage        struct {
-				Processes    int    `json:"processes"`
-				PrivateBytes uint64 `json:"privateBytes"`
-			} `json:"usage"`
-		} `json:"instance"`
+		Instance  *psInstance  `json:"instance"`
+		Instances []psInstance `json:"instances"`
 	} `json:"services"`
 	Sessions []struct {
 		Service string `json:"service"`
 	} `json:"sessions"`
+}
+
+type psInstance struct {
+	LastActiveAt time.Time `json:"lastActiveAt"`
+	Inflight     int       `json:"inflight"`
+	Usage        struct {
+		Processes    int    `json:"processes"`
+		PrivateBytes uint64 `json:"privateBytes"`
+	} `json:"usage"`
 }
 
 func runPS() error {
@@ -104,17 +106,38 @@ func runPS() error {
 		if state == "" {
 			state = "未启动"
 		}
-		if in := s.Instance; in != nil {
-			procs, mem = fmt.Sprint(in.Usage.Processes), mb(in.Usage.PrivateBytes)
-			total += in.Usage.PrivateBytes
-			act = "空闲 " + human(time.Since(in.LastActiveAt))
-			if in.Inflight > 0 {
-				act = fmt.Sprintf("处理中 %d", in.Inflight)
+		runs := s.Instances
+		if s.Instance != nil {
+			runs = append(runs, *s.Instance)
+		}
+		perSession := s.Mode == "per-session"
+		if len(runs) > 0 {
+			var n int
+			var bytes uint64
+			var inflight int
+			var last time.Time
+			for _, in := range runs {
+				n, bytes, inflight = n+in.Usage.Processes, bytes+in.Usage.PrivateBytes, inflight+in.Inflight
+				if in.LastActiveAt.After(last) {
+					last = in.LastActiveAt
+				}
+			}
+			procs, mem = fmt.Sprint(n), mb(bytes)
+			total += bytes
+			act = "空闲 " + human(time.Since(last))
+			if inflight > 0 {
+				act = fmt.Sprintf("处理中 %d", inflight)
+			}
+			if perSession {
+				act = fmt.Sprintf("%d 个会话实例 · %s", len(s.Instances), act)
 			}
 		} else if s.RetryAt != nil {
 			act = human(time.Until(*s.RetryAt)) + "后可重试"
 		} else if s.State == "cold" {
 			act = "调用时启动"
+			if perSession {
+				act = "按会话 · 调用时启动"
+			}
 		}
 		tools := "-"
 		if s.Catalog != nil {

@@ -3,12 +3,14 @@ package httpd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +33,10 @@ const (
 	// A session whose GET stream dropped and stayed quiet is almost always a
 	// client that exited without DELETE (claude -p does this).
 	orphanIdle = 10 * time.Minute
-	keepalive  = 20 * time.Second
+	// A per-session instance may be a whole browser; once its client is gone
+	// it should go too, about as soon as the native process would have.
+	sessionOrphanIdle = 2 * time.Minute
+	keepalive         = 20 * time.Second
 )
 
 func pid() int { return os.Getpid() }
@@ -40,6 +45,8 @@ type session struct {
 	id, service     string
 	client, version string
 	created         time.Time
+	init            json.RawMessage // the client's initialize params
+	done            chan struct{}   // closed when the session ends
 
 	mu        sync.Mutex
 	lastSeen  time.Time
@@ -49,9 +56,110 @@ type session struct {
 	hadStream bool
 	queue     []jsonrpc.Message
 	closed    bool
+	// Server requests waiting for the client's answer, and the POST streams
+	// open right now, which a server request prefers over the GET stream.
+	asked   map[string]chan jsonrpc.Message
+	nextAsk int
+	posts   map[int]func(jsonrpc.Message)
+	nextPos int
+
+	// How the client would have started the server (mcpcell-run sessions):
+	// a per-session instance starts with exactly this environment and
+	// directory.
+	spawnEnv []string
+	spawnDir string
 }
 
-func (ss *session) ID() string { return ss.id }
+func (ss *session) SpawnEnv() []string { return ss.spawnEnv }
+func (ss *session) SpawnDir() string   { return ss.spawnDir }
+
+func newSession(service string, initParams json.RawMessage) *session {
+	var p struct {
+		ClientInfo struct{ Name, Version string } `json:"clientInfo"`
+	}
+	_ = json.Unmarshal(initParams, &p)
+	return &session{id: randomHex(16), service: service, created: time.Now(), lastSeen: time.Now(),
+		client: strings.TrimSpace(p.ClientInfo.Name + " " + p.ClientInfo.Version), init: initParams, done: make(chan struct{})}
+}
+
+var errSessionClosed = errors.New("会话已结束")
+
+func (ss *session) ID() string                  { return ss.id }
+func (ss *session) InitParams() json.RawMessage { return ss.init }
+
+// Request relays a server request from the session's own instance to the
+// client and waits for the answer, which arrives in a later POST. It goes out
+// on a POST stream that is open (the client is waiting on a call that likely
+// caused it) or else on the GET stream.
+func (ss *session) Request(ctx context.Context, m jsonrpc.Message) (jsonrpc.Message, error) {
+	ss.mu.Lock()
+	if ss.closed {
+		ss.mu.Unlock()
+		return m, errSessionClosed
+	}
+	ss.nextAsk++
+	id := json.RawMessage(strconv.Quote("mcpcell-" + strconv.Itoa(ss.nextAsk)))
+	ch := make(chan jsonrpc.Message, 1)
+	if ss.asked == nil {
+		ss.asked = map[string]chan jsonrpc.Message{}
+	}
+	ss.asked[jsonrpc.IDKey(id)] = ch
+	var post func(jsonrpc.Message)
+	for _, p := range ss.posts {
+		post = p
+	}
+	ss.mu.Unlock()
+	defer func() {
+		ss.mu.Lock()
+		delete(ss.asked, jsonrpc.IDKey(id))
+		ss.mu.Unlock()
+	}()
+	if post != nil {
+		post(m.WithID(id))
+	} else {
+		ss.Notify(m.WithID(id))
+	}
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-ss.done:
+		return m, errSessionClosed
+	case <-ctx.Done():
+		n, _ := jsonrpc.NewNotification("notifications/cancelled", map[string]any{"requestId": id, "reason": "服务端取消了请求"})
+		ss.Notify(n)
+		return m, ctx.Err()
+	}
+}
+
+// answer hands a client's response to the server request waiting for it.
+func (ss *session) answer(m jsonrpc.Message) {
+	ss.mu.Lock()
+	ch := ss.asked[m.IDKey()]
+	ss.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- m:
+		default:
+		}
+	}
+}
+
+// openPost registers a POST response stream; the returned func removes it.
+func (ss *session) openPost(send func(jsonrpc.Message)) func() {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.posts == nil {
+		ss.posts = map[int]func(jsonrpc.Message){}
+	}
+	ss.nextPos++
+	n := ss.nextPos
+	ss.posts[n] = send
+	return func() {
+		ss.mu.Lock()
+		delete(ss.posts, n)
+		ss.mu.Unlock()
+	}
+}
 
 // Notify queues a message for the GET stream. Never blocks: when the client is
 // not reading, the oldest queued messages are dropped.
@@ -187,7 +295,8 @@ func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request, name string) {
 		case jsonrpc.Notification:
 			s.clientNotification(ss, m)
 		case jsonrpc.Response:
-			// Answers to server requests; shared instances send none.
+			// Answers to server requests from the session's own instance.
+			ss.answer(m)
 		default:
 			early = append(early, jsonrpc.NewError(m.ID, jsonrpc.CodeInvalidRequest, "无效的 JSON-RPC 消息"))
 		}
@@ -203,48 +312,58 @@ func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request, name string) {
 }
 
 func (s *Server) initialize(w http.ResponseWriter, r *http.Request, name string, m jsonrpc.Message) {
-	// From the catalog when possible: connecting a session starts nothing.
-	result, version, cached := s.pool.CachedInit(name)
+	ss := newSession(name, m.Params)
+	reply, status := s.openSession(r.Context(), ss, m)
+	if status == http.StatusOK && len(reply.Error) == 0 {
+		w.Header().Set("Mcp-Session-Id", ss.id)
+	}
+	writeMessage(w, status, reply)
+}
+
+// openSession answers ss's initialize request and registers it: from the
+// catalog when possible, so connecting starts nothing, otherwise by starting
+// the instance. The status is for an HTTP reply.
+func (s *Server) openSession(ctx context.Context, ss *session, m jsonrpc.Message) (jsonrpc.Message, int) {
+	name := ss.service
+	result, version, cached := s.pool.CachedInit(name, ss.init)
 	var inst *instance.Instance
 	if !cached {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		var err error
-		if inst, err = s.pool.Acquire(ctx, name); err != nil {
-			writeMessage(w, http.StatusOK, jsonrpc.NewError(m.ID, jsonrpc.CodeUpstreamUnavailable, "MCP 服务无法启动："+firstLine(err.Error())))
-			return
+		if inst, err = s.pool.Acquire(ctx, name, ss); err != nil {
+			return jsonrpc.NewError(m.ID, jsonrpc.CodeUpstreamUnavailable, "MCP 服务无法启动："+firstLine(err.Error())), http.StatusOK
 		}
 		result, version = inst.InitResult()
 	}
-	var p struct {
-		ClientInfo struct{ Name, Version string } `json:"clientInfo"`
-	}
-	_ = json.Unmarshal(m.Params, &p)
-	ss := &session{id: randomHex(16), service: name, version: version, created: time.Now(), lastSeen: time.Now(),
-		client: strings.TrimSpace(p.ClientInfo.Name + " " + p.ClientInfo.Version)}
+	ss.version = version
 	s.mu.Lock()
 	if len(s.sessions) >= maxSessions {
 		s.mu.Unlock()
-		writeMessage(w, http.StatusServiceUnavailable, jsonrpc.NewError(m.ID, jsonrpc.CodeInternalError, "会话数已达上限"))
-		return
+		s.pool.Release(name, ss)
+		return jsonrpc.NewError(m.ID, jsonrpc.CodeInternalError, "会话数已达上限"), http.StatusServiceUnavailable
 	}
 	s.sessions[ss.id] = ss
 	s.mu.Unlock()
 	if inst != nil {
 		inst.Attach(ss)
 	}
-	s.opts.Log.Info("session opened", "service", name, "client", ss.client, "protocol", version, "fromCatalog", cached)
-	// The upstream negotiated its protocol version once; every session on the
-	// shared instance speaks that version.
-	w.Header().Set("Mcp-Session-Id", ss.id)
-	writeMessage(w, http.StatusOK, jsonrpc.NewResult(m.ID, result))
+	s.opts.Log.Info("session opened", "service", name, "client", ss.client, "protocol", version, "fromCatalog", cached,
+		"capabilities", capabilityNames(m.Params))
+	// The answer is what an instance introduced as this client got (cached or
+	// live), so the version is the one the server negotiates with it.
+	if !s.pool.PerSession(name) {
+		go s.pool.CheckShared(name, ss)
+	}
+	return jsonrpc.NewResult(m.ID, result), http.StatusOK
 }
 
+// clientNotification relays what the session's instance should hear: a
+// shared instance only takes cancellations, a session's own instance takes
+// everything (the instance decides).
 func (s *Server) clientNotification(ss *session, m jsonrpc.Message) {
-	if m.Method == "notifications/cancelled" {
-		if inst := s.pool.Current(ss.service); inst != nil {
-			inst.Forward(ss, m)
-		}
+	if inst := s.pool.Current(ss.service, ss); inst != nil {
+		inst.Forward(ss, m)
 	}
 }
 
@@ -257,13 +376,18 @@ func (s *Server) handle(ctx context.Context, ss *session, m jsonrpc.Message, emi
 		return jsonrpc.NewError(m.ID, jsonrpc.CodeInvalidRequest, "会话已初始化")
 	case "logging/setLevel":
 		// The log level is per-process state; one client must not change it
-		// for every other client of a shared instance.
-		return jsonrpc.NewResult(m.ID, nil)
+		// for every other client of a shared instance. A session's own
+		// instance takes it, but is not started just for it.
+		inst := s.pool.Current(ss.service, ss)
+		if inst == nil || !s.pool.PerSession(ss.service) {
+			return jsonrpc.NewResult(m.ID, nil)
+		}
+		return inst.Call(ctx, ss, m, emit)
 	case "tools/list", "prompts/list", "resources/list", "resources/templates/list":
 		// The catalog holds every page merged, so only a first-page request
 		// can be answered from it.
 		if jsonrpc.Field(m.Params, "cursor") == nil {
-			if res, ok := s.pool.CachedList(ss.service, m.Method); ok {
+			if res, ok := s.pool.CachedList(ss.service, m.Method, ss.init); ok {
 				ss.touch(0)
 				return jsonrpc.NewResult(m.ID, res)
 			}
@@ -271,7 +395,7 @@ func (s *Server) handle(ctx context.Context, ss *session, m jsonrpc.Message, emi
 	}
 	ss.touch(1)
 	defer ss.touch(-1)
-	inst, err := s.pool.Acquire(ctx, ss.service)
+	inst, err := s.pool.Acquire(ctx, ss.service, ss)
 	if err != nil {
 		return jsonrpc.NewError(m.ID, jsonrpc.CodeUpstreamUnavailable, "MCP 服务无法启动："+firstLine(err.Error()))
 	}
@@ -300,6 +424,7 @@ func (s *Server) respondSSE(w http.ResponseWriter, r *http.Request, ss *session,
 	for _, m := range early {
 		send(m)
 	}
+	defer ss.openPost(send)()
 	done := make(chan struct{})
 	go func() {
 		t := time.NewTicker(keepalive)
@@ -426,30 +551,41 @@ func (s *Server) endSession(ss *session) {
 	delete(s.sessions, ss.id)
 	s.mu.Unlock()
 	ss.mu.Lock()
+	if ss.closed {
+		ss.mu.Unlock()
+		return
+	}
 	ss.closed = true
 	if ss.stream != nil {
 		close(ss.stream)
 		ss.stream = nil
 	}
+	close(ss.done)
 	ss.mu.Unlock()
-	if inst := s.pool.Current(ss.service); inst != nil {
-		inst.Detach(ss)
-	}
+	s.pool.Release(ss.service, ss)
 	s.opts.Log.Info("session closed", "service", ss.service, "client", ss.client)
 }
 
 func (s *Server) expireSessions(now time.Time) {
 	s.mu.Lock()
-	var stale []*session
+	all := make([]*session, 0, len(s.sessions))
 	for _, ss := range s.sessions {
+		all = append(all, ss)
+	}
+	s.mu.Unlock()
+	var stale []*session
+	for _, ss := range all {
+		orphan := orphanIdle
+		if s.pool.PerSession(ss.service) {
+			orphan = sessionOrphanIdle
+		}
 		ss.mu.Lock()
 		idle := now.Sub(ss.lastSeen)
-		if ss.inflight == 0 && ss.stream == nil && (idle > sessionIdle || ss.hadStream && idle > orphanIdle) {
+		if ss.inflight == 0 && ss.stream == nil && (idle > sessionIdle || ss.hadStream && idle > orphan) {
 			stale = append(stale, ss)
 		}
 		ss.mu.Unlock()
 	}
-	s.mu.Unlock()
 	for _, ss := range stale {
 		s.endSession(ss)
 	}
@@ -491,6 +627,21 @@ func (s *Server) sessionInfos() []sessionInfo {
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].CreatedAt.Before(out[b].CreatedAt) })
 	return out
+}
+
+// capabilityNames lists what a client declared at initialize (roots,
+// sampling, ...), without the values, for the log.
+func capabilityNames(params json.RawMessage) string {
+	var p struct {
+		Capabilities map[string]json.RawMessage `json:"capabilities"`
+	}
+	_ = json.Unmarshal(params, &p)
+	names := make([]string, 0, len(p.Capabilities))
+	for k := range p.Capabilities {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
 }
 
 func writeMessage(w http.ResponseWriter, status int, m jsonrpc.Message) {

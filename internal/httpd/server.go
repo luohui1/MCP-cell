@@ -50,6 +50,9 @@ type Options struct {
 	Shutdown func()
 	// Desktop is the tray icon and app window, if this daemon has them.
 	Desktop Desktop
+	// Wrapper is the installed mcpcell-run. Takeovers keep the entry's
+	// command and wrap it; without it they point entries at /s/<name>.
+	Wrapper string
 }
 
 type Server struct {
@@ -85,6 +88,7 @@ func randomHex(n int) string {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/s/{name}", s.handleMCP)
+	mux.HandleFunc("GET /run", s.handleRun)
 	mux.HandleFunc("GET /api/status", s.api(s.handleStatus))
 	mux.HandleFunc("POST /api/services/{name}/stop", s.api(s.handleStop))
 	mux.HandleFunc("POST /api/services/{name}/start", s.api(s.handleStart))
@@ -268,7 +272,16 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	if _, err := s.pool.Acquire(ctx, r.PathValue("name")); err != nil {
+	name := r.PathValue("name")
+	var err error
+	if s.pool.PerSession(name) {
+		// A per-session service only runs for a session; starting it here
+		// just checks that it starts and caches its catalog.
+		err = s.pool.Warm(ctx, name)
+	} else {
+		_, err = s.pool.Acquire(ctx, name, nil)
+	}
+	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, pool.ErrUnknownService) {
 			status = http.StatusNotFound

@@ -51,7 +51,7 @@ func TestConcurrentAcquireStartsOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			inst, err := p.Acquire(context.Background(), "fake")
+			inst, err := p.Acquire(context.Background(), "fake", nil)
 			if err != nil {
 				t.Error(err)
 			}
@@ -71,7 +71,7 @@ func TestConcurrentAcquireStartsOnce(t *testing.T) {
 
 func TestReapIdle(t *testing.T) {
 	p := newPool(t, "50ms")
-	inst, err := p.Acquire(context.Background(), "fake")
+	inst, err := p.Acquire(context.Background(), "fake", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,10 +80,10 @@ func TestReapIdle(t *testing.T) {
 		t.Fatal("reaped too early")
 	}
 	p.Reap(time.Now().Add(time.Second))
-	if inst.Alive() || p.Current("fake") != nil {
+	if inst.Alive() || p.Current("fake", nil) != nil {
 		t.Fatal("idle instance survived reaping")
 	}
-	again, err := p.Acquire(context.Background(), "fake")
+	again, err := p.Acquire(context.Background(), "fake", nil)
 	if err != nil || again == inst {
 		t.Fatalf("expected a fresh instance after reaping: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestReapIdle(t *testing.T) {
 
 func TestCrashRestartsWithNewProcess(t *testing.T) {
 	p := newPool(t, "10m")
-	inst, _ := p.Acquire(context.Background(), "fake")
+	inst, _ := p.Acquire(context.Background(), "fake", nil)
 	pid := inst.Snapshot().PID
 	req, _ := jsonrpc.NewRequest(json.RawMessage(`1`), "tools/call", map[string]any{"name": "crash", "arguments": map[string]any{}})
 	go inst.Call(context.Background(), dummy{}, req, func(jsonrpc.Message) {})
@@ -101,7 +101,7 @@ func TestCrashRestartsWithNewProcess(t *testing.T) {
 	if st.State != "cold" || st.LastError == "" {
 		t.Fatalf("after crash: %+v", st)
 	}
-	next, err := p.Acquire(context.Background(), "fake")
+	next, err := p.Acquire(context.Background(), "fake", nil)
 	if err != nil || next.Snapshot().PID == pid {
 		t.Fatalf("restart: %v", err)
 	}
@@ -109,17 +109,17 @@ func TestCrashRestartsWithNewProcess(t *testing.T) {
 
 func TestFailedStartBacksOff(t *testing.T) {
 	p := newPool(t, "10m")
-	if _, err := p.Acquire(context.Background(), "broken"); err == nil {
+	if _, err := p.Acquire(context.Background(), "broken", nil); err == nil {
 		t.Fatal("expected start failure")
 	}
 	st := p.Status()[0]
 	if st.Name != "broken" || st.State != "failed" || st.RetryAt == nil {
 		t.Fatalf("status %+v", st)
 	}
-	if _, err := p.Acquire(context.Background(), "broken"); err == nil {
+	if _, err := p.Acquire(context.Background(), "broken", nil); err == nil {
 		t.Fatal("retried during backoff")
 	}
-	if _, err := p.Acquire(context.Background(), "nope"); err != ErrUnknownService {
+	if _, err := p.Acquire(context.Background(), "nope", nil); err != ErrUnknownService {
 		t.Fatal(err)
 	}
 }
@@ -156,10 +156,10 @@ func newPoolWith(t *testing.T, cfgJSON string, opts Options) *Pool {
 
 func TestBudgetEvictsLeastRecentlyUsedIdle(t *testing.T) {
 	p := newPoolWith(t, `{"limits":{"maxInstances":2},"services":{"a":{"command":"x"},"b":{"command":"x"},"c":{"command":"x"}}}`, Options{})
-	a, _ := p.Acquire(context.Background(), "a")
+	a, _ := p.Acquire(context.Background(), "a", nil)
 	time.Sleep(20 * time.Millisecond)
-	b, _ := p.Acquire(context.Background(), "b")
-	if _, err := p.Acquire(context.Background(), "c"); err != nil {
+	b, _ := p.Acquire(context.Background(), "b", nil)
+	if _, err := p.Acquire(context.Background(), "c", nil); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -173,11 +173,11 @@ func TestBudgetEvictsLeastRecentlyUsedIdle(t *testing.T) {
 	// Both remaining instances busy: a new start must be refused, not evict.
 	slow, _ := jsonrpc.NewRequest(json.RawMessage(`1`), "tools/call", map[string]any{"name": "slow", "arguments": map[string]any{"ms": 1500}})
 	for _, n := range []string{"b", "c"} {
-		inst := p.Current(n)
+		inst := p.Current(n, nil)
 		go inst.Call(context.Background(), dummy{}, slow, func(jsonrpc.Message) {})
 	}
 	time.Sleep(200 * time.Millisecond)
-	if _, err := p.Acquire(context.Background(), "a"); err == nil || !strings.Contains(err.Error(), "上限") {
+	if _, err := p.Acquire(context.Background(), "a", nil); err == nil || !strings.Contains(err.Error(), "上限") {
 		t.Fatalf("expected budget refusal, got %v", err)
 	}
 }
@@ -195,33 +195,33 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func TestCatalogServesWhileCold(t *testing.T) {
 	store := catalog.OpenStore(t.TempDir())
 	p := newPoolWith(t, `{"services":{"fake":{"command":"x"},"live":{"command":"x","catalog":"off"}}}`, Options{Catalog: store})
-	if _, _, ok := p.CachedInit("fake"); ok {
+	if _, _, ok := p.CachedInit("fake", nil); ok {
 		t.Fatal("catalog before first start")
 	}
-	if _, err := p.Acquire(context.Background(), "fake"); err != nil {
+	if _, err := p.Acquire(context.Background(), "fake", nil); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "catalog", func() bool { _, ok := p.CachedList("fake", "tools/list"); return ok })
+	waitFor(t, "catalog", func() bool { _, ok := p.CachedList("fake", "tools/list", nil); return ok })
 	p.Stop("fake", "test")
-	if p.Current("fake") != nil {
+	if p.Current("fake", nil) != nil {
 		t.Fatal("still running")
 	}
-	if _, v, ok := p.CachedInit("fake"); !ok || v == "" {
+	if _, v, ok := p.CachedInit("fake", nil); !ok || v == "" {
 		t.Fatal("initialize not answerable while cold")
 	}
-	raw, ok := p.CachedList("fake", "tools/list")
+	raw, ok := p.CachedList("fake", "tools/list", nil)
 	if !ok || !strings.Contains(string(raw), `"slow"`) {
 		t.Fatalf("tools/list while cold: %s", raw)
 	}
-	if st := p.Status()[0]; st.Catalog == nil || st.Catalog.Tools != 5 || st.Catalog.Prompts != 1 {
+	if st := p.Status()[0]; st.Catalog == nil || st.Catalog.Tools != 9 || st.Catalog.Prompts != 1 {
 		t.Fatalf("status catalog %+v", st.Catalog)
 	}
 	// catalog "off" never caches.
-	if _, err := p.Acquire(context.Background(), "live"); err != nil {
+	if _, err := p.Acquire(context.Background(), "live", nil); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
-	if _, ok := p.CachedList("live", "tools/list"); ok {
+	if _, ok := p.CachedList("live", "tools/list", nil); ok {
 		t.Fatal(`catalog "off" service was cached`)
 	}
 }
@@ -231,8 +231,8 @@ func TestListChangedRefreshesCatalog(t *testing.T) {
 	p := newPoolWith(t, `{"services":{"fake":{"command":"x"}}}`, Options{Catalog: store})
 	changed := make(chan string, 4)
 	p.OnListChange(func(service, list string) { changed <- service + " " + list })
-	inst, _ := p.Acquire(context.Background(), "fake")
-	waitFor(t, "catalog", func() bool { _, ok := p.CachedList("fake", "tools/list"); return ok })
+	inst, _ := p.Acquire(context.Background(), "fake", nil)
+	waitFor(t, "catalog", func() bool { _, ok := p.CachedList("fake", "tools/list", nil); return ok })
 	req, _ := jsonrpc.NewRequest(json.RawMessage(`1`), "tools/call", map[string]any{"name": "add_tool", "arguments": map[string]any{"text": "z"}})
 	inst.Call(context.Background(), dummy{}, req, func(jsonrpc.Message) {})
 	select {
@@ -243,7 +243,7 @@ func TestListChangedRefreshesCatalog(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no catalog change reported")
 	}
-	raw, ok := p.CachedList("fake", "tools/list")
+	raw, ok := p.CachedList("fake", "tools/list", nil)
 	if !ok || !strings.Contains(string(raw), "extra_z") {
 		t.Fatalf("catalog not refreshed: %s", raw)
 	}
@@ -271,7 +271,7 @@ func TestBuildSpecFlattensNpx(t *testing.T) {
 	defer p.Close()
 
 	before := p.fingerprint(cfg.Services["srv"])
-	spec, direct, note := p.buildSpec(context.Background(), "srv", cfg.Services["srv"])
+	spec, direct, note := p.buildSpec(context.Background(), "srv", cfg.Services["srv"], nil)
 	if !direct || note != "" || len(spec.Argv) != 5 || !strings.HasSuffix(strings.ToLower(filepath.Base(spec.Argv[0])), "node.exe") && filepath.Base(spec.Argv[0]) != "node" {
 		t.Fatalf("argv %q direct=%v note=%q", spec.Argv, direct, note)
 	}
@@ -290,7 +290,7 @@ func TestBuildSpecFlattensNpx(t *testing.T) {
 	if st := p.Status(); st[1].Package == nil || st[1].Package.Version != "3.1.4" {
 		t.Fatalf("status package %+v", st[1].Package)
 	}
-	spec, direct, _ = p.buildSpec(context.Background(), "keep", cfg.Services["keep"])
+	spec, direct, _ = p.buildSpec(context.Background(), "keep", cfg.Services["keep"], nil)
 	if direct || spec.Argv[0] != "npx" || installs != 1 {
 		t.Fatalf(`flatten:false still flattened: %q (installs %d)`, spec.Argv, installs)
 	}
@@ -303,7 +303,7 @@ func TestBuildSpecFallsBackToNpx(t *testing.T) {
 	cfg, _ := registry.Parse([]byte(`{"services":{"srv":{"command":"npx","args":["-y","@x/srv"]}}}`))
 	p := New(cfg, Options{Packages: pkgs, ParentEnv: os.Environ(), DefaultDir: os.TempDir()})
 	defer p.Close()
-	spec, direct, note := p.buildSpec(context.Background(), "srv", cfg.Services["srv"])
+	spec, direct, note := p.buildSpec(context.Background(), "srv", cfg.Services["srv"], nil)
 	if direct || spec.Argv[0] != "npx" || !strings.Contains(note, "offline") {
 		t.Fatalf("argv %q direct=%v note=%q", spec.Argv, direct, note)
 	}
@@ -311,7 +311,7 @@ func TestBuildSpecFallsBackToNpx(t *testing.T) {
 
 func TestPutAndRemove(t *testing.T) {
 	p := newPoolWith(t, `{"services":{"fake":{"command":"x"}}}`, Options{})
-	inst, _ := p.Acquire(context.Background(), "fake")
+	inst, _ := p.Acquire(context.Background(), "fake", nil)
 	def, _ := registry.ParseService("fake", []byte(`{"command":"x","idleTimeout":"5m"}`))
 	p.Put("fake", def)
 	select {
@@ -327,7 +327,7 @@ func TestPutAndRemove(t *testing.T) {
 	if !p.Has("added") {
 		t.Fatal("added service missing")
 	}
-	again, _ := p.Acquire(context.Background(), "fake")
+	again, _ := p.Acquire(context.Background(), "fake", nil)
 	if !p.Remove("fake") || p.Has("fake") {
 		t.Fatal("remove failed")
 	}

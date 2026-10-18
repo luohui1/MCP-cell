@@ -45,7 +45,8 @@ func TestParseRejects(t *testing.T) {
 	for _, in := range []string{
 		`{"services":{"bad name":{"command":"x"}}}`,
 		`{"services":{"a":{"args":["x"]}}}`,
-		`{"services":{"a":{"command":"x","mode":"per-session"}}}`,
+		`{"services":{"a":{"command":"x","mode":"per-workspace"}}}`,
+		`{"services":{"a":{"command":"x","mode":"exclusive"}}}`,
 		`{"services":{"a":{"command":"x","idleTimeout":"soon"}}}`,
 		`{"services":{"a":{"command":"x","typo":1}}}`,
 		`{"services":{"a":{"command":"x","memoryLimit":"lots"}}}`,
@@ -55,6 +56,19 @@ func TestParseRejects(t *testing.T) {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("accepted %s", in)
 		}
+	}
+}
+
+func TestPerSessionIdleDefault(t *testing.T) {
+	cfg, err := Parse([]byte(`{"services":{"a":{"command":"x","mode":"per-session"},"b":{"command":"x","mode":"per-session","idleTimeout":"5m"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := cfg.Services["a"]; !a.PerSession() || a.Idle() != DefaultSessionIdle {
+		t.Errorf("a: per-session %v, idle %s", a.PerSession(), a.Idle())
+	}
+	if b := cfg.Services["b"]; b.Idle() != 5*time.Minute {
+		t.Errorf("b: idle %s", b.Idle())
 	}
 }
 

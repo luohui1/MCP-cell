@@ -57,8 +57,13 @@ func startWithHome(t *testing.T) (*harness, string) {
 
 // startWith runs the daemon's HTTP side; a non-nil store enables the catalog.
 func startWith(t *testing.T, store *catalog.Store) *harness {
+	return startConfig(t, store, `{"services":{"fake":{"command":"fake"}}}`)
+}
+
+// startConfig is startWith with a given config; every service is the fake.
+func startConfig(t *testing.T, store *catalog.Store, config string) *harness {
 	t.Helper()
-	cfg, err := registry.Parse([]byte(`{"services":{"fake":{"command":"fake"}}}`))
+	cfg, err := registry.Parse([]byte(config))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +97,12 @@ func (a authRT) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func (h *harness) connect(t *testing.T, opts *mcp.ClientOptions) *mcp.ClientSession {
 	t.Helper()
-	client := mcp.NewClient(&mcp.Implementation{Name: "sdk-test", Version: "1.0"}, opts)
-	tr := &mcp.StreamableClientTransport{Endpoint: h.base + "/s/fake",
+	return h.connectClient(t, mcp.NewClient(&mcp.Implementation{Name: "sdk-test", Version: "1.0"}, opts), "fake")
+}
+
+func (h *harness) connectClient(t *testing.T, client *mcp.Client, service string) *mcp.ClientSession {
+	t.Helper()
+	tr := &mcp.StreamableClientTransport{Endpoint: h.base + "/s/" + service,
 		HTTPClient: &http.Client{Transport: authRT{http.DefaultTransport}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -472,7 +481,7 @@ func TestConnectAndListStartNothing(t *testing.T) {
 	for range 3 {
 		cs := h.connect(t, nil)
 		tools, err := cs.ListTools(context.Background(), nil)
-		if err != nil || len(tools.Tools) != 5 {
+		if err != nil || len(tools.Tools) != 9 {
 			t.Fatalf("list from catalog: %v %v", tools, err)
 		}
 		clients = append(clients, cs)
@@ -602,18 +611,21 @@ func TestTakeoverAPI(t *testing.T) {
 	if len(out.Results) != 3 || !out.Results[0].OK || !out.Results[0].Created || out.Results[0].Service != "context7" {
 		t.Fatalf("attach: %s", body)
 	}
-	if out.Results[1].OK || out.Results[2].OK {
-		t.Fatalf("unknown and remote entries must not be taken over without force: %s", body)
+	if !out.Results[1].OK || out.Results[2].OK {
+		t.Fatalf("an unknown entry is taken over per session, a remote one never: %s", body)
 	}
 	cfg, _ := registry.Load(home)
 	if cfg.Services["context7"] == nil || cfg.Services["context7"].Args[1] != "@upstash/context7-mcp" {
 		t.Fatalf("service not created from the entry: %+v", cfg.Services)
 	}
+	if cfg.Services["context7"].Mode != registry.ModeShared || cfg.Services["mine"].Mode != registry.ModePerSession {
+		t.Fatalf("modes: context7 %q, mine %q", cfg.Services["context7"].Mode, cfg.Services["mine"].Mode)
+	}
 	if b, _ := os.ReadFile(cursorFile); !strings.Contains(string(b), h.base+"/s/context7") || !strings.Contains(string(b), `"remote": { "url"`) {
 		t.Fatalf("cursor config after attach:\n%s", b)
 	}
 	if _, body := h.apiCall(t, "POST", "/api/clients/cursor/attach", `{"names":["mine"],"force":true}`); !strings.Contains(body, `"ok":true`) {
-		t.Fatalf("forced attach: %s", body)
+		t.Fatalf("attaching again: %s", body)
 	}
 	_, list := h.apiCall(t, "GET", "/api/clients", "")
 	if !strings.Contains(list, `"takenOver":true`) || strings.Contains(list, "my_server.py\",\"env") {
@@ -751,5 +763,61 @@ func TestDesktopAPI(t *testing.T) {
 	// LoginURL mints the same one-time links as /api/login-code.
 	if !strings.HasPrefix(h.srv.LoginURL(), "http://127.0.0.1:") {
 		t.Fatalf("LoginURL = %s", h.srv.LoginURL())
+	}
+}
+
+func TestPerSessionOverHTTP(t *testing.T) {
+	h := startConfig(t, nil, `{"services":{"solo":{"command":"x","mode":"per-session"}}}`)
+	session := func(name, root string) *mcp.ClientSession {
+		c := mcp.NewClient(&mcp.Implementation{Name: name, Version: "1.0"}, nil)
+		c.AddRoots(&mcp.Root{URI: root})
+		return h.connectClient(t, c, "solo")
+	}
+	a, b := session("sdk-a", "file:///work/a"), session("sdk-b", "file:///work/b")
+	call := func(cs *mcp.ClientSession, tool string) string {
+		return callText(t, cs, &mcp.CallToolParams{Name: tool})
+	}
+	pa, pb := call(a, "pid"), call(b, "pid")
+	if pa == pb || call(a, "pid") != pa {
+		t.Fatalf("pids a=%s b=%s: each session needs its own instance, kept across calls", pa, pb)
+	}
+	// Server requests reach the right client, which answers them over HTTP.
+	if got := call(a, "roots"); got != "file:///work/a" {
+		t.Fatalf("roots for a = %q", got)
+	}
+	if got := call(b, "roots"); got != "file:///work/b" {
+		t.Fatalf("roots for b = %q", got)
+	}
+	if got := call(b, "client"); got != "sdk-b" {
+		t.Fatalf("the instance should introduce itself as its client, got %q", got)
+	}
+	var solo pool.ServiceStatus
+	for _, s := range h.status(t).Services {
+		if s.Name == "solo" {
+			solo = s
+		}
+	}
+	if solo.Instance != nil || len(solo.Instances) != 2 {
+		t.Fatalf("status: %+v", solo)
+	}
+	a.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n := -1
+		for _, s := range h.status(t).Services {
+			if s.Name == "solo" {
+				n = len(s.Instances)
+			}
+		}
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("closing session a left %d instances", n)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if call(b, "pid") != pb {
+		t.Fatal("closing a disturbed b's instance")
 	}
 }

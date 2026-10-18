@@ -94,7 +94,7 @@ func (c *ClaudeCode) replace(name string, value string) error {
 	return err
 }
 
-func (c *ClaudeCode) Attach(name, url, token string) (Record, error) {
+func (c *ClaudeCode) Attach(name string, t Target) (Record, error) {
 	rec := Record{Client: c.ID(), Name: name, At: time.Now()}
 	raw, err := c.raw(name)
 	if err != nil {
@@ -108,7 +108,14 @@ func (c *ClaudeCode) Attach(name, url, token string) (Record, error) {
 		return rec, err
 	}
 	original, _ := json.Marshal(json.RawMessage(stripJSONC(raw))) // compact
-	written, _ := json.Marshal(httpEntry(true, url, token))
+	written, _ := json.Marshal(httpEntry(true, t.URL, t.Token))
+	if t.wrapped() {
+		o, err := wrapJSON(raw, t.Wrapper, entryFromJSON(c.ID(), name, raw))
+		if err != nil {
+			return rec, err
+		}
+		written, _ = marshalPlain(o)
+	}
 	rec.Original, rec.Written = string(original), string(written)
 	if err := c.replace(name, rec.Written); err != nil {
 		// Put the original back if the add half failed after the remove.
@@ -117,13 +124,13 @@ func (c *ClaudeCode) Attach(name, url, token string) (Record, error) {
 		}
 		return rec, err
 	}
-	if now, err := c.raw(name); err != nil || entryFromJSON(c.ID(), name, now).URL != url {
+	if now, err := c.raw(name); err != nil || !t.applied(entryFromJSON(c.ID(), name, now)) {
 		return rec, fmt.Errorf("Claude Code 没有保存新的 %s 配置", name)
 	}
 	return rec, nil
 }
 
-func (c *ClaudeCode) Add(name, url, token string) (Record, error) {
+func (c *ClaudeCode) Add(name string, t Target) (Record, error) {
 	rec := Record{Client: c.ID(), Name: name, Added: true, At: time.Now()}
 	if _, err := c.raw(name); err == nil {
 		return rec, ErrExists
@@ -133,12 +140,15 @@ func (c *ClaudeCode) Add(name, url, token string) (Record, error) {
 			return rec, err
 		}
 	}
-	written, _ := json.Marshal(httpEntry(true, url, token))
+	written, _ := json.Marshal(httpEntry(true, t.URL, t.Token))
+	if t.wrapped() {
+		written, _ = marshalPlain(newJSON(true, t.Wrapper, t.Server))
+	}
 	rec.Written = string(written)
 	if _, err := c.run("mcp", "add-json", "-s", "user", name, rec.Written); err != nil {
 		return rec, err
 	}
-	if now, err := c.raw(name); err != nil || entryFromJSON(c.ID(), name, now).URL != url {
+	if now, err := c.raw(name); err != nil || !t.applied(entryFromJSON(c.ID(), name, now)) {
 		return rec, fmt.Errorf("Claude Code 没有保存新的 %s 配置", name)
 	}
 	return rec, nil

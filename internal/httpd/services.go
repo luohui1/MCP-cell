@@ -1,11 +1,13 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/luohui1/MCP-cell/internal/registry"
 )
@@ -19,6 +21,7 @@ type serviceForm struct {
 	Args        []string           `json:"args"`
 	Env         map[string]*string `json:"env"`
 	Cwd         string             `json:"cwd"`
+	Mode        string             `json:"mode"`        // shared | per-session
 	IdleTimeout string             `json:"idleTimeout"` // "" default, "0" never
 	MemoryLimit string             `json:"memoryLimit"` // "" none
 	Flatten     bool               `json:"flatten"`
@@ -27,7 +30,7 @@ type serviceForm struct {
 }
 
 func formOf(name string, s *registry.Service) serviceForm {
-	f := serviceForm{Name: name, Command: s.Command, Args: s.Args, Env: map[string]*string{}, Cwd: s.Cwd,
+	f := serviceForm{Name: name, Command: s.Command, Args: s.Args, Env: map[string]*string{}, Cwd: s.Cwd, Mode: s.Mode,
 		Flatten: s.FlattenEnabled(), Catalog: s.CatalogEnabled(), Lean: s.LeanEnabled()}
 	if f.Args == nil {
 		f.Args = []string{}
@@ -71,6 +74,9 @@ func (f serviceForm) service(prev *registry.Service) (*registry.Service, error) 
 	}
 	if f.Cwd != "" {
 		raw["cwd"] = f.Cwd
+	}
+	if f.Mode != "" {
+		raw["mode"] = f.Mode
 	}
 	if f.IdleTimeout != "" {
 		raw["idleTimeout"] = f.IdleTimeout
@@ -159,6 +165,7 @@ func (s *Server) handleSaveService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.pool.Put(f.Name, saved)
+	go s.warm(f.Name)
 	if !creating {
 		// The edited definition may expose different tools.
 		s.notifyListChanged(f.Name, "tools/list")
@@ -194,4 +201,20 @@ func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
 	}
 	s.opts.Log.Info("service deleted", "service", name)
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+// warm starts a new or changed service once in the background: it checks that
+// the service starts and caches its catalog, so the sessions that connect next
+// are answered from the catalog instead of each starting an instance.
+func (s *Server) warm(name string) {
+	if s.pool.Cataloged(name) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := s.pool.Warm(ctx, name); err != nil {
+		s.opts.Log.Warn("service does not start", "service", name, "err", firstLine(err.Error()))
+		return
+	}
+	s.opts.Log.Info("service checked and catalog cached", "service", name)
 }

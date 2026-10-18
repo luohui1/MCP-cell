@@ -18,7 +18,7 @@ func TestRealClaudeCLI(t *testing.T) {
 	write(t, path, `{"mcpServers":{"demo":{"type":"stdio","command":"cmd","args":["/c","npx","-y","@upstash/context7-mcp"],"env":{"K":"v"}}}}`)
 	c := NewClaudeCode(dir, t.TempDir(), nil)
 	inTemp(t, c.Path())
-	rec, err := c.Attach("demo", base+"/s/demo", tok)
+	rec, err := c.Attach("demo", Target{URL: base + "/s/demo", Token: tok})
 	if err != nil {
 		t.Fatal(err)
 	}

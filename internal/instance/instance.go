@@ -30,12 +30,25 @@ const ProtocolVersion = "2025-11-25"
 
 const maxFrame = 16 << 20
 
+// serverRequestTimeout bounds how long an upstream waits for its client to
+// answer; elicitation waits on a person, so it is generous.
+const serverRequestTimeout = 10 * time.Minute
+
 // Downstream is one client session as seen by an instance.
 type Downstream interface {
 	ID() string
 	// Notify delivers a server message that belongs to no particular request
 	// (list_changed, log messages, resource updates). It must not block.
 	Notify(jsonrpc.Message)
+}
+
+// Requester is a session that can answer requests from the server
+// (roots/list, sampling, elicitation). An instance owned by one session
+// forwards them to it; a shared instance only when a single session has
+// calls in flight, since otherwise it cannot know which client to ask.
+type Requester interface {
+	Downstream
+	Request(ctx context.Context, m jsonrpc.Message) (jsonrpc.Message, error)
 }
 
 type Options struct {
@@ -48,6 +61,17 @@ type Options struct {
 	// */list_changed, before sessions are told, so a cache can be marked stale
 	// before clients re-list.
 	OnListChanged func(notification string)
+	// Client is what the handshake introduces the instance with: its
+	// protocolVersion, capabilities and clientInfo replace MCPcell's own, so
+	// the server answers as it would answer that client.
+	Client json.RawMessage
+	// Owner makes the instance exclusive to one session: server requests and
+	// client notifications pass through as they would without MCPcell.
+	Owner Requester
+	// OnServerRequest runs when an instance without an owner (a shared one)
+	// gets a request from the server: the server talks to its client in ways
+	// only a session's own instance can carry.
+	OnServerRequest func(method string)
 }
 
 type Instance struct {
@@ -67,6 +91,7 @@ type Instance struct {
 	tokens     map[string]*call // rewritten progress token -> call
 	attached   map[string]Downstream
 	subs       map[string]map[string]Downstream // resource uri -> sessions
+	serverReqs map[string]context.CancelFunc    // server requests waiting on the owner
 	lastActive time.Time
 	calls      uint64
 	failures   uint64
@@ -113,7 +138,7 @@ func Start(opts Options) (*Instance, error) {
 		log:     opts.Log.With("service", opts.Name, "pid", p.Pid),
 		pending: map[int64]*call{}, byDown: map[string]int64{}, tokens: map[string]*call{},
 		attached: map[string]Downstream{}, subs: map[string]map[string]Downstream{},
-		done: make(chan struct{}),
+		serverReqs: map[string]context.CancelFunc{}, done: make(chan struct{}),
 	}
 	go i.drainStderr()
 	go i.readLoop()
@@ -133,6 +158,11 @@ func (i *Instance) handshake() error {
 		"protocolVersion": ProtocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "mcpcell", "version": i.opts.Version},
+	}
+	for _, k := range []string{"protocolVersion", "capabilities", "clientInfo"} {
+		if v := jsonrpc.Field(i.opts.Client, k); v != nil {
+			params[k] = v
+		}
 	}
 	req, _ := jsonrpc.NewRequest(json.RawMessage(`0`), "initialize", params)
 	c, out, err := i.register(nil, req)
@@ -298,9 +328,13 @@ func (i *Instance) unsubscribeLocally(ds Downstream, req jsonrpc.Message) bool {
 
 // Forward relays a client notification. Only cancellation is meaningful for a
 // shared upstream; initialized, roots/list_changed and the like describe one
-// client's state and must not leak to the others.
+// client's state and must not leak to the others. An exclusive instance gets
+// them all, except initialized, which MCPcell already sent.
 func (i *Instance) Forward(ds Downstream, m jsonrpc.Message) {
 	if m.Method != "notifications/cancelled" {
+		if i.opts.Owner != nil && m.Method != "notifications/initialized" {
+			_ = i.write(m)
+		}
 		return
 	}
 	key := ds.ID() + "\x00" + jsonrpc.IDKey(jsonrpc.Field(m.Params, "requestId"))
@@ -405,6 +439,9 @@ func (i *Instance) finish() {
 	i.closed = true
 	pending := i.pending
 	i.pending, i.byDown, i.tokens = map[int64]*call{}, map[string]int64{}, map[string]*call{}
+	for _, cancel := range i.serverReqs {
+		cancel()
+	}
 	reason := i.stopReason
 	i.mu.Unlock()
 	msg := "MCP 服务进程已退出，调用结果未知，未自动重试"
@@ -429,14 +466,68 @@ func (i *Instance) dispatch(m jsonrpc.Message) {
 	case jsonrpc.Request:
 		// Answer off the read loop: writing stdin while the server is blocked
 		// writing stdout would deadlock.
-		var reply jsonrpc.Message
 		if m.Method == "ping" {
-			reply = jsonrpc.NewResult(m.ID, nil)
-		} else {
-			reply = jsonrpc.NewError(m.ID, jsonrpc.CodeMethodNotFound, "MCPcell 共享实例不转发服务端请求 "+m.Method)
+			go func() { _ = i.write(jsonrpc.NewResult(m.ID, nil)) }()
+			return
 		}
-		go func() { _ = i.write(reply) }()
+		to := i.opts.Owner
+		if to == nil {
+			// A shared instance: the request can only belong to a call in
+			// flight, so it goes to the session making calls when there is
+			// exactly one. Either way the server needs sessions of its own.
+			to = i.soleCaller()
+			if i.opts.OnServerRequest != nil {
+				go i.opts.OnServerRequest(m.Method)
+			}
+		}
+		if to == nil {
+			reply := jsonrpc.NewError(m.ID, jsonrpc.CodeMethodNotFound, "MCPcell 共享实例无法确定该问哪个客户端："+m.Method)
+			go func() { _ = i.write(reply) }()
+			return
+		}
+		i.mu.Lock()
+		ctx, cancel := context.WithTimeout(context.Background(), serverRequestTimeout)
+		i.serverReqs[m.IDKey()] = cancel
+		i.mu.Unlock()
+		go i.ask(ctx, to, m)
 	}
+}
+
+// soleCaller returns the one session with calls in flight, if exactly one
+// has any and it can answer requests.
+func (i *Instance) soleCaller() Requester {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var only Downstream
+	for _, c := range i.pending {
+		switch {
+		case c.ds == nil:
+		case only == nil:
+			only = c.ds
+		case only.ID() != c.ds.ID():
+			return nil
+		}
+	}
+	r, _ := only.(Requester)
+	return r
+}
+
+// ask forwards a server request to a session and writes its answer back
+// under the server's id.
+func (i *Instance) ask(ctx context.Context, to Requester, m jsonrpc.Message) {
+	resp, err := to.Request(ctx, m)
+	i.mu.Lock()
+	if cancel := i.serverReqs[m.IDKey()]; cancel != nil {
+		cancel()
+		delete(i.serverReqs, m.IDKey())
+	}
+	i.lastActive = time.Now()
+	i.mu.Unlock()
+	reply := resp.WithID(m.ID)
+	if err != nil {
+		reply = jsonrpc.NewError(m.ID, jsonrpc.CodeInternalError, "客户端没有应答 "+m.Method+"："+err.Error())
+	}
+	_ = i.write(reply)
 }
 
 func (i *Instance) onResponse(m jsonrpc.Message) {
@@ -492,7 +583,13 @@ func (i *Instance) onNotification(m jsonrpc.Message) {
 			ds.Notify(m)
 		}
 	case "notifications/cancelled":
-		// Cancels a server-to-client request; shared instances forward none.
+		// Cancels a server-to-client request; only an exclusive instance has
+		// any in flight.
+		i.mu.Lock()
+		if cancel := i.serverReqs[jsonrpc.IDKey(jsonrpc.Field(m.Params, "requestId"))]; cancel != nil {
+			cancel()
+		}
+		i.mu.Unlock()
 	default:
 		if strings.HasSuffix(m.Method, "/list_changed") && i.opts.OnListChanged != nil {
 			i.opts.OnListChanged(m.Method)
@@ -565,7 +662,7 @@ func (i *Instance) InitResult() (json.RawMessage, string) {
 func (i *Instance) Idle() (bool, time.Time) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return len(i.pending) == 0, i.lastActive
+	return len(i.pending) == 0 && len(i.serverReqs) == 0, i.lastActive
 }
 
 func (i *Instance) StopReason() string {

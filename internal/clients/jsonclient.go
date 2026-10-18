@@ -120,7 +120,7 @@ func (c *Cursor) Name() string           { return "Cursor" }
 func (c *Cursor) Path() string           { return c.path }
 func (c *Cursor) List() ([]Entry, error) { return listJSON(c.ID(), c.path) }
 
-func (c *Cursor) Attach(name, url, token string) (Record, error) {
+func (c *Cursor) Attach(name string, t Target) (Record, error) {
 	rec := Record{Client: c.ID(), Name: name}
 	backup, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
 		start, end, err := valueSpan(old, "mcpServers", name)
@@ -128,7 +128,13 @@ func (c *Cursor) Attach(name, url, token string) (Record, error) {
 			return nil, err
 		}
 		rec.Original = string(old[start:end])
-		rec.Written = indentedValue(old, start, httpEntry(false, url, token))
+		var value any = httpEntry(false, t.URL, t.Token)
+		if t.wrapped() {
+			if value, err = wrapJSON(old[start:end], t.Wrapper, entryFromJSON(c.ID(), name, old[start:end])); err != nil {
+				return nil, err
+			}
+		}
+		rec.Written = indentedValue(old, start, value)
 		return splice(old, start, end, rec.Written), nil
 	})
 	rec.Backup, rec.At = backup, time.Now()
@@ -159,7 +165,7 @@ func splice(src []byte, start, end int, with string) []byte {
 	return append(out, src[end:]...)
 }
 
-func (c *Cursor) Add(name, url, token string) (Record, error) {
+func (c *Cursor) Add(name string, t Target) (Record, error) {
 	rec := Record{Client: c.ID(), Name: name, Added: true}
 	if err := ensureFile(c.path, "{\n  \"mcpServers\": {}\n}\n"); err != nil {
 		return rec, err
@@ -173,7 +179,11 @@ func (c *Cursor) Add(name, url, token string) (Record, error) {
 				return nil, err
 			}
 		}
-		out, written, err := insertMember(old, []string{"mcpServers"}, name, httpEntry(false, url, token))
+		var value any = httpEntry(false, t.URL, t.Token)
+		if t.wrapped() {
+			value = newJSON(false, t.Wrapper, t.Server)
+		}
+		out, written, err := insertMember(old, []string{"mcpServers"}, name, value)
 		rec.Written = written
 		return out, err
 	})

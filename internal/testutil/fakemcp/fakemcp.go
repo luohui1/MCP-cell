@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,6 +42,10 @@ func SpecWith(pageSize int) proc.Spec {
 
 const pageEnv = "MCPCELL_FAKE_PAGE"
 
+// AskRootsEnv set to 1 makes the server ask a client that supports roots for
+// them right after initialization, as server-filesystem does.
+const AskRootsEnv = "MCPCELL_FAKE_ASK_ROOTS"
+
 type echoIn struct {
 	Text string `json:"text,omitempty"`
 }
@@ -56,7 +61,15 @@ func text(s string) *mcp.CallToolResult {
 
 func newServer() *mcp.Server {
 	page, _ := strconv.Atoi(os.Getenv(pageEnv))
-	s := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1.0.0"}, &mcp.ServerOptions{PageSize: page})
+	opts := &mcp.ServerOptions{PageSize: page}
+	if os.Getenv(AskRootsEnv) == "1" {
+		opts.InitializedHandler = func(_ context.Context, req *mcp.InitializedRequest) {
+			if c := req.Session.InitializeParams().Capabilities; c != nil && c.RootsV2 != nil {
+				go func() { _, _ = req.Session.ListRoots(context.Background(), nil) }()
+			}
+		}
+	}
+	s := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1.0.0"}, opts)
 	s.AddPrompt(&mcp.Prompt{Name: "greet", Description: "Say hello"},
 		func(context.Context, *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 			return &mcp.GetPromptResult{Messages: []*mcp.PromptMessage{{Role: "user", Content: &mcp.TextContent{Text: "hello"}}}}, nil
@@ -85,6 +98,34 @@ func newServer() *mcp.Server {
 				}
 			}
 			return text("done"), nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "client", Description: "Return the clientInfo name sent at initialize"},
+		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			if p := req.Session.InitializeParams(); p != nil && p.ClientInfo != nil {
+				return text(p.ClientInfo.Name), nil, nil
+			}
+			return text(""), nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "roots", Description: "Ask the client for its roots (a server-to-client request)"},
+		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			res, err := req.Session.ListRoots(ctx, nil)
+			if err != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, nil, nil
+			}
+			uris := ""
+			for _, r := range res.Roots {
+				uris += r.URI + "\n"
+			}
+			return text(strings.TrimSpace(uris)), nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "cwd", Description: "Return the server's working directory"},
+		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			dir, _ := os.Getwd()
+			return text(dir), nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "getenv", Description: "Return an environment variable of the server"},
+		func(ctx context.Context, req *mcp.CallToolRequest, in echoIn) (*mcp.CallToolResult, any, error) {
+			return text(os.Getenv(in.Text)), nil, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "crash", Description: "Exit the server process"},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {

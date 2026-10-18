@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -62,6 +63,19 @@ func Shortcuts() (desktop, startMenu bool) {
 	_, de := os.Stat(d)
 	_, se := os.Stat(s)
 	return de == nil, se == nil
+}
+
+// ShortcutsInto reports which existing shortcuts start a program in dir.
+func ShortcutsInto(dir string) (desktop, startMenu bool) {
+	d, s, err := shortcutPaths()
+	if err != nil {
+		return false, false
+	}
+	in := func(lnk string) bool {
+		target, _, err := readShortcut(lnk)
+		return err == nil && strings.EqualFold(filepath.Dir(target), filepath.Clean(dir))
+	}
+	return in(d), in(s)
 }
 
 // SetShortcuts creates (true) or removes (false) each shortcut; nil leaves

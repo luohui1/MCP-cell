@@ -18,3 +18,7 @@ coverage.*
 
 # Frontend dependencies (the built UI in internal/httpd/ui/dist is committed)
 /web/node_modules/
+
+# Rust build output
+/shim/target/
+__pycache__/

@@ -27,6 +27,7 @@ const usage = `mcpcell %s — 本机 MCP 运行时：每个服务一份进程，
   restore <客户端> [条目...]
   autostart [on|off]   开机自启
   shortcut [on|off]    桌面和开始菜单快捷方式
+  install              把程序装到 ~/.mcpcell/bin，开机自启、快捷方式和 Agent 配置都指向那里
   update <服务>        把 npx 服务的 npm 包更新到最新版本并重新锁定
   version              显示版本
 
@@ -56,6 +57,8 @@ func main() {
 		}
 	case "shortcut":
 		err = runShortcut(os.Args[2:])
+	case "install":
+		err = runInstall()
 	case "window":
 		if err = runWindow(os.Args[2:]); err != nil {
 			desktop.Alert("MCPcell", "无法打开 MCPcell 窗口："+err.Error()+"\n\n可以运行 mcpcell ui --browser 在浏览器里打开管理页。")

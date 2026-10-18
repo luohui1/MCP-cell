@@ -13,6 +13,7 @@ func (*App) SetShortcuts(desktop, startMenu *bool) error { return ErrUnsupported
 
 func Available() error                                        { return ErrUnsupported }
 func Shortcuts() (desktop, startMenu bool)                    { return false, false }
+func ShortcutsInto(dir string) (desktop, startMenu bool)      { return false, false }
 func SetShortcuts(exe string, desktop, startMenu *bool) error { return ErrUnsupported }
 func Alert(title, text string)                                {}
 func AllowForeground(pid int)                                 {}

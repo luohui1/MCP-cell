@@ -21,19 +21,23 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 - **连接不启动进程**：握手和工具列表由缓存的能力目录回答，第一次调用工具时才启动，空闲后回收（默认 3 分钟）
 - **npx 扁平化**：npm 包装进 MCPcell 的缓存并锁定版本，直接用 node 启动。context7 从 4 个进程、约 235 MB 降到 2 个进程、约 84 MB，冷启动开销从 10 秒以上降到约 2.5 秒
 - 上游放在 Windows Job Object 里：守护进程无论怎么退出，整棵进程树都会被清理；可设内存上限，超限立即终止
-- **一键托管**：读取 Claude Code、Codex、Cursor 的 MCP 配置，把可共享的条目改成连到 MCPcell；改前整文件备份，随时一键还原（逐字节恢复，被你改过的条目不覆盖）
+- **一键托管，配置照样清楚**：读取 Claude Code、Codex、Cursor 的 MCP 配置，在原命令前加上 `mcpcell-run`（`"command": "…\mcpcell-run.exe", "args": ["--", "npx", "-y", "@upstash/context7-mcp"]`），原命令、环境变量和其他设置原样保留。转发程序约 1 MB，带着 Agent 的工作目录和环境变量把会话交给 MCPcell；MCPcell 没运行就拉起它，拉不起来就直接运行原命令。改前整文件备份，随时一键还原（逐字节恢复，被你改过的条目不覆盖）
 - **桌面应用**：托盘图标常驻，窗口用系统自带的 WebView2 显示管理页，关窗后 WebView2 进程全部退出；支持开机自启、桌面和开始菜单快捷方式
 - 管理页和 `mcpcell ps` 显示每个服务的实例、会话、私有提交和缓存的工具数
 
-尚未实现：按会话或按项目隔离的服务（chrome-devtools、ssh 这类有状态的 MCP 暂不托管）、只说新版协议的上游。见 [里程碑](docs/roadmap.md)。
+- **按会话运行**：chrome-devtools、ssh 这类为每个会话保存状态的 MCP，每个会话一个实例，第一次调用时才启动、会话结束就回收；没用到它的会话不占内存。MCPcell 不认识的 MCP 默认也这样运行，确认无状态后可以改为共享
+
+尚未实现：按项目共享的实例（依赖当前目录的 MCP 目前以 MCPcell 的工作目录运行）、只说新版协议的上游。见 [里程碑](docs/roadmap.md)。
 
 ## 试用
 
 ```sh
 go build -ldflags "-s -w" -o bin/mcpcell.exe ./cmd/mcpcell
 go build -ldflags "-s -w -H windowsgui" -o bin/mcpcelld.exe ./cmd/mcpcell
-bin/mcpcell.exe open          # 启动守护进程并打开窗口；双击 mcpcelld.exe 同此
-bin/mcpcell.exe shortcut on   # 可选：桌面和开始菜单快捷方式
+cd shim && cargo build --release && cd .. && cp shim/target/release/mcpcell-run.exe bin/
+bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自启、快捷方式都指向那里
+~/.mcpcell/bin/mcpcell.exe open
+~/.mcpcell/bin/mcpcell.exe shortcut on   # 可选：桌面和开始菜单快捷方式
 ```
 
 打开后在「MCP」页点「一键托管」，勾选要交给 MCPcell 的 MCP 即可；已经打开的 Agent 会话重启后生效。
@@ -52,6 +56,7 @@ bin/mcpcell.exe shortcut on   # 可选：桌面和开始菜单快捷方式
 
 | 命令 | 作用 |
 |---|---|
+| `mcpcell install` | 把程序装到 `~/.mcpcell/bin`（运行中的转发程序会被移到一边再替换），原本指向旧位置的开机自启和快捷方式一并改过去 |
 | `mcpcell open` | 打开 MCPcell 窗口，需要时先启动守护进程 |
 | `mcpcell start` / `stop` | 在后台启动（带托盘图标）/ 停止守护进程 |
 | `mcpcell daemon [--port N]` | 前台运行守护进程，Ctrl+C 退出 |

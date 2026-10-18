@@ -26,13 +26,17 @@ type agentCell struct {
 	Added   bool          `json:"added,omitempty"` // created by MCPcell; undo removes it
 	Class   clients.Class `json:"class"`
 	Reason  string        `json:"reason,omitempty"`
+	// Takeable: native, and MCPcell can run it (local stdio, reproducible env).
+	Takeable bool `json:"takeable,omitempty"`
 }
 
 type mcpRow struct {
-	Key      string               `json:"key"`
-	Name     string               `json:"name"`
-	Kind     string               `json:"kind"` // stdio | http
-	Launch   string               `json:"launch"`
+	Key    string `json:"key"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"` // stdio | http
+	Launch string `json:"launch"`
+	// Mode is the service's mode, or the one a takeover would choose.
+	Mode     string               `json:"mode"`
 	Detail   string               `json:"detail,omitempty"` // args, set when several rows share a name
 	Class    clients.Class        `json:"class"`
 	Reason   string               `json:"reason"`
@@ -92,6 +96,9 @@ func (s *Server) unified() (unifiedResponse, error) {
 			switch {
 			case ev.TakenOver || ev.Class == clients.ClassManaged:
 				cell.State, key = "managed", "svc:"+ev.Service
+				if ev.Service == "" { // wrapped by hand, with no configured service
+					key = "key:" + shortHash(clients.EntryKey(ev.Entry))
+				}
 				if rec, ok := s.opts.Takeovers.Get(v.ID, ev.Name); ok {
 					cell.Added = rec.Added
 				}
@@ -107,7 +114,8 @@ func (s *Server) unified() (unifiedResponse, error) {
 			default:
 				cell.State, key = "native", "key:"+shortHash(clients.EntryKey(ev.Entry))
 			}
-			if cell.State == "native" && ev.Class == clients.ClassShared {
+			if cell.State == "native" && clients.Takeable(ev) {
+				cell.Takeable = true
 				sum.Shareable++
 			}
 			e := ev
@@ -116,7 +124,8 @@ func (s *Server) unified() (unifiedResponse, error) {
 				if e.Kind == "http" {
 					launch = e.URL
 				}
-				return &mcpRow{Name: e.Name, Kind: e.Kind, Launch: launch, Class: e.Class, Reason: e.Reason, Proposed: e.Service, args: e.Args}
+				return &mcpRow{Name: e.Name, Kind: e.Kind, Launch: launch, Mode: clients.ModeFor(e.Class, false), Class: e.Class,
+					Reason: e.Reason, Proposed: e.Service, args: e.Args}
 			})
 			if r.Service == "" && key[:4] == "svc:" {
 				r.Name, r.Reason = key[4:], "MCPcell 中已经没有这个服务"
@@ -141,9 +150,9 @@ func (s *Server) unified() (unifiedResponse, error) {
 		}
 		switch {
 		case r.Service != "":
-			r.CanAdd = r.Class != clients.ClassStateful
-		case r.Kind == "stdio":
-			r.CanAdd = r.Class == clients.ClassShared && r.source != nil && r.Proposed != ""
+			r.CanAdd = true
+		case r.source != nil:
+			r.CanAdd = r.Proposed != "" && clients.Takeable(clients.EntryView{Entry: *r.source, Class: r.Class})
 		}
 		out = append(out, r)
 	}
@@ -160,7 +169,7 @@ func (s *Server) unified() (unifiedResponse, error) {
 func serviceRow(name string, def *registry.Service, base string) *mcpRow {
 	e := clients.Entry{Kind: "stdio", Command: def.Command, Args: def.Args, Env: def.Env, Cwd: def.Cwd}
 	class, reason := clients.Classify(e, base)
-	return &mcpRow{Name: name, Kind: "stdio", Launch: clients.LaunchPackage(e), Class: class, Reason: reason, Service: name, args: def.Args}
+	return &mcpRow{Name: name, Kind: "stdio", Launch: clients.LaunchPackage(e), Mode: def.Mode, Class: class, Reason: reason, Service: name, args: def.Args}
 }
 
 var secretFlag = regexp.MustCompile(`(?i)key|token|secret|passw|auth|cookie`)
@@ -261,7 +270,7 @@ func (s *Server) addToAgent(c clients.Client, key string) (string, error) {
 	service := row.Service
 	if service == "" {
 		service = row.Proposed
-		def := clients.Definition(*row.source)
+		def := clients.Definition(*row.source, clients.ModeFor(row.Class, false))
 		err := s.editConfig(func(cfg *registry.Config) error {
 			if _, exists := cfg.Services[service]; exists {
 				return errors.New("同名服务刚被添加，请刷新后重试")
@@ -273,8 +282,9 @@ func (s *Server) addToAgent(c clients.Client, key string) (string, error) {
 			return "", err
 		}
 		s.pool.Put(service, def)
+		go s.warm(service)
 	}
-	rec, err := c.Add(service, s.baseURL()+"/s/"+service, s.opts.Token)
+	rec, err := c.Add(service, s.target(service))
 	if err != nil {
 		return "", err
 	}

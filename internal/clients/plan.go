@@ -36,13 +36,38 @@ func ServiceKey(command string, args []string, env map[string]string, cwd string
 	return string(b)
 }
 
-func EntryKey(e Entry) string { return ServiceKey(e.Command, e.Args, e.Env, e.Cwd) }
+// EntryKey is the entry's ServiceKey; a wrapped entry has its server's key,
+// so it matches the same server configured natively elsewhere.
+func EntryKey(e Entry) string {
+	e, _ = Unwrap(e)
+	return ServiceKey(e.Command, e.Args, e.Env, e.Cwd)
+}
 
 func DefinitionKey(s *registry.Service) string { return ServiceKey(s.Command, s.Args, s.Env, s.Cwd) }
 
 // Definition is the MCPcell service that runs what the entry ran.
-func Definition(e Entry) *registry.Service {
-	return &registry.Service{Command: e.Command, Args: e.Args, Env: e.Env, Cwd: e.Cwd, Mode: registry.ModeShared}
+func Definition(e Entry, mode string) *registry.Service {
+	return &registry.Service{Command: e.Command, Args: e.Args, Env: e.Env, Cwd: e.Cwd, Mode: mode}
+}
+
+// ModeFor is how a taken-over entry runs: one shared instance when the server
+// is known to keep no per-client state, otherwise one instance per session,
+// like the client ran it, unless the user says an unknown one can be shared.
+func ModeFor(class Class, share bool) string {
+	if class == ClassShared || class == ClassUnknown && share {
+		return registry.ModeShared
+	}
+	return registry.ModePerSession
+}
+
+// Takeable reports whether MCPcell can run the entry: a local stdio server
+// whose environment MCPcell can reproduce.
+func Takeable(v EntryView) bool {
+	switch v.Class {
+	case ClassShared, ClassStateful, ClassUnknown:
+		return v.Kind == "stdio" && len(v.EnvVars) == 0
+	}
+	return false
 }
 
 type EntryView struct {
@@ -94,11 +119,14 @@ func Overview(cs []Client, store *Store, services map[string]*registry.Service, 
 			if rec, ok := store.Get(c.ID(), e.Name); ok {
 				at := rec.At
 				ev.TakenAt, ev.Service = &at, rec.Service
-				ev.TakenOver = e.URL == baseURL+"/s/"+rec.Service
+				_, wrapped := Unwrap(e)
+				ev.TakenOver = wrapped || e.URL == baseURL+"/s/"+rec.Service
 				ev.Changed = !ev.TakenOver
 				if ev.TakenOver {
 					ev.Class, ev.Reason = ClassManaged, "已由 MCPcell 接管"
 				}
+			} else if _, wrapped := Unwrap(e); wrapped {
+				ev.Service = byKey[EntryKey(e)] // wrapped by hand: the service it maps to, if configured
 			} else if ev.Class == ClassManaged {
 				ev.Service = strings.TrimPrefix(e.URL, baseURL+"/s/")
 			} else if e.Kind == "stdio" && ev.Class != ClassInternal {

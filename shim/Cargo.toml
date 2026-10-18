@@ -1,0 +1,17 @@
+[package]
+name = "mcpcell-run"
+version = "0.6.0-dev"
+edition = "2021"
+description = "Wrapper an agent's MCP entry launches in place of the server; hands the session to the MCPcell daemon"
+publish = false
+
+# Standard library only: the wrapper runs once per agent session per server,
+# so every megabyte counts.
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

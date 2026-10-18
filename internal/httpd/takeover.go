@@ -31,7 +31,8 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 
 type takeoverRequest struct {
 	Names []string `json:"names"`
-	// Force allows sharing a server MCPcell does not know to be stateless.
+	// Force shares a server MCPcell does not know to be stateless; without
+	// it such a server gets one instance per session.
 	Force bool `json:"force"`
 }
 
@@ -56,6 +57,19 @@ func (s *Server) readTakeover(w http.ResponseWriter, r *http.Request) (clients.C
 		return nil, req, false
 	}
 	return c, req, true
+}
+
+// target is what an entry taken over for service becomes: its own command
+// behind the wrapper when one is installed, otherwise the HTTP endpoint.
+func (s *Server) target(service string) clients.Target {
+	t := clients.Target{URL: s.baseURL() + "/s/" + service, Token: s.opts.Token}
+	if s.opts.Wrapper != "" {
+		t.Wrapper = s.opts.Wrapper
+		if def := s.pool.Definition(service); def != nil {
+			t.Server = clients.Entry{Kind: "stdio", Command: def.Command, Args: def.Args, Env: def.Env, Cwd: def.Cwd}
+		}
+	}
+	return t
 }
 
 func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
@@ -96,8 +110,7 @@ func (s *Server) attachOne(c clients.Client, name string, force bool, errText *s
 		return fail("配置里没有这个条目")
 	case ev.TakenOver:
 		return ev.Service, false, true
-	case ev.Class == clients.ClassUnknown && force && ev.Kind == "stdio" && len(ev.EnvVars) == 0:
-	case ev.Class != clients.ClassShared:
+	case !clients.Takeable(*ev):
 		return fail(ev.Reason)
 	}
 	service = ev.Service
@@ -105,7 +118,7 @@ func (s *Server) attachOne(c clients.Client, name string, force bool, errText *s
 		return fail("无法为它生成服务名，请先在服务页手动添加")
 	}
 	if !ev.ServiceExists {
-		def := clients.Definition(ev.Entry)
+		def := clients.Definition(ev.Entry, clients.ModeFor(ev.Class, force))
 		err := s.editConfig(func(cfg *registry.Config) error {
 			if _, exists := cfg.Services[service]; exists {
 				return errors.New("同名服务刚被添加，请刷新后重试")
@@ -117,9 +130,10 @@ func (s *Server) attachOne(c clients.Client, name string, force bool, errText *s
 			return fail(err.Error())
 		}
 		s.pool.Put(service, def)
+		go s.warm(service)
 		created = true
 	}
-	rec, err := c.Attach(name, s.baseURL()+"/s/"+service, s.opts.Token)
+	rec, err := c.Attach(name, s.target(service))
 	if err != nil {
 		return fail(err.Error())
 	}

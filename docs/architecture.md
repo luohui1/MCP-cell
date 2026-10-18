@@ -65,7 +65,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 | `internal/npmcache` ✅ | `npx pkg` 识别、安装到 `~/.mcpcell/pkgs` 并锁定版本、解析 bin 入口、`update` | M2 |
 | `internal/httpd` ✅ | Streamable HTTP（旧版，POST/GET/DELETE、会话、SSE）、Origin/Host 校验、token 鉴权、管理 API、内嵌状态页 | M1 |
 | `internal/testutil/fakemcp` ✅ | 基于官方 SDK 的测试用上游 | M1 |
-| `internal/catalog` ✅ | 能力目录：拉取并合并分页、按配置指纹判断有效、`list_changed` 时先标记过期再刷新、存到 `~/.mcpcell/catalog` | M2 |
+| `internal/catalog` ✅ | 能力目录：拉取并合并分页、按配置指纹判断有效、按客户端画像（协议版本，按会话时加能力）分别缓存、`list_changed` 时先标记过期再刷新、记录共享资格检测结果，存到 `~/.mcpcell/catalog` | M2 |
 | `internal/clients` | 各客户端配置的发现、改写、备份、还原（移植自 legacy） | M3 |
 | `internal/hub` | 聚合命名空间、元工具、调用策略 | M4 |
 
@@ -168,20 +168,26 @@ cold ──acquire──► starting ──握手+能力校验──► ready �
 
 未知服务默认 `per-session`：仍然能获得按需启动和空闲回收，只是不共享。共享需要内置已知服务清单（随版本发布，带验证过的版本范围）或用户显式标记。工具上的"只读"注解只是提示，不能作为可以共享的证明。
 
+**服务端看到的客户端**（2026-10-18 兼容性测试后改）：同一个服务对不同客户端的回答可能不同——协议版本按客户端请求的协商，有的服务按客户端声明的能力注册工具（server-everything 没有 roots 能力就不注册 `get-roots-list`）。所以：
+
+- 共享实例按客户端请求的协议版本分开，每个实例用该版本、不带能力握手；能力目录按"协议版本"缓存
+- 按会话的实例用客户端自己的 initialize 参数握手；能力目录按"协议版本 + 能力"缓存，`Warm` 按最近见过的几种客户端分别预热
+- 共享资格检测：某种能力组合的客户端第一次连上共享服务时，后台用它的参数另起一个实例，服务端若向客户端发请求（roots、sampling、elicitation），或握手结果、列表和共享目录不同，就把服务改为按会话运行。共享实例在调用中收到服务端请求时同样处理；此时如果只有一个会话有进行中的调用，请求转给它，否则拒绝。结果和能力目录存在一起，配置或包版本变了才重新检测
+
 工作区怎么识别：HTTP 客户端不会告诉守护进程自己的 cwd。优先向下游会话请求 `roots/list`；客户端不支持 roots 时，项目级配置里的绑定 URL 带上工作区 ID。两种都拿不到就退回 per-session。
 
-本机服务的初步分类（M3 前逐个验证）：
+常见服务的初步分类（M3 前逐个验证）：
 
 | 服务 | 初步建议 | 理由 |
 |---|---|---|
 | context7 | shared | 只读文档查询 |
 | shadcn-ui | shared | 只读组件文档 |
-| feishu（lark-mcp） | shared（同凭据） | API 包装，凭据在环境变量里，凭据不同自然分区 |
-| async-imagegen | 待验证 | 有异步任务状态（spawn/status/wait），要确认任务 ID 跨会话可见是否可接受 |
-| pencil | 待验证 | 连接单例桌面应用，实例本身可能可以共享 |
+| lark-mcp（飞书） | shared（同凭据） | API 包装，凭据在环境变量里，凭据不同自然分区 |
+| 异步任务类（spawn/status/wait） | 待验证 | 任务状态在进程里，要确认任务 ID 跨会话可见是否可接受 |
+| 连接桌面应用的 MCP | 待验证 | 连接单例桌面应用，实例本身可能可以共享 |
 | chrome-devtools | per-session | 每个实例会启动自己的 Chrome，页面状态属于会话 |
 | ssh | per-session | 持有连接状态 |
-| browseros-neo、metaso | 不接管 | 已经是 HTTP 服务，没有本地每会话进程 |
+| 远程 HTTP 服务 | 不接管 | 已经是 HTTP 服务，没有本地每会话进程 |
 
 ## 9. 接入方式与客户端
 

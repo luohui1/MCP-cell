@@ -85,15 +85,34 @@ func strings_(v any) []string {
 	return out
 }
 
-func (c *Codex) Attach(name, url, token string) (Record, error) {
+func (c *Codex) Attach(name string, t Target) (Record, error) {
 	rec := Record{Client: c.ID(), Name: name}
+	var current Entry
+	if t.wrapped() {
+		entries, err := c.List()
+		if err != nil {
+			return rec, err
+		}
+		for _, e := range entries {
+			if e.Name == name {
+				current = e
+			}
+		}
+		if current.Kind != "stdio" {
+			return rec, errors.New("只有用命令启动的条目才能包装")
+		}
+	}
 	backup, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
 		start, end, err := tomlBlock(old, name)
 		if err != nil {
 			return nil, err
 		}
 		rec.Original = string(old[start:end])
-		rec.Written = codexHTTPBlock(rec.Original, url, token, newline(old))
+		if t.wrapped() {
+			rec.Written = codexWrapBlock(rec.Original, t.Wrapper, current, newline(old))
+		} else {
+			rec.Written = codexHTTPBlock(rec.Original, t.URL, t.Token, newline(old))
+		}
 		out := splice(old, start, end, rec.Written)
 		if _, err := toml.Decode(string(out), new(map[string]any)); err != nil {
 			return nil, fmt.Errorf("改写后的 config.toml 无法解析，未写入：%w", err)
@@ -104,7 +123,7 @@ func (c *Codex) Attach(name, url, token string) (Record, error) {
 	return rec, err
 }
 
-func (c *Codex) Add(name, url, token string) (Record, error) {
+func (c *Codex) Add(name string, t Target) (Record, error) {
 	rec := Record{Client: c.ID(), Name: name, Added: true}
 	if err := ensureFile(c.path, ""); err != nil {
 		return rec, err
@@ -118,7 +137,11 @@ func (c *Codex) Add(name, url, token string) (Record, error) {
 		}
 		nl := newline(old)
 		header := fmt.Sprintf("[mcp_servers.%s]", tomlKeyText(name))
-		rec.Written = codexHTTPBlock(header+nl, url, token, nl)
+		if t.wrapped() {
+			rec.Written = codexNewBlock(name, t.Wrapper, t.Server, nl)
+		} else {
+			rec.Written = codexHTTPBlock(header+nl, t.URL, t.Token, nl)
+		}
 		out := append([]byte(nil), old...)
 		if len(out) > 0 && !strings.HasSuffix(string(out), nl) {
 			out = append(out, nl...)

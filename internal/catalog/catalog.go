@@ -1,8 +1,10 @@
 // Package catalog caches what a service offers (initialize result and the
 // tools/prompts/resources lists) so sessions can connect and list without an
-// upstream process. An entry is only valid for the configuration fingerprint
-// it was fetched with, and a list is dropped the moment the upstream says it
-// changed.
+// upstream process. A server may answer differently depending on what the
+// client's initialize asked for (protocol version, capabilities), so there is
+// one entry per client profile. Entries are only valid for the configuration
+// fingerprint they were fetched with, and a list is dropped the moment the
+// upstream says it changed.
 package catalog
 
 import (
@@ -60,6 +62,10 @@ type Entry struct {
 	InitResult      json.RawMessage            `json:"initResult"`
 	Lists           map[string]json.RawMessage `json:"lists"`
 	FetchedAt       time.Time                  `json:"fetchedAt"`
+	// Client is the initialize params the entry was fetched with, when they
+	// matter beyond the protocol version (a session's own instance), so the
+	// entry can be fetched again for the same kind of client.
+	Client json.RawMessage `json:"client,omitempty"`
 }
 
 // Count returns how many items list holds, or -1 if it is not cached.
@@ -82,97 +88,174 @@ func Fingerprint(parts ...any) string {
 	return hex.EncodeToString(sum[:12])
 }
 
+// maxProfiles bounds the entries kept per service; the oldest go first.
+const maxProfiles = 8
+
+// file is a service's catalog file: entries by client profile, all for one
+// configuration fingerprint, and what shareability checks found.
+type file struct {
+	Fingerprint string            `json:"fingerprint"`
+	Entries     map[string]*Entry `json:"entries"`
+	// Checks maps a client's capabilities to "" when a shared instance serves
+	// such clients as their own would, or to why it does not.
+	Checks map[string]string `json:"checks,omitempty"`
+}
+
 type Store struct {
-	dir     string
-	mu      sync.Mutex
-	entries map[string]*Entry
-	loaded  map[string]bool
-	stale   map[string]map[string]bool
+	dir    string
+	mu     sync.Mutex
+	files  map[string]*file
+	loaded map[string]bool
+	stale  map[string]map[string]bool // service + "\x00" + profile -> list methods
 }
 
 func OpenStore(dir string) *Store {
-	return &Store{dir: dir, entries: map[string]*Entry{}, loaded: map[string]bool{}, stale: map[string]map[string]bool{}}
+	return &Store{dir: dir, files: map[string]*file{}, loaded: map[string]bool{}, stale: map[string]map[string]bool{}}
 }
 
 func (s *Store) path(service string) string { return filepath.Join(s.dir, service+".json") }
 
-// entryLocked returns the entry for service if it matches fingerprint.
-func (s *Store) entryLocked(service, fingerprint string) *Entry {
+// fileLocked returns service's file if it matches fingerprint. Files written
+// before entries were kept per profile load without entries.
+func (s *Store) fileLocked(service, fingerprint string) *file {
 	if !s.loaded[service] {
 		s.loaded[service] = true
 		if b, err := os.ReadFile(s.path(service)); err == nil {
-			var e Entry
-			if json.Unmarshal(b, &e) == nil && e.Fingerprint != "" {
-				s.entries[service] = &e
+			var f file
+			if json.Unmarshal(b, &f) == nil && f.Fingerprint != "" {
+				s.files[service] = &f
 			}
 		}
 	}
-	e := s.entries[service]
-	if e == nil || e.Fingerprint != fingerprint {
+	f := s.files[service]
+	if f == nil || f.Fingerprint != fingerprint {
 		return nil
 	}
-	return e
+	return f
 }
 
-// Get returns a copy of the matching entry, or nil.
+// fileForWriteLocked returns service's file for fingerprint, replacing one
+// that belongs to an older configuration.
+func (s *Store) fileForWriteLocked(service, fingerprint string) *file {
+	f := s.fileLocked(service, fingerprint)
+	if f == nil {
+		f = &file{Fingerprint: fingerprint}
+		s.files[service] = f
+		for k := range s.stale {
+			if strings.HasPrefix(k, service+"\x00") {
+				delete(s.stale, k)
+			}
+		}
+	}
+	if f.Entries == nil {
+		f.Entries = map[string]*Entry{}
+	}
+	if f.Checks == nil {
+		f.Checks = map[string]string{}
+	}
+	return f
+}
+
+func (s *Store) saveLocked(service string, f *file) error {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(f)
+	tmp := s.path(service) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path(service))
+}
+
+func (s *Store) entryLocked(service, fingerprint, profile string) *Entry {
+	if f := s.fileLocked(service, fingerprint); f != nil {
+		return f.Entries[profile]
+	}
+	return nil
+}
+
+// Get returns a copy of the most recently fetched entry for any profile, or
+// nil. It describes the service (status), never answers a client.
 func (s *Store) Get(service, fingerprint string) *Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e := s.entryLocked(service, fingerprint)
-	if e == nil {
+	f := s.fileLocked(service, fingerprint)
+	if f == nil {
 		return nil
 	}
-	cp := *e
+	var newest *Entry
+	var profile string
+	for p, e := range f.Entries {
+		if newest == nil || e.FetchedAt.After(newest.FetchedAt) {
+			newest, profile = e, p
+		}
+	}
+	if newest == nil {
+		return nil
+	}
+	cp := *newest
 	cp.Lists = map[string]json.RawMessage{}
-	for k, v := range e.Lists {
-		if !s.stale[service][k] {
+	for k, v := range newest.Lists {
+		if !s.stale[service+"\x00"+profile][k] {
 			cp.Lists[k] = v
 		}
 	}
 	return &cp
 }
 
-// Init returns the cached initialize result and protocol version.
-func (s *Store) Init(service, fingerprint string) (json.RawMessage, string, bool) {
+// Init returns the cached initialize result and protocol version for clients
+// of profile.
+func (s *Store) Init(service, fingerprint, profile string) (json.RawMessage, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if e := s.entryLocked(service, fingerprint); e != nil && len(e.InitResult) > 0 {
+	if e := s.entryLocked(service, fingerprint, profile); e != nil && len(e.InitResult) > 0 {
 		return e.InitResult, e.ProtocolVersion, true
 	}
 	return nil, "", false
 }
 
-// List returns a cached list result unless it is missing or stale.
-func (s *Store) List(service, fingerprint, method string) (json.RawMessage, bool) {
+// List returns a cached list result for clients of profile unless it is
+// missing or stale.
+func (s *Store) List(service, fingerprint, profile, method string) (json.RawMessage, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e := s.entryLocked(service, fingerprint)
-	if e == nil || s.stale[service][method] {
+	e := s.entryLocked(service, fingerprint, profile)
+	if e == nil || s.stale[service+"\x00"+profile][method] {
 		return nil, false
 	}
 	raw, ok := e.Lists[method]
 	return raw, ok
 }
 
-// MarkStale stops serving the given lists until the next Put.
+// MarkStale stops serving the given lists, for every profile, until each
+// profile's next Put.
 func (s *Store) MarkStale(service string, methods ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stale[service] == nil {
-		s.stale[service] = map[string]bool{}
+	f := s.files[service]
+	if f == nil {
+		return
 	}
-	for _, m := range methods {
-		s.stale[service][m] = true
+	for profile := range f.Entries {
+		key := service + "\x00" + profile
+		if s.stale[key] == nil {
+			s.stale[key] = map[string]bool{}
+		}
+		for _, m := range methods {
+			s.stale[key][m] = true
+		}
 	}
 }
 
-// Put stores a fresh entry and returns the lists whose content differs from
-// what was served before (sessions should be told they changed).
-func (s *Store) Put(service string, e *Entry) (changed []string, err error) {
+// Put stores a fresh entry for clients of profile and returns the lists whose
+// content differs from what was served to them before (sessions should be
+// told they changed).
+func (s *Store) Put(service, profile string, e *Entry) (changed []string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.loaded[service] = true
-	if prev := s.entries[service]; prev != nil {
+	f := s.fileForWriteLocked(service, e.Fingerprint)
+	if prev := f.Entries[profile]; prev != nil {
 		for m := range Lists {
 			if !bytes.Equal(prev.Lists[m], e.Lists[m]) {
 				changed = append(changed, m)
@@ -180,17 +263,100 @@ func (s *Store) Put(service string, e *Entry) (changed []string, err error) {
 		}
 		sort.Strings(changed)
 	}
-	s.entries[service] = e
-	delete(s.stale, service)
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return changed, err
+	f.Entries[profile] = e
+	for len(f.Entries) > maxProfiles {
+		var oldest string
+		for p, x := range f.Entries {
+			if oldest == "" || x.FetchedAt.Before(f.Entries[oldest].FetchedAt) {
+				oldest = p
+			}
+		}
+		delete(f.Entries, oldest)
 	}
-	b, _ := json.Marshal(e)
-	tmp := s.path(service) + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return changed, err
+	delete(s.stale, service+"\x00"+profile)
+	return changed, s.saveLocked(service, f)
+}
+
+// Check returns what a shareability check found for clients with these
+// capabilities: "" when shareable, else why not; ok is false when unchecked.
+func (s *Store) Check(service, fingerprint, capabilities string) (reason string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f := s.fileLocked(service, fingerprint); f != nil {
+		reason, ok = f.Checks[capabilities]
 	}
-	return changed, os.Rename(tmp, s.path(service))
+	return reason, ok
+}
+
+// SetCheck records a shareability check's result.
+func (s *Store) SetCheck(service, fingerprint, capabilities, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := s.fileForWriteLocked(service, fingerprint)
+	f.Checks[capabilities] = reason
+	return s.saveLocked(service, f)
+}
+
+// NeedsSession returns why the service cannot be shared, if any check found
+// a reason.
+func (s *Store) NeedsSession(service, fingerprint string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := s.fileLocked(service, fingerprint)
+	if f == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(f.Checks))
+	for k := range f.Checks {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if f.Checks[k] != "" {
+			return f.Checks[k]
+		}
+	}
+	return ""
+}
+
+// Clients returns the initialize params of up to max kinds of clients seen
+// recently, newest first: what a per-session service is warmed for.
+func (s *Store) Clients(max int) []json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if names, err := os.ReadDir(s.dir); err == nil {
+		for _, n := range names {
+			if service, ok := strings.CutSuffix(n.Name(), ".json"); ok && !s.loaded[service] {
+				s.fileLocked(service, "")
+			}
+		}
+	}
+	type seen struct {
+		client json.RawMessage
+		at     time.Time
+	}
+	newest := map[string]seen{}
+	for _, f := range s.files {
+		for _, e := range f.Entries {
+			if len(e.Client) == 0 {
+				continue
+			}
+			k := string(e.Client)
+			if prev, ok := newest[k]; !ok || e.FetchedAt.After(prev.at) {
+				newest[k] = seen{e.Client, e.FetchedAt}
+			}
+		}
+	}
+	list := make([]seen, 0, len(newest))
+	for _, v := range newest {
+		list = append(list, v)
+	}
+	sort.Slice(list, func(a, b int) bool { return list[a].at.After(list[b].at) })
+	out := make([]json.RawMessage, 0, max)
+	for i := 0; i < len(list) && i < max; i++ {
+		out = append(out, list[i].client)
+	}
+	return out
 }
 
 // Requester is what Fetch needs from a running instance.

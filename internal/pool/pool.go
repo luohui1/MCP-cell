@@ -1,6 +1,7 @@
 // Package pool owns the upstream instances for every configured service:
 // single-flight start, npx flattening, catalog refresh, idle reaping, the
-// instance budget, crash backoff and status.
+// instance budget, crash backoff and status. A shared service runs one
+// instance for every session; a per-session service runs one per session.
 package pool
 
 import (
@@ -10,7 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/luohui1/MCP-cell/internal/catalog"
 	"github.com/luohui1/MCP-cell/internal/instance"
+	"github.com/luohui1/MCP-cell/internal/jsonrpc"
 	"github.com/luohui1/MCP-cell/internal/npmcache"
 	"github.com/luohui1/MCP-cell/internal/proc"
 	"github.com/luohui1/MCP-cell/internal/registry"
@@ -29,7 +33,27 @@ const (
 	quarantineDelay = time.Minute
 )
 
-var ErrUnknownService = errors.New("unknown service")
+var (
+	ErrUnknownService = errors.New("unknown service")
+	// ErrNeedsSession: a per-session service only runs on a session's behalf.
+	ErrNeedsSession = errors.New("按会话运行的服务只在会话调用时启动")
+)
+
+// Session is the client session a per-session instance belongs to.
+type Session interface {
+	instance.Requester
+	// InitParams is the client's initialize params, replayed to the
+	// handshake of the session's own instance.
+	InitParams() json.RawMessage
+}
+
+// Spawner is a session that knows how its client would have started the
+// server: the client's environment and working directory. A per-session
+// instance for such a session starts exactly so, as it would natively.
+type Spawner interface {
+	SpawnEnv() []string // nil: the service definition's environment
+	SpawnDir() string   // "": the service definition's directory
+}
 
 type Options struct {
 	Version      string
@@ -57,10 +81,17 @@ type Pool struct {
 }
 
 type entry struct {
-	name       string
-	def        *registry.Service
-	inst       *instance.Instance
-	op         *startOp
+	name string
+	def  *registry.Service
+	// slots holds the running instances: for a shared service one per
+	// protocol version its clients ask for (sharedKey + version), for a
+	// per-session service one per session id.
+	slots map[string]*slot
+	// needs is why a shareability check found the service cannot be shared
+	// (loaded from the catalog once: checked).
+	needs      string
+	checked    bool
+	checking   map[string]bool // client capabilities being checked
 	starts     int
 	failures   int // consecutive failed starts
 	crashes    []time.Time
@@ -69,7 +100,67 @@ type entry struct {
 	lastErrAt  time.Time
 	lastStderr string
 	note       string // non-fatal: why the service runs through npx after all
-	direct     bool   // the running instance was started as node <bin>
+}
+
+// slot is one instance of a service, or one being started.
+type slot struct {
+	key    string
+	shared bool
+	// intro is how the instance introduces itself (see introduction); its
+	// text is the catalog profile the instance's lists are cached under.
+	intro  json.RawMessage
+	inst   *instance.Instance
+	op     *startOp
+	direct bool // the instance was started as node <bin>
+}
+
+func (sl *slot) alive() bool { return sl.inst != nil && sl.inst.Alive() }
+
+// sharedKey starts a shared slot's key; the protocol version follows.
+const sharedKey = "\x00"
+
+// requestedVersion is the protocol version a client's initialize asks for.
+func requestedVersion(client json.RawMessage) string {
+	var v string
+	if json.Unmarshal(jsonrpc.Field(client, "protocolVersion"), &v) != nil || v == "" {
+		return instance.ProtocolVersion
+	}
+	return v
+}
+
+// capabilityKey is a client's capabilities in canonical form.
+func capabilityKey(client json.RawMessage) string {
+	var v any
+	_ = json.Unmarshal(jsonrpc.Field(client, "capabilities"), &v)
+	if v == nil {
+		v = map[string]any{}
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// introduction is what an instance's handshake sends on a client's behalf,
+// beyond MCPcell's own clientInfo. A shared instance is introduced with the
+// client's protocol version and no capabilities: the shared list only holds
+// servers that answer every client alike, and a shareability check confirms
+// it. A session's own instance also gets the client's capabilities. Servers
+// answer by what they are introduced with, so the text is also the catalog
+// profile: clients that would get different answers never share an entry.
+func introduction(perSession bool, client json.RawMessage) json.RawMessage {
+	v, _ := json.Marshal(requestedVersion(client))
+	intro := map[string]json.RawMessage{"protocolVersion": v}
+	if perSession {
+		intro["capabilities"] = json.RawMessage(capabilityKey(client))
+	}
+	b, _ := json.Marshal(intro)
+	return b
+}
+
+func clientOf(ss Session) json.RawMessage {
+	if ss == nil {
+		return nil
+	}
+	return ss.InitParams()
 }
 
 type startOp struct {
@@ -78,13 +169,52 @@ type startOp struct {
 	err  error
 }
 
+func newEntry(name string, def *registry.Service) *entry {
+	return &entry{name: name, def: def, slots: map[string]*slot{}, checking: map[string]bool{}}
+}
+
+// perSessionLocked reports whether each session gets an instance of its own:
+// configured so, or a shareability check found the server needs it.
+func (p *Pool) perSessionLocked(e *entry) bool {
+	if e.def.PerSession() {
+		return true
+	}
+	if !e.checked && p.opts.Catalog != nil && e.def.CatalogEnabled() {
+		e.checked = true
+		e.needs = p.opts.Catalog.NeedsSession(e.name, p.fingerprint(e.def))
+	}
+	return e.needs != ""
+}
+
+// keyLocked picks the slot that serves ss; ss may be nil only for a shared
+// service.
+func (p *Pool) keyLocked(e *entry, ss Session) string {
+	if p.perSessionLocked(e) {
+		return ss.ID()
+	}
+	return sharedKey + requestedVersion(clientOf(ss))
+}
+
+// takeAll empties the entry and returns its instances for the caller to stop.
+// A start in progress finds its slot gone and stops what it started.
+func (e *entry) takeAll() []*instance.Instance {
+	var out []*instance.Instance
+	for k, sl := range e.slots {
+		if sl.inst != nil {
+			out = append(out, sl.inst)
+		}
+		delete(e.slots, k)
+	}
+	return out
+}
+
 func New(cfg *registry.Config, opts Options) *Pool {
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
 	p := &Pool{opts: opts, entries: map[string]*entry{}}
 	for _, name := range cfg.Names() {
-		p.entries[name] = &entry{name: name, def: cfg.Services[name]}
+		p.entries[name] = newEntry(name, cfg.Services[name])
 	}
 	return p
 }
@@ -102,20 +232,34 @@ func (p *Pool) Has(name string) bool {
 	return p.entries[name] != nil
 }
 
-// Current returns the running instance without starting one.
-func (p *Pool) Current(name string) *instance.Instance {
+// PerSession reports whether the service gives each session its own instance.
+func (p *Pool) PerSession(name string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if e := p.entries[name]; e != nil && e.inst != nil && e.inst.Alive() {
-		return e.inst
+	e := p.entries[name]
+	return e != nil && p.perSessionLocked(e)
+}
+
+// Current returns the instance serving ss (the shared one for its protocol
+// version on a shared service) without starting one.
+func (p *Pool) Current(name string, ss Session) *instance.Instance {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e := p.entries[name]
+	if e == nil || ss == nil && p.perSessionLocked(e) {
+		return nil
+	}
+	if sl := e.slots[p.keyLocked(e, ss)]; sl != nil && sl.alive() {
+		return sl.inst
 	}
 	return nil
 }
 
-// Acquire returns the service's running instance, starting it if needed.
-// Concurrent callers share a single start; a caller giving up does not abort
-// the start for the others.
-func (p *Pool) Acquire(ctx context.Context, name string) (*instance.Instance, error) {
+// Acquire returns the instance serving ss, starting it if needed: the shared
+// instance, or ss's own for a per-session service (ss may be nil only for a
+// shared one). Concurrent callers share a single start; a caller giving up
+// does not abort the start for the others.
+func (p *Pool) Acquire(ctx context.Context, name string, ss Session) (*instance.Instance, error) {
 	p.mu.Lock()
 	e := p.entries[name]
 	switch {
@@ -125,30 +269,45 @@ func (p *Pool) Acquire(ctx context.Context, name string) (*instance.Instance, er
 	case p.closed:
 		p.mu.Unlock()
 		return nil, errors.New("MCPcell 正在退出")
-	case e.inst != nil && e.inst.Alive():
-		inst := e.inst
+	case ss == nil && p.perSessionLocked(e):
+		p.mu.Unlock()
+		return nil, ErrNeedsSession
+	}
+	key := p.keyLocked(e, ss)
+	sl := e.slots[key]
+	if sl != nil && sl.alive() {
+		inst := sl.inst
 		p.mu.Unlock()
 		return inst, nil
 	}
-	op := e.op
+	if sl == nil {
+		shared := strings.HasPrefix(key, sharedKey)
+		sl = &slot{key: key, shared: shared, intro: introduction(!shared, clientOf(ss))}
+		e.slots[key] = sl
+	}
+	op := sl.op
 	if op == nil {
-		if wait := time.Until(e.nextTry); wait > 0 {
-			err := fmt.Errorf("%s 最近启动失败，%d 秒后再试：%s", name, int(wait.Seconds())+1, e.lastErr)
+		fail := func(err error) (*instance.Instance, error) {
+			if e.slots[key] == sl && !sl.alive() {
+				delete(e.slots, key)
+			}
 			p.mu.Unlock()
 			return nil, err
+		}
+		if wait := time.Until(e.nextTry); wait > 0 {
+			return fail(fmt.Errorf("%s 最近启动失败，%d 秒后再试：%s", name, int(wait.Seconds())+1, e.lastErr))
 		}
 		victim, err := p.makeRoomLocked()
 		if err != nil {
-			p.mu.Unlock()
-			return nil, err
+			return fail(err)
 		}
 		if victim != nil {
-			go victim.Stop("为其他服务腾出实例名额")
+			go victim.Stop("为其他实例腾出名额")
 		}
 		op = &startOp{done: make(chan struct{})}
-		e.op = op
+		sl.op = op
 		e.starts++
-		go p.start(e, op)
+		go p.start(e, sl, op, ss)
 	}
 	p.mu.Unlock()
 	select {
@@ -160,25 +319,35 @@ func (p *Pool) Acquire(ctx context.Context, name string) (*instance.Instance, er
 }
 
 // makeRoomLocked enforces MaxInstances: when full it detaches the least
-// recently used idle instance (the caller stops it) or refuses.
+// recently used idle instance (the caller stops it) or refuses. Shared
+// instances go first: stopping one costs a cold start, while stopping a
+// session's own instance loses that session's state.
 func (p *Pool) makeRoomLocked() (*instance.Instance, error) {
 	if p.opts.MaxInstances <= 0 {
 		return nil, nil
 	}
 	running := 0
-	var lru *entry
+	var lru *slot
+	var lruEntry *entry
 	var lruAt time.Time
 	for _, e := range p.entries {
-		if e.op != nil {
+		for _, sl := range e.slots {
+			if sl.op != nil {
+				running++
+				continue
+			}
+			if !sl.alive() {
+				continue
+			}
 			running++
-			continue
-		}
-		if e.inst == nil || !e.inst.Alive() {
-			continue
-		}
-		running++
-		if idle, since := e.inst.Idle(); idle && (lru == nil || since.Before(lruAt)) {
-			lru, lruAt = e, since
+			idle, since := sl.inst.Idle()
+			if !idle {
+				continue
+			}
+			shared, lruShared := sl.shared, lru != nil && lru.shared
+			if lru == nil || shared && !lruShared || shared == lruShared && since.Before(lruAt) {
+				lru, lruEntry, lruAt = sl, e, since
+			}
 		}
 	}
 	if running < p.opts.MaxInstances {
@@ -187,26 +356,37 @@ func (p *Pool) makeRoomLocked() (*instance.Instance, error) {
 	if lru == nil {
 		return nil, fmt.Errorf("已有 %d 个实例在运行且都在处理请求，达到上限（limits.maxInstances）", running)
 	}
-	victim := lru.inst
-	lru.inst = nil
-	p.opts.Log.Info("evicting idle instance for budget", "service", lru.name)
-	return victim, nil
+	delete(lruEntry.slots, lru.key)
+	p.opts.Log.Info("evicting idle instance for budget", "service", lruEntry.name, "perSession", !lru.shared)
+	return lru.inst, nil
 }
 
-func (p *Pool) start(e *entry, op *startOp) {
+func (p *Pool) start(e *entry, sl *slot, op *startOp, ss Session) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	p.mu.Lock()
 	def := e.def
 	p.mu.Unlock()
-	spec, direct, note := p.buildSpec(ctx, e.name, def)
-	inst, err := instance.Start(instance.Options{
+	var spawn Spawner
+	if sp, ok := ss.(Spawner); ok && !sl.shared {
+		spawn = sp
+	}
+	spec, direct, note := p.buildSpec(ctx, e.name, def, spawn)
+	opts := instance.Options{
 		Name: e.name, Spec: spec, Version: p.opts.Version,
 		InitTimeout: p.opts.InitTimeout, Log: p.opts.Log,
-		OnListChanged: func(n string) { p.listChanged(e, n) },
-	})
+		OnListChanged: func(n string) { p.listChanged(e, sl, n) },
+		Client:        sl.intro,
+	}
+	if sl.shared {
+		opts.OnServerRequest = func(method string) { p.serverAsked(e, def, method) }
+	} else {
+		// A session's own instance is introduced exactly as its client.
+		opts.Owner, opts.Client = ss, ss.InitParams()
+	}
+	inst, err := instance.Start(opts)
 	p.mu.Lock()
-	e.op = nil
+	sl.op = nil
 	e.note = note
 	switch {
 	case err == nil && (e.def != def || p.entries[e.name] != e):
@@ -218,11 +398,20 @@ func (p *Pool) start(e *entry, op *startOp) {
 		p.opts.Log.Warn("start failed", "service", e.name, "err", err)
 	case p.closed:
 		err = errors.New("MCPcell 正在退出")
+	case e.slots[sl.key] != sl:
+		err = errors.New("实例在启动过程中被停止（会话结束或手动回收）")
 	default:
 		e.failures = 0
-		e.inst, e.direct = inst, direct
-		go p.watch(e, inst)
-		go p.refreshCatalog(e, inst)
+		sl.inst, sl.direct = inst, direct
+		go p.watch(e, sl, inst)
+		go func() {
+			if err := p.refreshCatalog(e.name, def, inst, sl.intro); err != nil {
+				p.opts.Log.Warn("catalog fetch failed", "service", e.name, "err", err)
+			}
+		}()
+	}
+	if err != nil && e.slots[sl.key] == sl && !sl.alive() {
+		delete(e.slots, sl.key)
 	}
 	p.mu.Unlock()
 	if err != nil && inst != nil {
@@ -238,16 +427,19 @@ func backoff(failures int) time.Duration {
 	return steps[min(failures, len(steps))-1]
 }
 
-func (p *Pool) watch(e *entry, inst *instance.Instance) {
+func (p *Pool) watch(e *entry, sl *slot, inst *instance.Instance) {
 	<-inst.Done()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e.lastStderr = inst.StderrTail(8)
-	if e.inst == inst {
-		e.inst = nil
+	if sl.inst == inst {
+		sl.inst = nil
+		if sl.op == nil && e.slots[sl.key] == sl {
+			delete(e.slots, sl.key)
+		}
 	}
 	if inst.StopReason() != "" {
-		return // stopped on purpose (idle, manual, budget, shutdown)
+		return // stopped on purpose (idle, manual, budget, session end, shutdown)
 	}
 	now := time.Now()
 	e.lastErr, e.lastErrAt = "进程意外退出", now
@@ -295,16 +487,24 @@ func (p *Pool) npxPackage(def *registry.Service) (spec string, args []string, ok
 // buildSpec turns a definition into a process spec, replacing npx with
 // node <bin> from the package cache when possible. If that fails the service
 // still runs through npx and note says why.
-func (p *Pool) buildSpec(ctx context.Context, name string, def *registry.Service) (proc.Spec, bool, string) {
-	spec, direct, note := p.launchSpec(ctx, name, def)
+func (p *Pool) buildSpec(ctx context.Context, name string, def *registry.Service, spawn Spawner) (proc.Spec, bool, string) {
+	spec, direct, note := p.launchSpec(ctx, name, def, spawn)
 	if def.LeanEnabled() {
 		spec = leanSpec(spec)
 	}
 	return spec, direct, note
 }
 
-func (p *Pool) launchSpec(ctx context.Context, name string, def *registry.Service) (spec proc.Spec, direct bool, note string) {
+func (p *Pool) launchSpec(ctx context.Context, name string, def *registry.Service, spawn Spawner) (spec proc.Spec, direct bool, note string) {
 	spec = p.baseSpec(name, def)
+	if spawn != nil {
+		if env := spawn.SpawnEnv(); env != nil {
+			spec.Env = env
+		}
+		if dir := spawn.SpawnDir(); dir != "" {
+			spec.Dir = dir
+		}
+	}
 	spec.MemoryLimit = uint64(def.MemoryLimit)
 	pkg, args, ok := p.npxPackage(def)
 	if !ok {
@@ -361,6 +561,20 @@ func (p *Pool) fingerprint(def *registry.Service) string {
 	return catalog.Fingerprint(def.Command, def.Args, def.Env, def.Cwd, version)
 }
 
+// Definition returns the service's definition, or nil.
+func (p *Pool) Definition(name string) *registry.Service { return p.definition(name) }
+
+// Definitions returns every service's definition, by name.
+func (p *Pool) Definitions() map[string]*registry.Service {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]*registry.Service, len(p.entries))
+	for name, e := range p.entries {
+		out[name] = e.def
+	}
+	return out
+}
+
 func (p *Pool) definition(name string) *registry.Service {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -370,114 +584,398 @@ func (p *Pool) definition(name string) *registry.Service {
 	return nil
 }
 
-// CachedInit returns the cached initialize result for a service.
-func (p *Pool) CachedInit(name string) (result json.RawMessage, version string, ok bool) {
-	def := p.definition(name)
-	if def == nil || p.opts.Catalog == nil || !def.CatalogEnabled() {
+// catalogKey returns the definition and the catalog profile for a client of
+// the service, or nil when the service has no catalog.
+func (p *Pool) catalogKey(name string, client json.RawMessage) (*registry.Service, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e := p.entries[name]
+	if e == nil || p.opts.Catalog == nil || !e.def.CatalogEnabled() {
+		return nil, ""
+	}
+	return e.def, string(introduction(p.perSessionLocked(e), client))
+}
+
+// CachedInit returns the cached initialize result for a client whose
+// initialize params are client.
+func (p *Pool) CachedInit(name string, client json.RawMessage) (result json.RawMessage, version string, ok bool) {
+	def, profile := p.catalogKey(name, client)
+	if def == nil {
 		return nil, "", false
 	}
-	return p.opts.Catalog.Init(name, p.fingerprint(def))
+	return p.opts.Catalog.Init(name, p.fingerprint(def), profile)
 }
 
-// CachedList returns a cached list result (all pages merged).
-func (p *Pool) CachedList(name, method string) (json.RawMessage, bool) {
-	def := p.definition(name)
-	if def == nil || p.opts.Catalog == nil || !def.CatalogEnabled() {
+// CachedList returns a cached list result (all pages merged) for a client.
+func (p *Pool) CachedList(name, method string, client json.RawMessage) (json.RawMessage, bool) {
+	def, profile := p.catalogKey(name, client)
+	if def == nil {
 		return nil, false
 	}
-	return p.opts.Catalog.List(name, p.fingerprint(def), method)
+	return p.opts.Catalog.List(name, p.fingerprint(def), profile, method)
 }
 
-func (p *Pool) refreshCatalog(e *entry, inst *instance.Instance) {
-	if p.opts.Catalog == nil || !e.def.CatalogEnabled() {
-		return
+// Cataloged reports whether the service's catalog holds anything for its
+// current configuration.
+func (p *Pool) Cataloged(name string) bool {
+	def := p.definition(name)
+	return def != nil && p.opts.Catalog != nil && def.CatalogEnabled() && p.opts.Catalog.Get(name, p.fingerprint(def)) != nil
+}
+
+// refreshCatalog caches what inst reports for the service, for clients that
+// inst was introduced as (intro).
+func (p *Pool) refreshCatalog(name string, def *registry.Service, inst *instance.Instance, intro json.RawMessage) error {
+	if p.opts.Catalog == nil || !def.CatalogEnabled() {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	entry, err := catalog.Fetch(ctx, inst, p.fingerprint(e.def))
+	entry, err := catalog.Fetch(ctx, inst, p.fingerprint(def))
 	if err != nil {
-		p.opts.Log.Warn("catalog fetch failed", "service", e.name, "err", err)
-		return
+		return err
 	}
-	changed, err := p.opts.Catalog.Put(e.name, entry)
+	if jsonrpc.Field(intro, "capabilities") != nil {
+		entry.Client = intro
+	}
+	changed, err := p.opts.Catalog.Put(name, string(intro), entry)
 	if err != nil {
-		p.opts.Log.Warn("catalog save failed", "service", e.name, "err", err)
+		p.opts.Log.Warn("catalog save failed", "service", name, "err", err)
 	}
 	p.mu.Lock()
 	notify := p.onListChange
 	p.mu.Unlock()
 	if notify != nil {
 		for _, list := range changed {
-			notify(e.name, list)
+			notify(name, list)
 		}
 	}
+	return nil
 }
 
-// listChanged runs before the upstream's notification reaches sessions:
-// stop serving the cached list, then refetch it.
-func (p *Pool) listChanged(e *entry, notification string) {
+// listChanged runs before the upstream's notification reaches sessions: stop
+// serving the cached list, then refetch it from the instance that announced it.
+func (p *Pool) listChanged(e *entry, sl *slot, notification string) {
 	if p.opts.Catalog == nil {
 		return
 	}
 	p.opts.Catalog.MarkStale(e.name, catalog.ListFor(notification)...)
 	go func() {
-		if inst := p.Current(e.name); inst != nil {
-			p.refreshCatalog(e, inst)
+		p.mu.Lock()
+		inst, def := sl.inst, e.def
+		p.mu.Unlock()
+		if inst != nil && inst.Alive() {
+			_ = p.refreshCatalog(e.name, def, inst, sl.intro)
 		}
 	}()
 }
 
+// Warm starts the service on MCPcell's own behalf to cache its catalog, then
+// stops it. A per-session service is started once as each kind of client
+// seen recently would start it (at most three), so their sessions connect
+// from the catalog; with none seen yet, and for a shared service, once as
+// MCPcell.
+func (p *Pool) Warm(ctx context.Context, name string) error {
+	p.mu.Lock()
+	e := p.entries[name]
+	if e == nil {
+		p.mu.Unlock()
+		return ErrUnknownService
+	}
+	def, closed, perSession := e.def, p.closed, p.perSessionLocked(e)
+	p.mu.Unlock()
+	if closed {
+		return errors.New("MCPcell 正在退出")
+	}
+	clients := []json.RawMessage{nil}
+	if seen := p.opts.Catalog; perSession && seen != nil {
+		if recent := seen.Clients(3); len(recent) > 0 {
+			clients = recent
+		}
+	}
+	for _, client := range clients {
+		if err := p.warm(ctx, name, def, introduction(perSession, client)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Pool) warm(ctx context.Context, name string, def *registry.Service, intro json.RawMessage) error {
+	spec, _, note := p.buildSpec(ctx, name, def, nil)
+	inst, err := instance.Start(instance.Options{Name: name, Spec: spec, Version: p.opts.Version,
+		InitTimeout: p.opts.InitTimeout, Log: p.opts.Log, Client: intro})
+	p.mu.Lock()
+	if e := p.entries[name]; e != nil {
+		e.note = note
+		if err != nil {
+			e.lastErr, e.lastErrAt = err.Error(), time.Now()
+		}
+	}
+	p.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	defer inst.Stop("预热完成")
+	return p.refreshCatalog(name, def, inst, intro)
+}
+
+// checkWait is how long a shareability check waits after the handshake and
+// lists for the server to ask the client something (servers ask for roots
+// right after initialized).
+const checkWait = 2 * time.Second
+
+// CheckShared makes sure a shared service serves ss's kind of client as that
+// client's own instance would. The first time a client whose capabilities the
+// service has not been checked for connects, an instance is started in the
+// background, introduced exactly as that client. If the server asks the
+// client anything (roots, sampling, elicitation), or its initialize or lists
+// differ from what the shared instance reported, the service needs sessions:
+// every later session gets an instance of its own. Results are kept with the
+// catalog, so each kind of client is checked once per configuration.
+func (p *Pool) CheckShared(name string, ss Session) {
+	client := clientOf(ss)
+	caps := capabilityKey(client)
+	p.mu.Lock()
+	e := p.entries[name]
+	if e == nil || p.closed || p.opts.Catalog == nil || !e.def.CatalogEnabled() || p.perSessionLocked(e) ||
+		caps == "{}" || e.checking[caps] {
+		p.mu.Unlock()
+		return // no capabilities: introduced exactly as the shared instance is
+	}
+	def := e.def
+	fp := p.fingerprint(def)
+	if _, done := p.opts.Catalog.Check(name, fp, caps); done {
+		p.mu.Unlock()
+		return
+	}
+	e.checking[caps] = true
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		delete(e.checking, caps)
+		p.mu.Unlock()
+	}()
+	reason, err := p.check(name, def, fp, client)
+	if err != nil {
+		p.opts.Log.Warn("shareability check failed", "service", name, "err", firstLine(err.Error()))
+		return // not recorded: the next such session tries again
+	}
+	if err := p.opts.Catalog.SetCheck(name, fp, caps, reason); err != nil {
+		p.opts.Log.Warn("catalog save failed", "service", name, "err", err)
+	}
+	if reason == "" {
+		p.opts.Log.Info("shareability checked", "service", name, "capabilities", caps)
+		return
+	}
+	p.mu.Lock()
+	if p.entries[name] == e && e.def == def {
+		e.checked, e.needs = true, reason
+	}
+	p.mu.Unlock()
+	p.opts.Log.Warn("shared service needs an instance per session", "service", name, "reason", reason)
+}
+
+// serverAsked records that a shared instance's server sent its client a
+// request during a call, which the shareability check cannot see coming:
+// later sessions get instances of their own.
+func (p *Pool) serverAsked(e *entry, def *registry.Service, method string) {
+	reason := "调用中向客户端发了 " + method + " 请求"
+	p.mu.Lock()
+	if p.entries[e.name] != e || e.def != def || e.needs != "" {
+		p.mu.Unlock()
+		return
+	}
+	e.checked, e.needs = true, reason
+	fp := p.fingerprint(def)
+	p.mu.Unlock()
+	if p.opts.Catalog != nil && def.CatalogEnabled() {
+		if err := p.opts.Catalog.SetCheck(e.name, fp, "server-request", reason); err != nil {
+			p.opts.Log.Warn("catalog save failed", "service", e.name, "err", err)
+		}
+	}
+	p.opts.Log.Warn("shared service needs an instance per session", "service", e.name, "reason", reason)
+}
+
+// asker stands in for a client during a shareability check: it notes what
+// the server asks and declines.
+type asker struct {
+	mu      sync.Mutex
+	methods []string
+}
+
+func (a *asker) ID() string             { return "shareability-check" }
+func (a *asker) Notify(jsonrpc.Message) {}
+func (a *asker) Request(_ context.Context, m jsonrpc.Message) (jsonrpc.Message, error) {
+	a.mu.Lock()
+	a.methods = append(a.methods, m.Method)
+	a.mu.Unlock()
+	return jsonrpc.NewError(m.ID, jsonrpc.CodeMethodNotFound, "MCPcell 共享检测不应答"), nil
+}
+
+// check runs one shareability check; reason is "" when the server answered
+// the client as it answers the shared instance.
+func (p *Pool) check(name string, def *registry.Service, fp string, client json.RawMessage) (reason string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	spec, _, _ := p.buildSpec(ctx, name, def, nil)
+	a := &asker{}
+	inst, err := instance.Start(instance.Options{Name: name, Spec: spec, Version: p.opts.Version,
+		InitTimeout: p.opts.InitTimeout, Log: p.opts.Log, Client: client, Owner: a})
+	if err != nil {
+		return "", err
+	}
+	defer inst.Stop("共享检测完成")
+	got, err := catalog.Fetch(ctx, inst, fp)
+	if err != nil {
+		return "", err
+	}
+	select {
+	case <-time.After(checkWait):
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	a.mu.Lock()
+	asked := distinct(a.methods)
+	a.mu.Unlock()
+	if len(asked) > 0 {
+		return "会向客户端发 " + strings.Join(asked, "、") + " 请求", nil
+	}
+	profile := string(introduction(false, client))
+	var sharedInit json.RawMessage
+	for wait := 0; ; wait++ { // the shared instance may still be caching its catalog
+		var ok bool
+		if sharedInit, _, ok = p.opts.Catalog.Init(name, fp, profile); ok || wait == 30 {
+			if !ok {
+				return "", errors.New("共享实例的能力目录还没有缓存")
+			}
+			break
+		}
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	for _, k := range []string{"capabilities", "instructions"} {
+		if !sameJSON(jsonrpc.Field(got.InitResult, k), jsonrpc.Field(sharedInit, k)) {
+			return "初始化结果随客户端能力变化（" + k + "）", nil
+		}
+	}
+	for method := range catalog.Lists {
+		mine, ok := got.Lists[method]
+		if !ok {
+			continue // not offered to this client: the capabilities differ already
+		}
+		theirs, ok := p.opts.Catalog.List(name, fp, profile, method)
+		if !ok {
+			return "", errors.New("共享实例的 " + method + " 还没有缓存")
+		}
+		if !sameJSON(mine, theirs) {
+			return method + " 随客户端能力变化", nil
+		}
+	}
+	return "", nil
+}
+
+func sameJSON(a, b json.RawMessage) bool {
+	var x, y any
+	_ = json.Unmarshal(a, &x)
+	_ = json.Unmarshal(b, &y)
+	return reflect.DeepEqual(x, y)
+}
+
+// distinct returns the distinct values of list in first-seen order.
+func distinct(list []string) []string {
+	var out []string
+	for _, s := range list {
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // Put adds a service or replaces its definition. A replaced service's running
-// instance is stopped, so the next call starts with the new definition.
+// instances are stopped, so the next call starts with the new definition.
 func (p *Pool) Put(name string, def *registry.Service) {
 	p.mu.Lock()
 	e := p.entries[name]
-	var old *instance.Instance
+	var old []*instance.Instance
 	if e == nil {
-		p.entries[name] = &entry{name: name, def: def}
+		p.entries[name] = newEntry(name, def)
 	} else {
-		old, e.inst = e.inst, nil
+		old = e.takeAll()
 		e.def = def
 		e.nextTry, e.crashes, e.failures, e.note, e.lastErr, e.lastErrAt = time.Time{}, nil, 0, "", "", time.Time{}
+		e.checked, e.needs = false, ""
 	}
 	p.mu.Unlock()
-	if old != nil {
-		old.Stop("配置已修改")
-	}
+	stopAll(old, "配置已修改")
 }
 
-// Remove deletes a service, stopping its instance.
+// Remove deletes a service, stopping its instances.
 func (p *Pool) Remove(name string) bool {
 	p.mu.Lock()
 	e := p.entries[name]
 	delete(p.entries, name)
-	var inst *instance.Instance
+	var old []*instance.Instance
 	if e != nil {
-		inst = e.inst
+		old = e.takeAll()
 	}
 	p.mu.Unlock()
-	if inst != nil {
-		inst.Stop("服务已删除")
-	}
+	stopAll(old, "服务已删除")
 	return e != nil
 }
 
-// Stop ends the service's instance. The next request starts a fresh one, so
+// Stop ends the service's instances. The next request starts a fresh one, so
 // this also clears a crash quarantine.
 func (p *Pool) Stop(name, reason string) bool {
 	p.mu.Lock()
 	e := p.entries[name]
-	var inst *instance.Instance
+	var old []*instance.Instance
 	if e != nil {
-		inst = e.inst
+		old = e.takeAll()
 		e.nextTry, e.crashes, e.failures = time.Time{}, nil, 0
+		e.checked = false // an update changes the fingerprint the checks belong to
 	}
 	p.mu.Unlock()
-	if inst == nil {
-		return false
+	stopAll(old, reason)
+	return len(old) > 0
+}
+
+// Release ends ss's use of the service when the session ends: the instance
+// it had of its own stops, and the shared one it used forgets it. A session
+// can have both when a shareability check moved the service to per-session
+// instances while it was open.
+func (p *Pool) Release(name string, ss Session) {
+	p.mu.Lock()
+	e := p.entries[name]
+	if e == nil {
+		p.mu.Unlock()
+		return
 	}
-	inst.Stop(reason)
-	return true
+	own := e.slots[ss.ID()]
+	delete(e.slots, ss.ID())
+	shared := e.slots[sharedKey+requestedVersion(ss.InitParams())]
+	p.mu.Unlock()
+	if own != nil && own.inst != nil {
+		own.inst.Stop("会话结束")
+	}
+	if shared != nil && shared.inst != nil {
+		shared.inst.Detach(ss)
+	}
+}
+
+func stopAll(insts []*instance.Instance, reason string) {
+	var wg sync.WaitGroup
+	for _, inst := range insts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			inst.Stop(reason)
+		}()
+	}
+	wg.Wait()
 }
 
 // Update reinstalls an npx service's package at the newest version its spec
@@ -496,7 +994,12 @@ func (p *Pool) Update(ctx context.Context, name string) (now, before *npmcache.P
 	if now, before, err = p.opts.Packages.Update(ctx, pkg, spec.Env); err != nil {
 		return nil, nil, err
 	}
-	if _, err := p.Acquire(ctx, name); err != nil {
+	if def.PerSession() {
+		err = p.Warm(ctx, name)
+	} else {
+		_, err = p.Acquire(ctx, name, nil)
+	}
+	if err != nil {
 		return now, before, fmt.Errorf("已更新到 %s，但启动失败：%w", now.Version, err)
 	}
 	return now, before, nil
@@ -507,17 +1010,22 @@ func (p *Pool) Reap(now time.Time) {
 	p.mu.Lock()
 	var victims []*instance.Instance
 	for _, e := range p.entries {
-		if e.inst == nil || e.def.Idle() <= 0 {
+		limit := e.def.Idle()
+		if limit <= 0 {
 			continue
 		}
-		if idle, since := e.inst.Idle(); idle && now.Sub(since) >= e.def.Idle() {
-			victims = append(victims, e.inst)
+		for k, sl := range e.slots {
+			if sl.op != nil || !sl.alive() {
+				continue
+			}
+			if idle, since := sl.inst.Idle(); idle && now.Sub(since) >= limit {
+				victims = append(victims, sl.inst)
+				delete(e.slots, k)
+			}
 		}
 	}
 	p.mu.Unlock()
-	for _, inst := range victims {
-		inst.Stop("空闲回收")
-	}
+	stopAll(victims, "空闲回收")
 }
 
 // Run reaps idle instances until ctx ends.
@@ -540,20 +1048,10 @@ func (p *Pool) Close() {
 	p.closed = true
 	var all []*instance.Instance
 	for _, e := range p.entries {
-		if e.inst != nil {
-			all = append(all, e.inst)
-		}
+		all = append(all, e.takeAll()...)
 	}
 	p.mu.Unlock()
-	var wg sync.WaitGroup
-	for _, inst := range all {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			inst.Stop("MCPcell 退出")
-		}()
-	}
-	wg.Wait()
+	stopAll(all, "MCPcell 退出")
 }
 
 type PackageInfo struct {
@@ -567,6 +1065,12 @@ type CatalogInfo struct {
 	Prompts   int       `json:"prompts"`
 	Resources int       `json:"resources"`
 	FetchedAt time.Time `json:"fetchedAt"`
+}
+
+// SessionInstance is a per-session service's instance for one session.
+type SessionInstance struct {
+	Session string `json:"session"` // the first 8 characters of the session id
+	instance.Snapshot
 }
 
 type ServiceStatus struct {
@@ -587,15 +1091,20 @@ type ServiceStatus struct {
 	LastErrorAt    *time.Time         `json:"lastErrorAt,omitempty"`
 	RetryAt        *time.Time         `json:"retryAt,omitempty"`
 	StderrTail     string             `json:"stderrTail,omitempty"`
-	Instance       *instance.Snapshot `json:"instance,omitempty"`
+	Instance       *instance.Snapshot `json:"instance,omitempty"`  // a shared service's instance
+	Instances      []SessionInstance  `json:"instances,omitempty"` // a per-session service's instances
 }
 
 func (p *Pool) Status() []ServiceStatus {
 	p.mu.Lock()
+	type running struct {
+		sl   *slot
+		inst *instance.Instance
+	}
 	type item struct {
 		st   ServiceStatus
 		def  *registry.Service
-		inst *instance.Instance
+		runs []running
 	}
 	items := make([]item, 0, len(p.entries))
 	now := time.Now()
@@ -608,6 +1117,10 @@ func (p *Pool) Status() []ServiceStatus {
 			Lean:           e.def.LeanEnabled(),
 			Starts:         e.starts, Note: e.note, LastError: e.lastErr, StderrTail: e.lastStderr,
 		}
+		if !e.def.PerSession() && p.perSessionLocked(e) {
+			st.Mode = registry.ModePerSession
+			st.Note = strings.TrimSpace("共享检测发现它" + e.needs + "，已自动改为按会话运行。" + st.Note)
+		}
 		for k := range e.def.Env {
 			st.EnvNames = append(st.EnvNames, k)
 		}
@@ -616,26 +1129,43 @@ func (p *Pool) Status() []ServiceStatus {
 			t := e.lastErrAt
 			st.LastErrorAt = &t
 		}
-		var inst *instance.Instance
+		var runs []running
+		starting := false
+		for _, sl := range e.slots {
+			starting = starting || sl.op != nil
+			if sl.alive() {
+				runs = append(runs, running{sl, sl.inst})
+				st.Direct = st.Direct || sl.direct
+			}
+		}
 		switch {
-		case e.op != nil:
+		case len(runs) > 0:
+			st.State = "ready"
+		case starting:
 			st.State = "starting"
-		case e.inst != nil && e.inst.Alive():
-			st.State, inst, st.Direct = "ready", e.inst, e.direct
 		case e.nextTry.After(now):
 			st.State = "failed"
 			t := e.nextTry
 			st.RetryAt = &t
 		}
-		items = append(items, item{st, e.def, inst})
+		items = append(items, item{st, e.def, runs})
 	}
 	p.mu.Unlock()
 	out := make([]ServiceStatus, 0, len(items))
 	for _, it := range items {
-		if it.inst != nil {
-			snap := it.inst.Snapshot() // syscalls; outside the pool lock
-			it.st.Instance = &snap
+		for _, r := range it.runs {
+			snap := r.inst.Snapshot() // syscalls; outside the pool lock
+			switch {
+			case r.sl.shared && it.st.Instance == nil:
+				it.st.Instance = &snap
+			case r.sl.shared:
+				// Another protocol version's shared instance.
+				it.st.Instances = append(it.st.Instances, SessionInstance{Session: strings.TrimPrefix(r.sl.key, sharedKey), Snapshot: snap})
+			default:
+				it.st.Instances = append(it.st.Instances, SessionInstance{Session: r.sl.key[:min(8, len(r.sl.key))], Snapshot: snap})
+			}
 		}
+		sort.Slice(it.st.Instances, func(a, b int) bool { return it.st.Instances[a].StartedAt.Before(it.st.Instances[b].StartedAt) })
 		if pkg, _, ok := p.npxPackage(it.def); ok {
 			if pin := p.opts.Packages.Pinned(pkg); pin != nil {
 				it.st.Package = &PackageInfo{Name: pin.Name, Version: pin.Version, InstalledAt: pin.InstalledAt}

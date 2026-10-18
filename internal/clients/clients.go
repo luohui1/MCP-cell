@@ -61,10 +61,11 @@ type Client interface {
 	Name() string
 	Path() string
 	List() ([]Entry, error)
-	// Attach points entry name at url, authorized with token.
-	Attach(name, url, token string) (Record, error)
-	// Add creates entry name pointing at url in a client that lacks it.
-	Add(name, url, token string) (Record, error)
+	// Attach makes entry name run through MCPcell (see Target).
+	Attach(name string, t Target) (Record, error)
+	// Add creates entry name, running t.Server through MCPcell, in a client
+	// that lacks it.
+	Add(name string, t Target) (Record, error)
 	// Restore undoes Attach (puts the original back) or Add (removes the
 	// entry). It refuses (ErrConflict) when the entry is no longer what
 	// MCPcell wrote.

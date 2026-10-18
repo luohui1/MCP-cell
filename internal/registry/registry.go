@@ -20,7 +20,15 @@ const (
 	DefaultPort         = 47621
 	DefaultIdleTimeout  = 3 * time.Minute
 	DefaultMaxInstances = 32
-	ModeShared          = "shared"
+	// A per-session instance holds the session's state (browser pages,
+	// connections); reaping it loses that, so it waits longer.
+	DefaultSessionIdle = 30 * time.Minute
+
+	// ModeShared runs one instance for every session.
+	ModeShared = "shared"
+	// ModePerSession gives each client session its own instance, started on
+	// its first call and stopped when the session ends.
+	ModePerSession = "per-session"
 )
 
 // Config is config.json. Service entries use the same shape as a client's
@@ -61,14 +69,19 @@ type Service struct {
 func (s *Service) FlattenEnabled() bool { return s.Flatten == nil || *s.Flatten }
 func (s *Service) LeanEnabled() bool    { return s.Lean == nil || *s.Lean }
 
-// Idle is the effective idle timeout: the configured one, or the default.
-// 0 means never reap.
+// Idle is the effective idle timeout: the configured one, or the mode's
+// default. 0 means never reap.
 func (s *Service) Idle() time.Duration {
-	if !s.IdleTimeout.Set {
-		return DefaultIdleTimeout
+	switch {
+	case s.IdleTimeout.Set:
+		return s.IdleTimeout.Duration
+	case s.PerSession():
+		return DefaultSessionIdle
 	}
-	return s.IdleTimeout.Duration
+	return DefaultIdleTimeout
 }
+
+func (s *Service) PerSession() bool     { return s.Mode == ModePerSession }
 func (s *Service) CatalogEnabled() bool { return s.Catalog != "off" }
 
 // Size reads "512MB", "1.5GB", "800KB" or "0".
@@ -218,9 +231,9 @@ func (s *Service) normalize(name string) error {
 	switch s.Mode {
 	case "":
 		s.Mode = ModeShared
-	case ModeShared:
-	case "per-session", "per-workspace":
-		return fmt.Errorf("服务 %s：%s 模式在 M3 实现，当前只支持 shared", name, s.Mode)
+	case ModeShared, ModePerSession:
+	case "per-workspace":
+		return fmt.Errorf("服务 %s：per-workspace 模式尚未实现，可以用 per-session", name)
 	default:
 		return fmt.Errorf("服务 %s：未知模式 %q", name, s.Mode)
 	}

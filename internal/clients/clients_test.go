@@ -95,7 +95,7 @@ func TestCursorAttachRestoreIsByteExact(t *testing.T) {
 		write(t, path, fixture)
 		c := NewCursor(home, backups)
 		inTemp(t, c.Path())
-		rec, err := c.Attach("context7", base+"/s/context7", tok)
+		rec, err := c.Attach("context7", Target{URL: base + "/s/context7", Token: tok})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ func TestRestoreRefusesEditedEntry(t *testing.T) {
 	path := filepath.Join(home, ".cursor", "mcp.json")
 	write(t, path, cursorFixture)
 	c := NewCursor(home, "")
-	rec, _ := c.Attach("context7", base+"/s/context7", tok)
+	rec, _ := c.Attach("context7", Target{URL: base + "/s/context7", Token: tok})
 	edited := strings.Replace(read(t, path), "47621", "9999", 1)
 	write(t, path, edited)
 	if err := c.Restore(rec); !errors.Is(err, ErrConflict) {
@@ -143,8 +143,8 @@ func TestRestoreRefusesEditedEntry(t *testing.T) {
 const codexFixture = `model = "gpt-5"
 
 # MCP servers
-[mcp_servers.fastctx]
-command = "fastctx"
+[mcp_servers.search]
+command = "search-mcp"
 args = ["serve"]
 
 [mcp_servers.context7]
@@ -181,7 +181,7 @@ func TestCodexAttachKeepsPolicyAndRestoresExactly(t *testing.T) {
 		if err != nil || len(entries) != 2 {
 			t.Fatalf("list: %d entries, %v", len(entries), err)
 		}
-		rec, err := c.Attach("context7", base+"/s/context7", tok)
+		rec, err := c.Attach("context7", Target{URL: base + "/s/context7", Token: tok})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +203,7 @@ func TestCodexAttachKeepsPolicyAndRestoresExactly(t *testing.T) {
 		if h, _ := c7["http_headers"].(map[string]any); h["Authorization"] != "Bearer "+tok {
 			t.Fatalf("headers: %v", c7["http_headers"])
 		}
-		if doc.MCPServers["fastctx"]["command"] != "fastctx" || doc.Projects[`D:\work`]["trust_level"] != "trusted" {
+		if doc.MCPServers["search"]["command"] != "search-mcp" || doc.Projects[`D:\work`]["trust_level"] != "trusted" {
 			t.Fatal("other tables changed")
 		}
 		if !strings.Contains(after, "# notes about the next table") || !strings.Contains(after, "# MCP servers") {
@@ -223,7 +223,7 @@ func TestCodexInlineTableRefused(t *testing.T) {
 	write(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers]\nctx = { command = \"npx\" }\n")
 	c := NewCodex(home, "")
 	inTemp(t, c.Path())
-	if _, err := c.Attach("ctx", base+"/s/ctx", tok); err == nil || !strings.Contains(err.Error(), "内联") {
+	if _, err := c.Attach("ctx", Target{URL: base + "/s/ctx", Token: tok}); err == nil || !strings.Contains(err.Error(), "内联") {
 		t.Fatalf("inline table: %v", err)
 	}
 }
@@ -281,7 +281,7 @@ func TestClaudeCodeViaCLI(t *testing.T) {
 	failAdd := false
 	c := NewClaudeCode(t.TempDir(), t.TempDir(), fakeClaude(t, path, &failAdd))
 	inTemp(t, c.Path())
-	rec, err := c.Attach("context7", base+"/s/context7", tok)
+	rec, err := c.Attach("context7", Target{URL: base + "/s/context7", Token: tok})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestClaudeCodeViaCLI(t *testing.T) {
 	}
 	// A failed add after the remove puts the original back.
 	failAdd = true
-	if _, err := c.Attach("context7", base+"/s/context7", tok); err == nil {
+	if _, err := c.Attach("context7", Target{URL: base + "/s/context7", Token: tok}); err == nil {
 		t.Fatal("expected failure")
 	}
 	entries, _ = c.List()
@@ -334,13 +334,13 @@ type fakeClient struct {
 	entries []Entry
 }
 
-func (f fakeClient) ID() string                                    { return f.id }
-func (f fakeClient) Name() string                                  { return f.id }
-func (f fakeClient) Path() string                                  { return "" }
-func (f fakeClient) List() ([]Entry, error)                        { return f.entries, nil }
-func (f fakeClient) Attach(string, string, string) (Record, error) { return Record{}, nil }
-func (f fakeClient) Add(string, string, string) (Record, error)    { return Record{}, nil }
-func (f fakeClient) Restore(Record) error                          { return nil }
+func (f fakeClient) ID() string                            { return f.id }
+func (f fakeClient) Name() string                          { return f.id }
+func (f fakeClient) Path() string                          { return "" }
+func (f fakeClient) List() ([]Entry, error)                { return f.entries, nil }
+func (f fakeClient) Attach(string, Target) (Record, error) { return Record{}, nil }
+func (f fakeClient) Add(string, Target) (Record, error)    { return Record{}, nil }
+func (f fakeClient) Restore(Record) error                  { return nil }
 
 func TestOverviewMapsSameServerAcrossClients(t *testing.T) {
 	c7 := func(client, cmd string, args ...string) Entry {
@@ -389,7 +389,7 @@ func TestCursorAddRemoveIsByteExact(t *testing.T) {
 		write(t, path, fixture)
 		c := NewCursor(home, "")
 		inTemp(t, c.Path())
-		rec, err := c.Add("ctx", base+"/s/ctx", tok)
+		rec, err := c.Add("ctx", Target{URL: base + "/s/ctx", Token: tok})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -401,7 +401,7 @@ func TestCursorAddRemoveIsByteExact(t *testing.T) {
 		if !found || !strings.Contains(read(t, path), "// my MCP servers") == (name != "empty") {
 			t.Fatalf("%s after add:\n%s", name, read(t, path))
 		}
-		if _, err := c.Add("ctx", base+"/s/ctx", tok); !errors.Is(err, ErrExists) {
+		if _, err := c.Add("ctx", Target{URL: base + "/s/ctx", Token: tok}); !errors.Is(err, ErrExists) {
 			t.Fatalf("%s: adding twice: %v", name, err)
 		}
 		if err := c.Restore(rec); err != nil {
@@ -414,7 +414,7 @@ func TestCursorAddRemoveIsByteExact(t *testing.T) {
 	// No config yet: Add creates one.
 	home := t.TempDir()
 	c := NewCursor(home, "")
-	if _, err := c.Add("ctx", base+"/s/ctx", tok); err != nil {
+	if _, err := c.Add("ctx", Target{URL: base + "/s/ctx", Token: tok}); err != nil {
 		t.Fatal(err)
 	}
 	if entries, _ := c.List(); len(entries) != 1 {
@@ -433,7 +433,7 @@ func TestCodexAddRemoveIsByteExact(t *testing.T) {
 		write(t, path, fixture)
 		c := NewCodex(home, "")
 		inTemp(t, c.Path())
-		rec, err := c.Add("my-svc", base+"/s/my-svc", tok)
+		rec, err := c.Add("my-svc", Target{URL: base + "/s/my-svc", Token: tok})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -443,7 +443,7 @@ func TestCodexAddRemoveIsByteExact(t *testing.T) {
 		if _, err := toml.Decode(read(t, path), &doc); err != nil || doc.MCPServers["my-svc"]["url"] != base+"/s/my-svc" || len(doc.MCPServers) != 3 {
 			t.Fatalf("after add (crlf=%v): %v %v", crlf, doc.MCPServers["my-svc"], err)
 		}
-		if _, err := c.Add("context7", base+"/s/x", tok); !errors.Is(err, ErrExists) {
+		if _, err := c.Add("context7", Target{URL: base + "/s/x", Token: tok}); !errors.Is(err, ErrExists) {
 			t.Fatalf("adding an existing name: %v", err)
 		}
 		if err := c.Restore(rec); err != nil {
@@ -462,11 +462,11 @@ func TestClaudeCodeAddRemove(t *testing.T) {
 	write(t, path, `{"mcpServers": {"other": {"command": "x"}}}`)
 	c := NewClaudeCode(t.TempDir(), t.TempDir(), fakeClaude(t, path, nil))
 	inTemp(t, c.Path())
-	rec, err := c.Add("ctx", base+"/s/ctx", tok)
+	rec, err := c.Add("ctx", Target{URL: base + "/s/ctx", Token: tok})
 	if err != nil || !rec.Added {
 		t.Fatalf("add: %+v %v", rec, err)
 	}
-	if _, err := c.Add("other", base+"/s/other", tok); !errors.Is(err, ErrExists) {
+	if _, err := c.Add("other", Target{URL: base + "/s/other", Token: tok}); !errors.Is(err, ErrExists) {
 		t.Fatalf("adding over an existing entry: %v", err)
 	}
 	if err := c.Restore(rec); err != nil {
