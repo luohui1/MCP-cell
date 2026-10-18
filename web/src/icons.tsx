@@ -89,21 +89,20 @@ function hash(s: string) {
   return h;
 }
 
+const avatarSize = {
+  xs: 'size-6 rounded-md text-[11px]',
+  sm: 'size-9 rounded-[10px] text-sm',
+  md: 'size-10 rounded-xl text-base',
+  lg: 'size-14 rounded-2xl text-2xl',
+};
+
 /** A stable lettered avatar for an MCP service. */
-export function ServiceAvatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' | 'lg' }) {
+export function ServiceAvatar({ name, size = 'md' }: { name: string; size?: keyof typeof avatarSize }) {
   const letter = (name.match(/[A-Za-z0-9]/)?.[0] ?? '?').toUpperCase();
   return (
-    <Tile size={size}>
-      <span
-        className={cx(
-          'grid place-items-center font-semibold',
-          palette[hash(name) % palette.length],
-          size === 'lg' ? 'size-12 rounded-2xl text-2xl' : size === 'sm' ? 'size-7 rounded-lg text-sm' : 'size-8 rounded-lg text-[15px]',
-        )}
-      >
-        {name ? letter : '+'}
-      </span>
-    </Tile>
+    <span className={cx('grid shrink-0 place-items-center font-semibold ring-1 ring-black/[0.04] ring-inset', palette[hash(name) % palette.length], avatarSize[size])}>
+      {name ? letter : '+'}
+    </span>
   );
 }
 

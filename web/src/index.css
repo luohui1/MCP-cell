@@ -15,15 +15,15 @@ body,
 
 body {
   margin: 0;
-  min-width: 1024px;
-  background: #ffffff;
+  min-width: 960px;
+  background: #fafafa;
   color: #18181b;
   -webkit-font-smoothing: antialiased;
 }
 
 @media (prefers-color-scheme: dark) {
   body {
-    background: #111113;
+    background: #09090b;
     color: #e4e4e7;
   }
 }

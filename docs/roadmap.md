@@ -151,6 +151,38 @@ context7 的调用本身要访问外部 API（热调用约 1.1–1.5 s），两�
 - 加入 Agent 的条目在还原时整条删除，文件其余部分逐字节不变（Codex 表块、Cursor JSON 成员都有测试）
 - Node 服务默认加 `--max-semi-space-size=1 --optimize-for-size`（服务级 `lean: false` 可关）；`--lite-mode`、`--jitless` 会关掉 WebAssembly 导致 fetch 失败，没有采用
 
+**桌面应用**
+- 守护进程带托盘图标：单击打开窗口；右键菜单「打开 MCPcell / 开机自启 / 退出 MCPcell」，退出前确认（退出后已托管的 MCP 不可用）；悬停显示运行中的 MCP 数和总内存；资源管理器重启后自动补回图标，退出时移除
+- 窗口用系统自带的 WebView2 显示管理页，直接调 COM（`EmbeddedBrowserWebView.dll` 的 `CreateWebViewEnvironmentWithOptionsInternal`），不带 WebView2Loader.dll、不加依赖。窗口跑在守护进程拉起的独立进程（`mcpcelld window`）里，关窗口进程就退出：WebView2 不进守护进程，崩了也不影响共享的 MCP。外部链接交给默认浏览器；记住窗口位置；跟随系统深浅色；按显示器 DPI 缩放
+- `mcpcell open`（双击 `mcpcelld.exe` 同此）：需要时先启动守护进程，再打开或聚焦窗口；没有 WebView2 时退回浏览器。`mcpcell shortcut on|off` 和设置页管理桌面、开始菜单快捷方式（`GET/POST /api/desktop`，`POST /api/window`）
+- 实测（150% 缩放，空服务列表的试验守护进程，私有提交）：
+
+| | 守护进程 | 窗口进程 | WebView2 进程 | 合计 |
+|---|---|---|---|---|
+| 只有托盘 | 47.5–48.3 MB | — | — | 约 48 MB |
+| 窗口打开 | 53.6 MB | 48.7 MB | 6 个，约 283 MB | 385 MB |
+| 关窗口后 2 s | 54.3 MB | 已退出 | 全部退出 | 54 MB |
+
+  关窗后守护进程比空闲多的约 6 MB 来自管理页的 API 轮询，不开窗口、只用 curl 调 15 次 `/api/status` 和 `/api/mcp` 也是 47.5 → 54.5 MB；开关三轮不增长。最初把 WebView2 放在守护进程里时，关窗后 57 MB 且每轮涨约 1 MB，运行时 DLL 也一直不肯卸载（`DllCanUnloadNow` 始终说还在用），所以改成独立进程。窗口进程 48.7 MB 里约 32 MB 是同一个二进制链接 `net/http` 带来的固定提交（架构 §13），单独做一个只含窗口的小二进制能省下，暂未做
+
+**一键托管与管理页改版**
+- MCP 页按「已托管 / 可以托管 / 暂不支持 / 远程与内置」分组，每行一个托管开关；Agent 用图标表示状态，点图标给出能做的操作；顶部是托管数、实例、内存、会话
+- 「一键托管」一次处理所有 Agent：已知可共享的默认勾选，未验证的默认不勾，需要会话隔离的列出但不托管；改哪些文件、哪些条目在确认框里写明。Agents 页的按 Agent 托管用同一个对话框
+- 沙箱验证（临时 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`USERPROFILE`）：一键托管 4 个 MCP、共 3 个 Agent 的 6 个条目，再「全部还原」后 Codex、Cursor 配置逐字节一致，Claude Code 的 `mcpServers` 内容一致
+
+**Codex 沙盒实测**（2026-10-17，Codex CLI 0.161.0）
+- 方法：独立的 MCPcell（单独 home 和端口），沙盒 `CODEX_HOME` 里放 context7、fastctx、sequential-thinking 三个原生条目，用接管接口转成 HTTP 条目（fastctx 未验证，强制共享）。真实 Codex 用 `codex exec --ignore-user-config --ephemeral -c mcp_servers.*` 指向沙盒，不读不改用户的 `config.toml`，鉴权照旧。两个会话并发，分别在两个带不同标记的项目里，要求只用 MCP 工具找出项目标记并用 context7 查 React 的库 ID
+- Codex 0.161 以 2025-11-25 协议连接，握手和工具列表来自能力目录
+
+| 两个并发会话 | Codex 自己启动（stdio） | 经 MCPcell |
+|---|---|---|
+| 会话下的 MCP 进程 | 10 个（fastctx ×2、cmd ×4、node ×4），峰值私有提交约 663 MB | 0 个；全机 3 个服务实例约 122 MB + 守护进程 54 MB，和会话数无关 |
+| context7 | 两个会话都没拿到：模型查找工具时它的工具还不在列表里，回答 UNAVAILABLE（单会话重跑也一样） | 两轮都答对 `/reactjs/react.dev` |
+| fastctx | 正确 | 正确：两个项目共用一个进程，各自拿到自己的标记 |
+
+- fastctx 共享后，不传 `path` 的调用以 MCPcell 的工作目录（用户目录）为准：一次 `glob` 扫了整个用户目录，用时 32 s；原生时是会话所在项目。它的说明要求传绝对路径，Codex 实际也传了绝对路径，所以能用；这类依赖当前目录的工具是 M3b「按项目一份」的候选
+- 协议层（`tools/mcpprobe`）：fastctx 绝对路径调用 21–36 ms，3 个客户端并发正常；context7 调用约 2.5 s（外部 API）；sequential-thinking 7 ms。崩溃的会话没有断开连接，留下的会话在 10 分钟无活动后清理
+
 **M3b 按会话隔离**：chrome-devtools、ssh、pencil、playwright 等有状态服务每个会话独立实例，服务端请求转发给所属会话；之后它们也能接管
 
 **M3c**：Claude Desktop 的 shim、shared 端点双版本协议、新版协议上游识别

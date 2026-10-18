@@ -1,166 +1,153 @@
 import { useState } from 'react';
-import { Bot, ChevronRight, Info, Layers, Power, Undo2 } from 'lucide-react';
-import { takeover, type AgentCell } from '../api';
+import { Bot, ChevronRight, Layers, Power, Undo2 } from 'lucide-react';
+import { takeover } from '../api';
 import { useStatus } from '../App';
-import { agentBrand, agentOrder, restartHint, useAgentActions } from '../agent-actions';
+import { agentBrand, agentOrder, restoreSteps, useAgentActions, useUnified } from '../agents';
 import { clients as manualClients, masked } from '../clients';
-import { BrandMark, Tile } from '../icons';
-import { Badge, Button, Card, CodeBlock, cx, Dot, PageHeader, useToast } from '../ui';
-import { useUnified } from './Mcp';
+import { BrandMark } from '../icons';
+import { candidates, OneClickDialog } from '../one-click';
+import { Badge, Button, CodeBlock, cx, GroupHeader, PageHeader, TableCard, useToast } from '../ui';
+
+const grid = 'grid grid-cols-[minmax(0,1fr)_88px_180px_240px] items-center gap-4';
 
 export function AgentsPage() {
   const { data, error, reload } = useUnified();
   const acts = useAgentActions(reload, data?.autostart ?? null);
   const toast = useToast();
+  const [only, setOnly] = useState<string | null>(null);
 
   const agents = data ? agentOrder.map((id) => data.agents.find((a) => a.id === id)).filter((a) => !!a) : [];
 
   return (
     <>
-      <PageHeader icon={<Bot className="size-6 text-zinc-700 dark:text-zinc-300" />} title="Agents" subtitle="托管后，Agent 里的 MCP 由 MCPcell 统一运行" />
-      <div className="mx-auto w-full max-w-[1200px] space-y-5 px-8 py-6">
-        {data?.autostart.supported && !data.autostart.enabled && (
-          <div className="flex items-center gap-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3.5 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-            <Power className="size-5 shrink-0" />
-            <div className="flex-1">托管后 Agent 依赖 MCPcell 守护进程，建议开启开机自启（无窗口运行）。</div>
-            <Button className="h-9" variant="brand" onClick={async () => (await takeover.autostart(true), toast('已开启开机自启'), reload())}>
-              开启自启
-            </Button>
-          </div>
-        )}
-        {error && <Card className="p-5 text-sm text-red-600">{error}</Card>}
-        {!data && !error && <p className="py-16 text-center text-sm text-zinc-400">正在读取 Agent 配置…</p>}
+      <PageHeader icon={<Bot className="size-5 text-zinc-500" />} title="Agents" subtitle="托管后，Agent 里的 MCP 由 MCPcell 统一运行" />
+      <div className="mx-auto w-full max-w-[1240px] space-y-7 px-8 pt-6 pb-12">
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        {!data && !error && <p className="py-20 text-center text-sm text-zinc-400">正在读取 Agent 配置…</p>}
 
         {data && (
-          <Card className="divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800">
-            {agents.map((a) => {
-              const managed = data.rows.flatMap((r) => {
-                const c = r.agents[a!.id];
-                return c?.state === 'managed' ? [c.entry] : [];
-              });
-              const shareable = data.rows.flatMap((r) => {
-                const c = r.agents[a!.id];
-                return c?.state === 'native' && c.class === 'shared' ? [{ entry: c.entry, service: r.service ?? r.proposed, isNew: !r.service }] : [];
-              });
-              return (
-                <div key={a!.id} className="flex items-center gap-4 px-5 py-4">
-                  <Tile>
-                    <BrandMark brand={agentBrand[a!.id]} className="size-6" />
-                  </Tile>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base font-semibold">{a!.name}</span>
-                      {a!.found ? <Badge>{a!.total} 个 MCP</Badge> : <Badge>未找到配置</Badge>}
-                      {a!.managed > 0 && <Badge tone="blue">托管 {a!.managed}</Badge>}
-                      {a!.shareable > 0 && <Badge tone="green">可托管 {a!.shareable}</Badge>}
-                    </div>
-                    <div className="mt-1 truncate font-mono text-[13px] text-zinc-500">{a!.path}</div>
-                    {a!.found && <div className="mt-0.5 text-xs text-zinc-400">{restartHint[a!.id]}</div>}
-                    {a!.error && <div className="mt-0.5 text-xs text-red-600">{a!.error}</div>}
-                    {a!.found && (
-                      <div className="mt-2.5 flex flex-wrap gap-1.5">
-                        {data.rows.flatMap((r) => {
-                          const c = r.agents[a!.id];
-                          if (!c) return [];
-                          const [tone, what] = entryTone(c);
-                          return [
-                            <span
-                              key={r.key}
-                              title={`${what}${c.enabled ? '' : '（已停用）'}`}
-                              className={cx(
-                                'inline-flex h-6 items-center gap-1.5 rounded-md border border-zinc-200 px-2 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-300',
-                                !c.enabled && 'opacity-50',
-                              )}
-                            >
-                              <Dot tone={tone} />
-                              {c.entry}
-                            </span>,
-                          ];
-                        })}
+          <section>
+            {data.autostart.supported && !data.autostart.enabled && agents.some((a) => a.managed > 0) && (
+              <div className="mb-6 flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                <Power className="size-4 shrink-0" />
+                <span className="flex-1">托管后 Agent 依赖 MCPcell 在后台运行，建议开启开机自启。</span>
+                <Button size="sm" variant="primary" onClick={async () => (await takeover.autostart(true), toast('已开启开机自启'), reload())}>
+                  开启自启
+                </Button>
+              </div>
+            )}
+            <div className={cx(grid, 'px-5')}>
+              <div className="-ml-5 min-w-0">
+                <GroupHeader title="可以自动托管" count={agents.length} hint="直接改写这些 Agent 的配置，随时可以还原" />
+              </div>
+              <span className="mb-2.5 text-xs text-zinc-400">MCP</span>
+              <span className="mb-2.5 text-xs text-zinc-400">已托管</span>
+              <span />
+            </div>
+            <TableCard>
+              {agents.map((a) => {
+                const back = data.rows.flatMap((r) => restoreSteps(r, [a!]));
+                const offers = candidates(data, a!.id);
+                const offer = offers.length;
+                const recommended = offers.filter((c) => c.steps.every((s) => !s.force)).length;
+                const pct = a!.total ? Math.round((a!.managed / a!.total) * 100) : 0;
+                return (
+                  <div key={a!.id} className={cx(grid, 'px-5 py-4', !a!.found && 'opacity-60')}>
+                    <div className="flex min-w-0 items-center gap-3.5">
+                      <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+                        <BrandMark brand={agentBrand[a!.id]} className="size-5" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[15px] font-medium">{a!.name}</span>
+                          {!a!.found && <Badge>未找到配置</Badge>}
+                        </div>
+                        <div className="mt-0.5 truncate font-mono text-xs text-zinc-400" title={a!.path}>
+                          {a!.path}
+                        </div>
+                        {a!.error && <div className="mt-0.5 truncate text-xs text-red-600">{a!.error}</div>}
                       </div>
-                    )}
+                    </div>
+                    <div className="text-sm tabular-nums">{a!.found ? `${a!.total} 个` : '—'}</div>
+                    <div className="flex items-center gap-3">
+                      <div className="h-1.5 w-20 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-sm text-zinc-600 tabular-nums dark:text-zinc-300">{a!.managed} 个</span>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      {back.length > 0 && (
+                        <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => acts.restore(back, `还原 ${a!.name} 的 ${back.length} 个托管`)}>
+                          全部还原
+                        </Button>
+                      )}
+                      {offer > 0 && (
+                        <Button size="sm" icon={<Layers className="size-3.5" />} onClick={() => setOnly(a!.id)}>
+                          {recommended ? `托管 ${recommended} 个` : `可选托管 ${offer} 个`}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  {managed.length > 0 && (
-                    <Button className="h-9" icon={<Undo2 className="size-4" />} onClick={() => acts.restoreAll(a!, managed)}>
-                      全部还原
-                    </Button>
-                  )}
-                  {shareable.length > 0 && (
-                    <Button className="h-9" variant="brand" icon={<Layers className="size-4" />} onClick={() => acts.takeoverEntries(a!, shareable)}>
-                      托管可共享的 {shareable.length} 个
-                    </Button>
-                  )}
-                </div>
-              );
-            })}
-          </Card>
+                );
+              })}
+            </TableCard>
+          </section>
         )}
         <ManualAgents skip={new Set(agentOrder)} />
       </div>
+      {data && <OneClickDialog open={only !== null} only={only ?? undefined} onClose={() => setOnly(null)} data={data} reload={reload} />}
       {acts.dialog}
     </>
   );
 }
 
-function entryTone(c: AgentCell): ['blue' | 'green' | 'amber' | 'gray', string] {
-  if (c.state === 'managed') return ['blue', '由 MCPcell 托管'];
-  if (c.state === 'changed') return ['amber', '托管后被改动过'];
-  if (c.state === 'native' && c.class === 'shared') return ['green', '原生，可以托管'];
-  if (c.state === 'native' && c.class === 'stateful') return ['amber', c.reason ?? '需要会话隔离'];
-  if (c.state === 'remote') return ['gray', '远程 HTTP'];
-  if (c.state === 'internal') return ['gray', c.reason ?? 'Agent 内置'];
-  return ['gray', c.reason ?? '原生'];
-}
-
 function ManualAgents({ skip }: { skip: Set<string> }) {
   const { status } = useStatus();
+  const [shown, setShown] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const eps = status.services.map((s) => ({ name: s.name, url: `${status.baseUrl}/s/${s.name}` }));
   const list = manualClients.filter((c) => !skip.has(c.id));
   return (
-    <div>
-      <h2 className="mt-8 mb-3 flex items-center gap-2 text-[15px] font-semibold">
-        其他 Agent
-        <span className="text-sm font-normal text-zinc-500">还不能自动托管，复制配置后手动替换同名条目</span>
-      </h2>
-      <div className="mb-3 flex gap-3 rounded-2xl border border-blue-200 bg-blue-50/60 px-5 py-3.5 text-sm leading-6 text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
-        <Info className="mt-1 size-4 shrink-0" />
-        下面的配置包含 MCPcell 里全部 {eps.length} 个服务；复制的内容带完整访问令牌。
-      </div>
-      <Card className="divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800">
-        {list.map((c) => {
-          const expanded = open === c.id && c.http && eps.length > 0;
-          return (
-            <div key={c.id}>
-              <button
-                disabled={!c.http || eps.length === 0}
-                onClick={() => setOpen(open === c.id ? null : c.id)}
-                className="flex w-full items-center gap-4 px-5 py-3.5 text-left transition-colors enabled:hover:bg-zinc-50 disabled:cursor-default dark:enabled:hover:bg-zinc-800/50"
-              >
-                <Tile size="sm">
-                  <BrandMark brand={c.brand} className="size-5" />
-                </Tile>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{c.name}</span>
-                    {c.http ? <Badge tone="green">HTTP</Badge> : <Badge tone="amber">仅 stdio</Badge>}
+    <section>
+      <GroupHeader title="其他 Agent" count={list.length} hint="还不能自动托管：复制配置，替换原来的同名条目后重启" open={shown} onToggle={() => setShown(!shown)} />
+      {shown && (
+        <TableCard>
+          {list.map((c) => {
+            const usable = c.http && eps.length > 0;
+            const expanded = open === c.id && usable;
+            return (
+              <div key={c.id}>
+                <button
+                  disabled={!usable}
+                  onClick={() => setOpen(open === c.id ? null : c.id)}
+                  className="flex w-full items-center gap-3.5 px-5 py-3 text-left transition-colors enabled:hover:bg-zinc-50 disabled:cursor-default dark:enabled:hover:bg-zinc-800/40"
+                >
+                  <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+                    <BrandMark brand={c.brand} className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{c.name}</span>
+                      {!c.http && <Badge tone="amber">仅 stdio</Badge>}
+                    </div>
+                    <div className="mt-0.5 truncate text-xs text-zinc-400">
+                      {c.file}
+                      {c.note && ` · ${c.note}`}
+                    </div>
                   </div>
-                  <div className="mt-0.5 truncate text-[13px] text-zinc-500">
-                    {c.file}
-                    {c.note && <span className="text-zinc-400"> · {c.note}</span>}
+                  {usable && <ChevronRight className={cx('size-4 text-zinc-400 transition-transform', expanded && 'rotate-90')} />}
+                </button>
+                {expanded && (
+                  <div className="px-5 pb-4 pl-[66px]">
+                    <CodeBlock shown={c.snippet!(eps, masked(status.token))} copy={c.snippet!(eps, status.token)} />
+                    <p className="mt-2 text-xs text-zinc-400">包含 MCPcell 里全部 {eps.length} 个服务；复制的内容带完整访问令牌。</p>
                   </div>
-                </div>
-                {c.http && eps.length > 0 && <ChevronRight className={cx('size-4 text-zinc-400 transition-transform', expanded && 'rotate-90')} />}
-              </button>
-              {expanded && (
-                <div className="px-5 pb-5 pl-[76px]">
-                  <CodeBlock shown={c.snippet!(eps, masked(status.token))} copy={c.snippet!(eps, status.token)} />
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </Card>
-    </div>
+                )}
+              </div>
+            );
+          })}
+        </TableCard>
+      )}
+    </section>
   );
 }

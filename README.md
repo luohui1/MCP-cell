@@ -14,25 +14,31 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 - 在 Windows 上，每个用 npx 启动的服务要 3–4 个进程，npx 自身的 node 就占约 137 MB
 - npx 冷启动慢，同一次会话里 5 个服务撞上客户端的 30 秒连接超时
 
-## 现在能做什么（M2）
+## 现在能做什么
 
 - 一个守护进程通过 loopback 上的 Streamable HTTP 暴露每个服务：`http://127.0.0.1:47621/s/<服务名>`
 - 所有连到同一服务的会话**共用一个上游进程**。实测 6 个 SDK 客户端加 2 个真实 Claude Code 会话共用一个 context7。协议层只改写 id、进度令牌和取消通知的归属，不改工具名，不重放调用
 - **连接不启动进程**：握手和工具列表由缓存的能力目录回答，第一次调用工具时才启动，空闲后回收（默认 3 分钟）
 - **npx 扁平化**：npm 包装进 MCPcell 的缓存并锁定版本，直接用 node 启动。context7 从 4 个进程、约 235 MB 降到 2 个进程、约 84 MB，冷启动开销从 10 秒以上降到约 2.5 秒
 - 上游放在 Windows Job Object 里：守护进程无论怎么退出，整棵进程树都会被清理；可设内存上限，超限立即终止
-- 状态页和 `mcpcell ps` 显示每个服务的实例、会话、私有提交和缓存的工具数
+- **一键托管**：读取 Claude Code、Codex、Cursor 的 MCP 配置，把可共享的条目改成连到 MCPcell；改前整文件备份，随时一键还原（逐字节恢复，被你改过的条目不覆盖）
+- **桌面应用**：托盘图标常驻，窗口用系统自带的 WebView2 显示管理页，关窗后 WebView2 进程全部退出；支持开机自启、桌面和开始菜单快捷方式
+- 管理页和 `mcpcell ps` 显示每个服务的实例、会话、私有提交和缓存的工具数
 
-尚未实现：自动接管客户端配置、按会话或工作区隔离的服务、只说新版协议的上游。见 [里程碑](docs/roadmap.md)。
+尚未实现：按会话或按项目隔离的服务（chrome-devtools、ssh 这类有状态的 MCP 暂不托管）、只说新版协议的上游。见 [里程碑](docs/roadmap.md)。
 
 ## 试用
 
 ```sh
-go build -o bin/mcpcell.exe ./cmd/mcpcell
-bin/mcpcell.exe daemon        # 首次运行生成 ~/.mcpcell/config.json 和 token
+go build -ldflags "-s -w" -o bin/mcpcell.exe ./cmd/mcpcell
+go build -ldflags "-s -w -H windowsgui" -o bin/mcpcelld.exe ./cmd/mcpcell
+bin/mcpcell.exe open          # 启动守护进程并打开窗口；双击 mcpcelld.exe 同此
+bin/mcpcell.exe shortcut on   # 可选：桌面和开始菜单快捷方式
 ```
 
-在 `~/.mcpcell/config.json` 的 `services` 里添加服务，写法与客户端的 `mcpServers` 条目相同，然后重启守护进程：
+打开后在「MCP」页点「一键托管」，勾选要交给 MCPcell 的 MCP 即可；已经打开的 Agent 会话重启后生效。
+
+也可以直接在 `~/.mcpcell/config.json` 的 `services` 里添加服务，写法与客户端的 `mcpServers` 条目相同，然后重启守护进程：
 
 ```json
 {
@@ -42,17 +48,19 @@ bin/mcpcell.exe daemon        # 首次运行生成 ~/.mcpcell/config.json 和 to
 }
 ```
 
-运行 `bin/mcpcell.exe ui` 打开管理页。「MCP」页把 MCPcell 的服务和 Claude Code、Codex、Cursor 里配置的 MCP 合成一张表，每个 Agent 一格，点一下就能托管、还原或加入其他 Agent；也可以在页面上添加、编辑、删除服务（带常用预设，也能粘贴客户端里的 JSON 条目）。「Agents」页按 Agent 批量托管和还原，其他客户端给出可复制的配置，替换原来的同名条目后重启即可。工具全名保持不变。
+「MCP」页把 MCPcell 的服务和 Claude Code、Codex、Cursor 里配置的 MCP 合成一张表，按已托管、可以托管、暂不支持分组，每行一个托管开关，点 Agent 图标可以单独托管、还原或加入其他 Agent；也可以在页面上添加、编辑、删除服务（带常用预设，也能粘贴客户端里的 JSON 条目）。「Agents」页按 Agent 批量托管和还原，其他客户端给出可复制的配置，替换原来的同名条目后重启即可。工具全名保持不变。
 
 | 命令 | 作用 |
 |---|---|
-| `mcpcell start` / `stop` | 在后台启动（无窗口）/ 停止守护进程 |
+| `mcpcell open` | 打开 MCPcell 窗口，需要时先启动守护进程 |
+| `mcpcell start` / `stop` | 在后台启动（带托盘图标）/ 停止守护进程 |
 | `mcpcell daemon [--port N]` | 前台运行守护进程，Ctrl+C 退出 |
 | `mcpcell clients` | 各客户端的 MCP 条目、分类与接管状态 |
 | `mcpcell restore --all` | 还原所有被接管的客户端配置，不需要守护进程 |
 | `mcpcell autostart on` | 开机自启 |
 | `mcpcell ps` | 服务、实例、会话、私有提交 |
-| `mcpcell ui` | 用一次性链接打开管理页 |
+| `mcpcell ui --browser` | 在浏览器里用一次性链接打开管理页 |
+| `mcpcell shortcut on` | 创建桌面和开始菜单快捷方式 |
 | `mcpcell update <服务>` | 把 npx 服务的 npm 包更新到最新版并重新锁定 |
 
 可选配置：

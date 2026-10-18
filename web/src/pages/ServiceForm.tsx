@@ -6,7 +6,7 @@ import { firstLine } from '../format';
 import { ServiceAvatar } from '../icons';
 import { presets, type Preset } from '../presets';
 import { go } from '../router';
-import { Button, Card, cx, Field, IconButton, Input, Switch, Textarea, useToast } from '../ui';
+import { Button, Card, cx, Field, IconButton, Input, PageHeader, Switch, Textarea, useToast } from '../ui';
 
 const blank: ServiceForm = { name: '', command: '', args: [], env: {}, cwd: '', idleTimeout: '', memoryLimit: '', flatten: true, catalog: true, lean: true };
 
@@ -113,22 +113,13 @@ export function ServiceFormPage({ name }: { name?: string }) {
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-20 flex h-[72px] shrink-0 items-center gap-4 border-b border-zinc-200 bg-white/90 px-8 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
-        <button
-          onClick={() => (editing ? go('services', name!) : go('mcp'))}
-          aria-label="返回"
-          className="grid size-10 place-items-center rounded-xl border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          <X className="size-[18px]" />
-        </button>
-        <h1 className="text-xl font-semibold tracking-tight">{editing ? `编辑 ${name}` : '添加 MCP 服务'}</h1>
-      </header>
+      <PageHeader back={() => (editing ? go('services', name!) : go('mcp'))} title={editing ? `编辑 ${name}` : '添加 MCP 服务'} />
 
       <div className="mx-auto w-full max-w-[960px] flex-1 px-8 py-6">
         {loading ? (
           <p className="py-16 text-center text-sm text-zinc-400">正在读取配置…</p>
         ) : (
-          <Card className="p-7">
+          <Card className="p-6">
             {!editing && (
               <>
                 <h2 className="mb-3 text-sm font-medium text-zinc-800 dark:text-zinc-200">预设服务</h2>
@@ -162,10 +153,10 @@ export function ServiceFormPage({ name }: { name?: string }) {
                   onChange={(e) => setPasteText(e.target.value)}
                 />
                 <div className="mt-2 flex justify-end gap-2">
-                  <Button className="h-9" onClick={() => setPasteOpen(false)}>
+                  <Button size="sm" onClick={() => setPasteOpen(false)}>
                     取消
                   </Button>
-                  <Button className="h-9" variant="primary" onClick={applyPaste}>
+                  <Button size="sm" variant="primary" onClick={applyPaste}>
                     填入表单
                   </Button>
                 </div>
@@ -174,7 +165,7 @@ export function ServiceFormPage({ name }: { name?: string }) {
             {stateful && (
               <div className="mt-3 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
                 <TriangleAlert className="mt-1 size-4 shrink-0" />
-                这个服务持有浏览器状态。按会话隔离要到 M3 才实现，目前所有会话会共用同一个浏览器。
+                这个服务持有浏览器状态。按会话隔离要到后续版本才实现，目前所有会话会共用同一个浏览器。
               </div>
             )}
 
@@ -235,7 +226,7 @@ export function ServiceFormPage({ name }: { name?: string }) {
                 <select
                   value={form.idleTimeout}
                   onChange={(e) => setForm({ ...form, idleTimeout: e.target.value })}
-                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 dark:border-zinc-700 dark:bg-zinc-900"
+                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-3 focus:ring-blue-500/15 dark:border-zinc-700 dark:bg-zinc-900"
                 >
                   {idleOptions.some((o) => o.value === form.idleTimeout) ? null : <option value={form.idleTimeout}>{form.idleTimeout}</option>}
                   {idleOptions.map((o) => (
@@ -293,8 +284,10 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
     <button
       onClick={onClick}
       className={cx(
-        'h-10 rounded-xl px-4 text-sm transition-colors',
-        active ? 'bg-brand font-medium text-white shadow-sm' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700',
+        'h-8 rounded-lg border px-3 text-[13px] transition-colors',
+        active
+          ? 'border-blue-600 bg-blue-600 font-medium text-white shadow-sm shadow-blue-600/20'
+          : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300',
       )}
     >
       {children}
@@ -304,7 +297,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
 
 function Toggle({ checked, onChange, title, desc }: { checked: boolean; onChange: (v: boolean) => void; title: string; desc: string }) {
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-700">
+    <div className="flex items-center gap-6 rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-700">
       <div className="flex-1">
         <div className="text-sm font-medium">{title}</div>
         <div className="mt-0.5 text-xs leading-5 text-zinc-500">{desc}</div>

@@ -204,6 +204,20 @@ export interface AgentSummary {
   shareable: number;
 }
 
+export interface DesktopStatus {
+  supported: boolean;
+  webview: boolean;
+  webviewError?: string;
+  desktopShortcut: boolean;
+  startMenuShortcut: boolean;
+}
+
+export const desktop = {
+  status: () => call<DesktopStatus>('GET', '/api/desktop'),
+  set: (p: { desktopShortcut?: boolean; startMenuShortcut?: boolean }) => call<DesktopStatus>('POST', '/api/desktop', p),
+  open: () => call<{ ok: boolean }>('POST', '/api/window'),
+};
+
 export const unified = {
   load: () => call<{ agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus }>('GET', '/api/mcp'),
   add: (client: string, row: string) => call<{ service: string }>('POST', `/api/agents/${encodeURIComponent(client)}/add`, { row }),

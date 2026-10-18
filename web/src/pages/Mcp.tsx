@@ -1,355 +1,378 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ChevronRight, Copy, Gauge, Layers, Pencil, Play, Plus, Power, RefreshCw, Square, Trash2 } from 'lucide-react';
-import { takeover, unified, type AgentCell, type AgentSummary, type AutostartStatus, type McpRow, type Service } from '../api';
+import { useState, type ReactNode } from 'react';
+import { Activity, ArrowRight, Copy, Cpu, Gauge, Layers, Pencil, Play, Plus, Power, RefreshCw, Square, Trash2, Undo2 } from 'lucide-react';
+import { takeover, type AgentCell, type AgentSummary, type McpRow, type Service } from '../api';
 import { useStatus } from '../App';
-import { agentBrand, agentOrder, useAgentActions } from '../agent-actions';
 import { useServiceActions } from '../actions';
-import { bytes, firstLine, since } from '../format';
-import { BrandMark, ServiceAvatar } from '../icons';
+import { agentBrand, agentsOf, canTake, cellsOf, groupOf, restoreSteps, takeSteps, useAgentActions, useUnified, type Group } from '../agents';
+import { bytes, firstLine } from '../format';
+import { BrandMark, Logo, ServiceAvatar } from '../icons';
+import { candidates, OneClickDialog } from '../one-click';
 import { go } from '../router';
-import { Badge, Button, Card, cx, Dot, IconButton, Menu, PageHeader, Segmented, useCopy, useToast } from '../ui';
+import { Badge, Button, Card, cx, Dot, GroupHeader, Menu, PageHeader, Stat, Switch, TableCard, useCopy, useToast, type MenuItem } from '../ui';
 
-type Filter = 'all' | 'managed' | 'available' | 'other';
+const groups: { id: Group; title: string; hint: string; collapsed?: boolean }[] = [
+  { id: 'managed', title: '已托管', hint: '由 MCPcell 运行，所有会话共用一份进程' },
+  { id: 'available', title: '可以托管', hint: '现在每个会话各起一份进程' },
+  { id: 'blocked', title: '暂不支持', hint: '为每个会话保存状态，需要独立实例（后续版本）', collapsed: true },
+  { id: 'other', title: '远程与内置', hint: '不在本机单独运行，不需要托管', collapsed: true },
+];
 
-const classBadge: Record<string, { tone: 'gray' | 'blue' | 'green' | 'amber'; text: string }> = {
-  shared: { tone: 'green', text: '可共享' },
-  stateful: { tone: 'amber', text: '需要会话隔离' },
-  unknown: { tone: 'gray', text: '未知' },
-  remote: { tone: 'gray', text: '远程 HTTP' },
-  internal: { tone: 'gray', text: 'Agent 内置' },
-  managed: { tone: 'blue', text: '已托管' },
-};
-
-/** Loads /api/mcp and keeps it fresh. */
-export function useUnified() {
-  const [data, setData] = useState<{ agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus } | null>(null);
-  const [error, setError] = useState('');
-  const reload = useCallback(async () => {
-    try {
-      setData(await unified.load());
-      setError('');
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, []);
-  useEffect(() => {
-    reload();
-    const t = setInterval(() => !document.hidden && reload(), 4000);
-    return () => clearInterval(t);
-  }, [reload]);
-  return { data, error, reload };
-}
-
-const isManaged = (r: McpRow) => Object.values(r.agents).some((c) => c.state === 'managed');
-const isAvailable = (r: McpRow) => Object.values(r.agents).some((c) => c.state === 'native' && c.class === 'shared');
+// Columns shared by group headers and rows so they line up.
+const grid = 'grid grid-cols-[minmax(0,1fr)_128px_196px_44px_32px] items-center gap-4';
 
 export function McpPage() {
   const { status } = useStatus();
   const { data, error, reload } = useUnified();
-  const agentActs = useAgentActions(reload, data?.autostart ?? null);
-  const serviceActs = useServiceActions();
+  const acts = useAgentActions(reload, data?.autostart ?? null);
+  const svcActs = useServiceActions();
   const copy = useCopy();
   const toast = useToast();
-  const [filter, setFilter] = useState<Filter>('all');
+  const [oneClick, setOneClick] = useState(false);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
 
+  const header = (actions?: ReactNode) => (
+    <PageHeader
+      icon={<Layers className="size-5 text-zinc-500" />}
+      title="MCP"
+      subtitle={data && `${data.rows.length} 个，来自 ${agentsOf(data.agents).length} 个 Agent`}
+      actions={actions}
+    />
+  );
   if (!data) {
     return (
       <>
-        <PageHeader icon={<Layers className="size-6 text-zinc-700 dark:text-zinc-300" />} title="MCP" />
-        <p className="py-16 text-center text-sm text-zinc-400">{error || '正在汇总各 Agent 的 MCP…'}</p>
+        {header()}
+        <p className="py-20 text-center text-sm text-zinc-400">{error || '正在汇总各 Agent 的 MCP…'}</p>
       </>
     );
   }
 
-  const agents = agentOrder.map((id) => data.agents.find((a) => a.id === id)).filter((a): a is AgentSummary => !!a && a.found);
-  const rows = data.rows.filter((r) => {
-    switch (filter) {
-      case 'managed':
-        return isManaged(r);
-      case 'available':
-        return isAvailable(r);
-      case 'other':
-        return !isManaged(r) && !isAvailable(r) && !r.service;
-    }
-    return true;
-  });
+  const agents = agentsOf(data.agents);
+  const byGroup = (g: Group) => data.rows.filter((r) => groupOf(r) === g);
+  const managedRows = byGroup('managed');
+  const offers = candidates(data);
+  const offer = offers.length;
+  // Shared ones are recommended; unverified ones are only offered.
+  const recommended = offers.filter((c) => c.steps.every((s) => !s.force)).length;
   const running = status.services.filter((s) => s.instance);
   const mcpBytes = running.reduce((n, s) => n + s.instance!.usage.privateBytes, 0);
-  const availableCount = agents.reduce((n, a) => n + a.shareable, 0);
-
-  async function takeAllShareable() {
-    const targets = agents.filter((a) => a.shareable > 0);
-    if (targets.length === 1) {
-      const a = targets[0];
-      const entries = data!.rows.flatMap((r) => {
-        const c = r.agents[a.id];
-        return c && c.state === 'native' && c.class === 'shared' ? [{ entry: c.entry, service: r.service ?? r.proposed, isNew: !r.service }] : [];
-      });
-      agentActs.takeoverEntries(a, entries);
-      return;
-    }
-    toast('请到 Agents 页逐个确认要托管的 Agent', 'error');
-    go('agents');
-  }
+  const allRestore = data.rows.flatMap((r) => restoreSteps(r, agents));
 
   return (
     <>
-      <PageHeader
-        icon={<Layers className="size-6 text-zinc-700 dark:text-zinc-300" />}
-        title="MCP"
-        subtitle={`${data.rows.length} 个，来自 ${agents.length} 个 Agent`}
-        actions={
-          <>
-            {availableCount > 0 && (
-              <Button onClick={takeAllShareable} icon={<Layers className="size-4" />}>
-                托管可共享的 {availableCount} 个
-              </Button>
-            )}
-            <Button variant="brand" icon={<Plus className="size-[18px]" />} onClick={() => go('services', 'new')}>
-              添加 MCP
+      {header(
+        <>
+          {offer > 0 && (
+            <Button variant={recommended ? 'primary' : 'outline'} icon={<Layers className="size-4" />} onClick={() => setOneClick(true)}>
+              一键托管
             </Button>
-            <Menu
-              items={[
-                { label: '刷新', icon: <RefreshCw className="size-4" />, onSelect: reload },
-                { label: '复制访问令牌', icon: <Copy className="size-4" />, onSelect: () => copy(status.token, '已复制访问令牌') },
-              ]}
-            />
-          </>
-        }
-      />
-      <div className="mx-auto w-full max-w-[1280px] px-8 py-6">
-        {data.autostart.supported && !data.autostart.enabled && isManagedAny(data.rows) && (
-          <div className="mb-5 flex items-center gap-4 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3.5 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-            <Power className="size-5 shrink-0" />
-            <div className="flex-1">已有 MCP 由 MCPcell 托管，但开机自启没开：守护进程没运行时它们不可用。</div>
-            <Button className="h-9" variant="brand" onClick={async () => (await takeover.autostart(true), toast('已开启开机自启'), reload())}>
+          )}
+          <Button icon={<Plus className="size-4" />} onClick={() => go('services', 'new')}>
+            添加
+          </Button>
+          <Menu
+            items={[
+              { label: '刷新', icon: <RefreshCw className="size-4" />, onSelect: reload },
+              { label: '复制访问令牌', icon: <Copy className="size-4" />, onSelect: () => copy(status.token, '已复制访问令牌') },
+              'sep',
+              {
+                label: '全部还原',
+                hint: '所有 Agent 恢复托管前的配置',
+                icon: <Undo2 className="size-4" />,
+                danger: true,
+                disabled: allRestore.length === 0,
+                onSelect: () => acts.restore(allRestore, `还原全部 ${allRestore.length} 个托管`),
+              },
+            ]}
+          />
+        </>,
+      )}
+      <div className="mx-auto w-full max-w-[1240px] space-y-7 px-8 pt-6 pb-12">
+        <div className="grid grid-cols-4 gap-4">
+          <Stat
+            icon={<Layers className="size-4" />}
+            label="已托管"
+            value={
+              <>
+                {managedRows.length}
+                <span className="text-base font-normal text-zinc-400"> / {data.rows.length}</span>
+              </>
+            }
+            sub={recommended ? `还有 ${recommended} 个可以托管` : offer ? `可共享的都已托管 · ${offer} 个未验证` : '可共享的都已托管'}
+          />
+          <Stat icon={<Cpu className="size-4" />} label="运行中的实例" value={running.length} sub="空闲后自动回收，调用时再启动" />
+          <Stat
+            icon={<Gauge className="size-4" />}
+            label="内存（私有提交）"
+            value={bytes(mcpBytes + status.daemon.privateBytes)}
+            sub={`守护进程 ${bytes(status.daemon.privateBytes)} · MCP ${mcpBytes ? bytes(mcpBytes) : '0 MB'}`}
+          />
+          <Stat icon={<Activity className="size-4" />} label="会话" value={status.sessions.length} sub="同一个 MCP 的会话共用进程" />
+        </div>
+
+        {recommended > 0 && <OfferBanner first={managedRows.length === 0} count={recommended} onClick={() => setOneClick(true)} />}
+        {managedRows.length > 0 && data.autostart.supported && !data.autostart.enabled && (
+          <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            <Power className="size-4 shrink-0" />
+            <span className="flex-1">开机自启没开：MCPcell 没在运行时，托管的 MCP 在 Agent 里不可用。</span>
+            <Button size="sm" variant="primary" onClick={async () => (await takeover.autostart(true), toast('已开启开机自启'), reload())}>
               开启自启
             </Button>
           </div>
         )}
-        <div className="mb-4 flex items-center gap-4">
-          <Segmented<Filter>
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: 'all', label: `全部 ${data.rows.length}` },
-              { value: 'managed', label: <>已托管 {data.rows.filter(isManaged).length}{data.rows.some(isManaged) && <Dot tone="blue" />}</> },
-              { value: 'available', label: `可托管 ${data.rows.filter(isAvailable).length}` },
-              { value: 'other', label: `其他 ${data.rows.filter((r) => !isManaged(r) && !isAvailable(r) && !r.service).length}` },
-            ]}
-          />
-          <div className="ml-auto flex items-center gap-2 text-sm text-zinc-500">
-            <Gauge className="size-4" />
-            MCPcell 内存 <b className="font-medium text-zinc-800 dark:text-zinc-200">{bytes(mcpBytes + status.daemon.privateBytes)}</b>
-            <span className="text-zinc-300">·</span>
-            {running.length} 个实例
-            <span className="text-zinc-300">·</span>
-            {status.sessions.length} 个会话
-          </div>
-        </div>
 
-        <div className="mb-2 flex items-center gap-4 px-[21px] text-xs text-zinc-400">
-          <span className="flex-1">MCP</span>
-          <span className="flex gap-2">
-            {agents.map((a) => (
-              <span key={a.id} className="w-[88px] text-center">
-                {a.name}
-              </span>
-            ))}
-          </span>
-          <span className="w-[150px] text-right">运行</span>
-          <span className="w-[140px]" />
-        </div>
-        <div className="space-y-2.5">
-          {rows.map((r) => (
-            <McpCard
-              key={r.key}
-              row={r}
-              agents={agents}
-              svc={status.services.find((s) => s.name === r.service)}
-              sessions={status.sessions.filter((x) => x.service === r.service).length}
-              onCell={(a, cell) => {
-                if (!cell) return r.canAdd && agentActs.add(a, r);
-                switch (cell.state) {
-                  case 'managed':
-                    return agentActs.restoreEntry(a, cell.entry, cell.added);
-                  case 'changed':
-                    return agentActs.forget(a, cell.entry);
-                  case 'native':
-                    if (cell.class === 'shared') return agentActs.takeoverEntries(a, [{ entry: cell.entry, service: r.service ?? r.proposed, isNew: !r.service }]);
-                    if (cell.class === 'unknown' && r.kind === 'stdio') return agentActs.takeoverEntries(a, [{ entry: cell.entry, service: r.service ?? r.proposed, isNew: !r.service }], true);
-                }
-              }}
-              serviceActs={serviceActs}
-            />
-          ))}
-          {rows.length === 0 && <Card className="py-14 text-center text-sm text-zinc-400">没有符合条件的 MCP</Card>}
-        </div>
+        {groups.map((g) => {
+          const rows = byGroup(g.id);
+          if (!rows.length) return null;
+          const expanded = open[g.id] ?? !g.collapsed;
+          return (
+            <section key={g.id}>
+              <div className={cx(grid, 'px-5')}>
+                <div className="-ml-5 min-w-0">
+                  <GroupHeader
+                    title={g.title}
+                    count={rows.length}
+                    hint={g.hint}
+                    open={expanded}
+                    onToggle={g.collapsed ? () => setOpen((o) => ({ ...o, [g.id]: !expanded })) : undefined}
+                  />
+                </div>
+                {expanded && (
+                  <>
+                    <ColumnLabel>Agent</ColumnLabel>
+                    <ColumnLabel>状态</ColumnLabel>
+                    <ColumnLabel className="text-center">托管</ColumnLabel>
+                    <span />
+                  </>
+                )}
+              </div>
+              {expanded && (
+                <TableCard>
+                  {rows.map((r) => (
+                    <McpRowView
+                      key={r.key}
+                      row={r}
+                      agents={agents}
+                      svc={status.services.find((s) => s.name === r.service)}
+                      sessions={status.sessions.filter((x) => x.service === r.service).length}
+                      acts={acts}
+                      svcActs={svcActs}
+                    />
+                  ))}
+                </TableCard>
+              )}
+            </section>
+          );
+        })}
       </div>
-      {agentActs.dialog}
-      {serviceActs.deleteDialog}
+      <OneClickDialog open={oneClick} onClose={() => setOneClick(false)} data={data} reload={reload} />
+      {acts.dialog}
+      {svcActs.deleteDialog}
     </>
   );
 }
 
-function isManagedAny(rows: McpRow[]) {
-  return rows.some(isManaged);
+function ColumnLabel({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cx('mb-2.5 text-xs text-zinc-400', className)}>{children}</span>;
 }
 
-function McpCard({
+function OfferBanner({ first, count, onClick }: { first: boolean; count: number; onClick: () => void }) {
+  return (
+    <Card className="flex items-center gap-5 overflow-hidden border-blue-100 bg-gradient-to-r from-blue-50 via-white to-white px-6 py-5 dark:border-blue-900/60 dark:from-blue-950/40 dark:via-zinc-900 dark:to-zinc-900">
+      <Logo className="size-11 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[15px] font-semibold">{first ? '把本机的 MCP 交给 MCPcell' : `还有 ${count} 个 MCP 可以托管`}</div>
+        <p className="mt-1 text-sm leading-6 text-zinc-500">
+          {first
+            ? `各个 Agent 里有 ${count} 个 MCP 可以共享。现在每开一个会话就多一套进程；托管后全机只运行一份，空闲时自动回收。`
+            : '托管后所有会话共用一份进程，工具名不变，随时可以还原。'}
+        </p>
+      </div>
+      <Button variant="primary" icon={<ArrowRight className="size-4" />} onClick={onClick}>
+        一键托管 {count} 个
+      </Button>
+    </Card>
+  );
+}
+
+function McpRowView({
   row,
   agents,
   svc,
   sessions,
-  onCell,
-  serviceActs,
+  acts,
+  svcActs,
 }: {
   row: McpRow;
   agents: AgentSummary[];
   svc?: Service;
   sessions: number;
-  onCell: (a: AgentSummary, cell?: AgentCell) => void;
-  serviceActs: ReturnType<typeof useServiceActions>;
+  acts: ReturnType<typeof useAgentActions>;
+  svcActs: ReturnType<typeof useServiceActions>;
 }) {
   const copy = useCopy();
   const { status } = useStatus();
-  const inst = svc?.instance;
-  const badge = classBadge[row.class] ?? classBadge.unknown;
-  const busy = !!svc && (serviceActs.busy[svc.name] || svc.state === 'starting');
-
-  let line1: React.ReactNode = '每个会话各自启动';
-  let line2: React.ReactNode = '未托管';
-  if (row.kind === 'http') [line1, line2] = ['远程服务', '本机没有它的进程'];
-  else if (row.class === 'internal') [line1, line2] = ['Agent 自带组件', '和 Agent 进程绑定'];
-  else if (svc && inst) {
-    line1 = (
-      <>
-        <b className="font-medium text-zinc-800 dark:text-zinc-200">{bytes(inst.usage.privateBytes)}</b> · {inst.usage.processes} 个进程
-      </>
-    );
-    line2 = `${sessions} 个会话 · ${inst.inflight ? `处理中 ${inst.inflight}` : `空闲 ${since(inst.lastActiveAt)}`}`;
-  } else if (svc?.state === 'failed') {
-    line1 = <span className="text-red-600">{firstLine(svc.lastError)}</span>;
-    line2 = '启动失败';
-  } else if (svc) {
-    line1 = '调用时启动';
-    line2 = `${sessions} 个会话`;
-  }
+  const group = groupOf(row);
+  const take = takeSteps(row, agents);
+  const back = restoreSteps(row, agents);
+  const managed = back.length > 0;
+  const cells = cellsOf(row);
+  const allOff = cells.length > 0 && cells.every((c) => !c.enabled);
+  const unverified = group === 'available' && take.every((s) => s.force);
+  const meta = [row.launch + (row.detail ? ` ${row.detail}` : ''), svc?.package && `v${svc.package.version}`, svc?.catalog && `${svc.catalog.tools} 个工具`]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
-    <Card
+    <div
       onClick={() => svc && go('services', svc.name)}
-      className={cx(
-        'flex items-center gap-4 px-5 py-3.5 transition-colors',
-        svc && 'cursor-pointer',
-        inst ? 'border-blue-500 bg-[#eef5ff] ring-1 ring-blue-500/25 dark:bg-blue-950/30' : 'hover:border-zinc-300 dark:hover:border-zinc-700',
-      )}
+      className={cx(grid, 'group px-5 py-3', svc && 'cursor-pointer transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40')}
     >
-      <ServiceAvatar name={row.name} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-base font-semibold">{row.name}</span>
-          {svc ? <Badge tone="blue">MCPcell</Badge> : <Badge tone={badge.tone}>{badge.text}</Badge>}
-          {svc?.package && <Badge>npm {svc.package.version}</Badge>}
-          {svc?.catalog && <Badge>{svc.catalog.tools} 个工具</Badge>}
-        </div>
-        <div className="mt-0.5 truncate font-mono text-[13px] text-zinc-500" title={row.reason}>
-          {row.launch}
-          {row.detail && <span className="text-zinc-400"> {row.detail}</span>}
+      <div className="flex min-w-0 items-center gap-3.5">
+        <ServiceAvatar name={row.name} size="sm" />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[15px] font-medium">{row.name}</span>
+            {unverified && <Badge tone="amber">未验证</Badge>}
+            {allOff && <Badge>已停用</Badge>}
+          </div>
+          <div className="mt-0.5 truncate font-mono text-xs text-zinc-400" title={meta}>
+            {meta}
+          </div>
         </div>
       </div>
 
-      <div className="flex shrink-0 gap-2" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
         {agents.map((a) => (
-          <AgentPill key={a.id} agent={a} cell={row.agents[a.id]} row={row} onClick={() => onCell(a, row.agents[a.id])} />
+          <AgentIcon key={a.id} agent={a} row={row} cell={row.agents[a.id]} acts={acts} />
         ))}
       </div>
 
-      <div className="w-[150px] shrink-0 text-right text-sm leading-6 text-zinc-500">
-        <div className="truncate">{line1}</div>
-        <div className="truncate">{line2}</div>
-      </div>
-      <div className="flex w-[140px] shrink-0 items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
-        {svc &&
-          (inst ? (
-            <IconButton label="回收进程（会话保留，下次调用自动启动）" busy={busy} onClick={() => serviceActs.stop(svc.name)}>
-              <Square className="size-4" />
-            </IconButton>
-          ) : (
-            <IconButton label="立即启动" busy={busy} onClick={() => serviceActs.start(svc.name)}>
-              <Play className="size-[18px]" />
-            </IconButton>
-          ))}
-        {svc && (
-          <IconButton label="编辑" onClick={() => go('services', svc.name, 'edit')}>
-            <Pencil className="size-[17px]" />
-          </IconButton>
+      <RunState row={row} group={group} svc={svc} sessions={sessions} />
+
+      <div className="flex justify-center">
+        {(take.length > 0 || managed) && (
+          <Switch
+            checked={managed}
+            label="托管"
+            title={managed ? '关闭：还原为各 Agent 原来的配置' : '打开：交给 MCPcell 运行'}
+            onChange={(on) => (on ? acts.takeover(take) : acts.restore(back))}
+          />
         )}
+      </div>
+
+      <div onClick={(e) => e.stopPropagation()}>
         {svc && (
           <Menu
             items={[
-              { label: '详情与接入', icon: <ChevronRight className="size-4" />, onSelect: () => go('services', svc.name) },
+              svc.instance
+                ? { label: '回收进程', hint: '会话保留，下次调用自动启动', icon: <Square className="size-4" />, onSelect: () => svcActs.stop(svc.name) }
+                : { label: '立即启动', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) },
+              { label: '编辑', icon: <Pencil className="size-4" />, onSelect: () => go('services', svc.name, 'edit') },
               { label: '复制接入地址', icon: <Copy className="size-4" />, onSelect: () => copy(`${status.baseUrl}/s/${svc.name}`, '已复制接入地址') },
-              'sep' as const,
-              { label: '删除', icon: <Trash2 className="size-4" />, danger: true, onSelect: () => serviceActs.askDelete(svc.name) },
+              'sep',
+              { label: '删除服务', icon: <Trash2 className="size-4" />, danger: true, onSelect: () => svcActs.askDelete(svc.name) },
             ]}
           />
         )}
       </div>
-    </Card>
+    </div>
   );
 }
 
-/** One agent's state for an MCP, and the action a click takes. */
-function AgentPill({ agent, cell, row, onClick }: { agent: AgentSummary; cell?: AgentCell; row: McpRow; onClick: () => void }) {
-  let label = '—';
-  let tone = 'border-transparent text-zinc-300 dark:text-zinc-600';
-  let title = `${agent.name} 没有配置它`;
-  let actionable = false;
+function RunState({ row, group, svc, sessions }: { row: McpRow; group: Group; svc?: Service; sessions: number }) {
+  const line = (dot: ReactNode, text: ReactNode, title?: string) => (
+    <div className="flex min-w-0 items-center gap-2 text-[13px] text-zinc-500" title={title}>
+      {dot}
+      <span className="truncate">{text}</span>
+    </div>
+  );
+  if (svc?.instance) {
+    return line(
+      <Dot tone="green" pulse={svc.instance.inflight > 0} />,
+      <>
+        <b className="font-medium text-zinc-800 tabular-nums dark:text-zinc-200">{bytes(svc.instance.usage.privateBytes)}</b> · {sessions} 个会话
+        {svc.instance.inflight > 0 && ` · 处理中 ${svc.instance.inflight}`}
+      </>,
+    );
+  }
+  if (svc?.state === 'starting') return line(<Dot tone="amber" pulse />, '启动中…');
+  if (svc?.state === 'failed') return line(<Dot tone="red" />, <span className="text-red-600">启动失败</span>, firstLine(svc.lastError));
+  if (svc) return line(<Dot tone="gray" />, sessions ? `空闲 · ${sessions} 个会话` : '空闲 · 调用时启动');
+  const text = { managed: '', available: '每个会话各起一份', blocked: '每个会话各起一份', other: row.kind === 'http' ? '远程服务' : 'Agent 内置' }[group];
+  return line(null, <span className="text-zinc-400">{text}</span>);
+}
+
+/** An agent's state for one MCP; clicking opens the actions that apply. */
+function AgentIcon({ agent, row, cell, acts }: { agent: AgentSummary; row: McpRow; cell?: AgentCell; acts: ReturnType<typeof useAgentActions> }) {
+  const off = cell && !cell.enabled ? `（在 ${agent.name} 里已停用）` : '';
+  let look = 'opacity-0';
+  let title = '';
+  let items: MenuItem[] = [];
   if (!cell) {
     if (row.canAdd) {
-      [label, tone, title, actionable] = ['+ 添加', 'border-dashed border-zinc-300 text-zinc-500 hover:border-blue-400 hover:text-blue-600 dark:border-zinc-600', `加入 ${agent.name}，经 MCPcell 运行`, true];
+      look = 'border border-dashed border-zinc-300 opacity-0 group-hover:opacity-100 dark:border-zinc-600 [&_svg]:opacity-40';
+      title = `${agent.name} 里没有它`;
+      items = [{ label: `加入 ${agent.name}`, hint: '新增一个连到 MCPcell 的条目', icon: <Plus className="size-4" />, onSelect: () => acts.add(agent, row) }];
     }
+  } else if (cell.state === 'managed') {
+    look = 'bg-blue-50 ring-[1.5px] ring-blue-500 dark:bg-blue-950';
+    title = `${agent.name} · 由 MCPcell 托管${off}`;
+    items = [
+      cell.added
+        ? {
+            label: `从 ${agent.name} 移除`,
+            hint: '这个条目是 MCPcell 加入的',
+            icon: <Trash2 className="size-4" />,
+            danger: true,
+            onSelect: () => acts.restore([{ agent, entry: cell.entry, added: true }]),
+          }
+        : { label: '还原为原生配置', hint: '恢复托管前的条目', icon: <Undo2 className="size-4" />, onSelect: () => acts.restore([{ agent, entry: cell.entry }]) },
+    ];
+  } else if (cell.state === 'changed') {
+    look = 'bg-amber-50 ring-[1.5px] ring-amber-400 dark:bg-amber-950';
+    title = `${agent.name} · 托管后被改动过${off}`;
+    items = [{ label: '忘记托管记录', hint: '保留你现在的配置', icon: <Undo2 className="size-4" />, onSelect: () => acts.forget(agent, cell.entry) }];
+  } else if (canTake(row, cell)) {
+    look = 'bg-zinc-100 dark:bg-zinc-800 [&_svg]:opacity-60';
+    title = `${agent.name} · 原生运行，每个会话各起一份${off}`;
+    items = [
+      {
+        label: '交给 MCPcell 托管',
+        hint: cell.class === 'shared' ? '所有会话共用一份进程' : '未验证能否共享，出问题时还原即可',
+        icon: <Layers className="size-4" />,
+        onSelect: () => acts.takeover(takeSteps(row, [agent])),
+      },
+    ];
   } else {
-    switch (cell.state) {
-      case 'managed':
-        [label, tone, title, actionable] = ['托管', 'border-blue-500 bg-blue-500 text-white hover:bg-blue-600', cell.added ? `MCPcell 加进 ${agent.name} 的；点击移除` : `${agent.name} 经 MCPcell 运行它；点击还原为原生`, true];
-        break;
-      case 'changed':
-        [label, tone, title, actionable] = ['已改动', 'border-amber-300 bg-amber-50 text-amber-700', '托管后被修改过；点击忘记记录', true];
-        break;
-      case 'native': {
-        const can = cell.class === 'shared' || (cell.class === 'unknown' && row.kind === 'stdio');
-        label = '原生';
-        tone = can
-          ? 'border-zinc-300 bg-white text-zinc-700 hover:border-blue-400 hover:text-blue-600 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200'
-          : 'border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800';
-        title = can ? `${agent.name} 每个会话自己启动它；点击${cell.class === 'unknown' ? '强制共享' : '交给 MCPcell 托管'}` : cell.reason ?? '';
-        actionable = can;
-        break;
-      }
-      case 'remote':
-        [label, tone, title] = ['远程', 'border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800', '远程 HTTP 服务，不需要托管'];
-        break;
-      case 'internal':
-        [label, tone, title] = ['内置', 'border-zinc-200 bg-zinc-50 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800', cell.reason ?? ''];
-        break;
-    }
-    if (!cell.enabled) title += '（这个 Agent 里已停用）';
+    look = 'bg-zinc-100 dark:bg-zinc-800 [&_svg]:opacity-30';
+    title = `${agent.name} · ${cell.state === 'remote' ? '远程 HTTP 服务' : (cell.reason ?? '原生运行')}${off}`;
+  }
+  const icon = (
+    <span className={cx('relative grid size-7 place-items-center rounded-full transition', look, cell && !cell.enabled && 'opacity-50')}>
+      <BrandMark brand={agentBrand[agent.id]} className="size-[15px]" />
+      {cell?.state === 'managed' && (
+        <span className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-white bg-blue-500 dark:border-zinc-900" />
+      )}
+    </span>
+  );
+  if (!items.length) {
+    return (
+      <span title={title} className="cursor-default">
+        {icon}
+      </span>
+    );
   }
   return (
-    <button
-      title={title}
-      disabled={!actionable}
-      onClick={onClick}
-      className={cx(
-        'inline-flex h-8 w-[88px] items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors disabled:cursor-default',
-        tone,
-        cell && !cell.enabled && 'opacity-60',
+    <Menu
+      align="left"
+      items={items}
+      header={<div className="text-xs leading-5 text-zinc-500">{title}</div>}
+      trigger={(toggle) => (
+        <button title={title} onClick={toggle} className="rounded-full focus-visible:outline-2 focus-visible:outline-blue-500">
+          {icon}
+        </button>
       )}
-    >
-      <BrandMark brand={agentBrand[agent.id]} className={cx('size-3.5', cell?.state === 'managed' && 'text-white [&_path]:fill-current')} />
-      {label}
-    </button>
+    />
   );
 }

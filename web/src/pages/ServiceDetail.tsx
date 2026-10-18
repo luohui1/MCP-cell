@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import { ArrowRight, Package, Pencil, Play, Square, Trash2 } from 'lucide-react';
+import { ArrowRight, Layers, Package, Pencil, Play, Plus, Square, Trash2, Undo2 } from 'lucide-react';
 import { useStatus } from '../App';
 import { useServiceActions } from '../actions';
+import { agentBrand, agentsOf, canTake, takeSteps, useAgentActions, useUnified } from '../agents';
 import { mainClients, masked } from '../clients';
 import { bytes, clock, firstLine, since, span, until } from '../format';
-import { ClientAvatar, ServiceAvatar } from '../icons';
+import { BrandMark, ClientAvatar, ServiceAvatar } from '../icons';
 import { go, href } from '../router';
 import { Badge, Button, Card, CodeBlock, CopyButton, Dot, Menu, PageHeader, Section, Segmented } from '../ui';
 
@@ -40,7 +41,7 @@ export function ServiceDetail({ name }: { name: string }) {
     <>
       <PageHeader
         back={() => go('mcp')}
-        icon={<ServiceAvatar name={name} />}
+        icon={<ServiceAvatar name={name} size="sm" />}
         title={name}
         subtitle={
           <span className="inline-flex items-center gap-1.5">
@@ -72,25 +73,7 @@ export function ServiceDetail({ name }: { name: string }) {
         }
       />
       <div className="mx-auto w-full max-w-[1100px] space-y-5 px-8 py-6">
-        <Section
-          title="接入"
-          extra={
-            <a href={href('clients')} className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline dark:text-blue-400">
-              全部客户端 <ArrowRight className="size-3.5" />
-            </a>
-          }
-        >
-          <div className="mb-4 flex items-center gap-2">
-            <code className="rounded-lg bg-zinc-100 px-3 py-2 font-mono text-[13px] dark:bg-zinc-800">{url}</code>
-            <CopyButton text={url} label="复制接入地址" />
-          </div>
-          <Segmented value={client} onChange={setClient} options={mainClients.map((c) => ({ value: c.id, label: c.name }))} />
-          <p className="mt-4 mb-2 text-sm text-zinc-500">
-            替换 <span className="text-zinc-800 dark:text-zinc-200">{spec.file}</span> 里同名的条目，然后重启客户端。工具全名保持不变。
-          </p>
-          <CodeBlock shown={spec.snippet!([{ name, url }], masked(status.token))} copy={spec.snippet!([{ name, url }], status.token)} />
-          <p className="mt-2 text-xs text-zinc-400">复制的内容包含完整访问令牌。</p>
-        </Section>
+        <AgentsSection name={name} />
 
         <Section title="运行状态">
           {inst ? (
@@ -176,6 +159,26 @@ export function ServiceDetail({ name }: { name: string }) {
           </Section>
         )}
 
+        <Section
+          title="手动接入"
+          extra={
+            <a href={href('agents')} className="inline-flex items-center gap-1 text-[13px] text-blue-600 hover:underline dark:text-blue-400">
+              全部 Agent <ArrowRight className="size-3.5" />
+            </a>
+          }
+        >
+          <div className="mb-4 flex items-center gap-2">
+            <code className="rounded-lg bg-zinc-100 px-3 py-2 font-mono text-[13px] dark:bg-zinc-800">{url}</code>
+            <CopyButton text={url} label="复制接入地址" />
+          </div>
+          <Segmented value={client} onChange={setClient} options={mainClients.map((c) => ({ value: c.id, label: c.name }))} />
+          <p className="mt-4 mb-2 text-sm text-zinc-500">
+            替换 <span className="text-zinc-800 dark:text-zinc-200">{spec.file}</span> 里同名的条目，然后重启客户端。工具全名保持不变。
+          </p>
+          <CodeBlock shown={spec.snippet!([{ name, url }], masked(status.token))} copy={spec.snippet!([{ name, url }], status.token)} />
+          <p className="mt-2 text-xs text-zinc-400">复制的内容包含完整访问令牌。</p>
+        </Section>
+
         {s.lastError && (
           <Card className="border-red-200 bg-red-50/40 p-5 dark:border-red-900 dark:bg-red-950/20">
             <h3 className="text-[15px] font-semibold text-red-700 dark:text-red-400">
@@ -192,6 +195,68 @@ export function ServiceDetail({ name }: { name: string }) {
       </div>
       {actions.deleteDialog}
     </>
+  );
+}
+
+/** Where this service is used, with the same actions as the MCP list. */
+function AgentsSection({ name }: { name: string }) {
+  const { data, reload } = useUnified();
+  const acts = useAgentActions(reload, data?.autostart ?? null);
+  const row = data?.rows.find((r) => r.key === `svc:${name}`);
+  if (!data || !row) return null;
+  return (
+    <Section title="Agent">
+      <div className="-my-1 divide-y divide-zinc-100 dark:divide-zinc-800">
+        {agentsOf(data.agents).map((a) => {
+          const c = row.agents[a.id];
+          let state = '没有配置';
+          let action: ReactNode = null;
+          if (c?.state === 'managed') {
+            state = c.added ? '由 MCPcell 加入' : '由 MCPcell 托管';
+            action = (
+              <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => acts.restore([{ agent: a, entry: c.entry, added: c.added }])}>
+                {c.added ? '移除' : '还原'}
+              </Button>
+            );
+          } else if (c?.state === 'changed') {
+            state = '托管后被改动过';
+            action = (
+              <Button size="sm" variant="ghost" onClick={() => acts.forget(a, c.entry)}>
+                忘记记录
+              </Button>
+            );
+          } else if (c && canTake(row, c)) {
+            state = '原生运行，每个会话各起一份';
+            action = (
+              <Button size="sm" icon={<Layers className="size-3.5" />} onClick={() => acts.takeover(takeSteps(row, [a]))}>
+                托管
+              </Button>
+            );
+          } else if (c) {
+            state = c.reason ?? '原生运行';
+          } else if (row.canAdd) {
+            action = (
+              <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => acts.add(a, row)}>
+                加入
+              </Button>
+            );
+          }
+          return (
+            <div key={a.id} className="flex items-center gap-3 py-2.5">
+              <BrandMark brand={agentBrand[a.id]} className="size-4" />
+              <span className="w-28 text-sm font-medium">{a.name}</span>
+              <span className="flex-1 truncate text-[13px] text-zinc-500">
+                {c?.state === 'managed' && <span className="mr-1.5 inline-block size-1.5 rounded-full bg-blue-500 align-middle" />}
+                {state}
+                {c && !c.enabled && <span className="text-zinc-400">（在 {a.name} 里已停用）</span>}
+              </span>
+              {action}
+            </div>
+          );
+        })}
+      </div>
+      {acts.dialog}
+    </Section>
   );
 }
 
