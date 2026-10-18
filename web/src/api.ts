@@ -40,8 +40,12 @@ export interface Service {
   lastErrorAt?: string;
   retryAt?: string;
   stderrTail?: string;
-  instance?: InstanceSnapshot;
+  instance?: InstanceSnapshot; // a shared service's instance
+  instances?: (InstanceSnapshot & { session: string })[]; // a per-session service's instances
 }
+
+/** Every running instance of a service, shared or per session. */
+export const instancesOf = (s: Service): InstanceSnapshot[] => (s.instance ? [s.instance] : (s.instances ?? []));
 
 export interface SessionInfo {
   id: string;
@@ -76,6 +80,7 @@ export interface ServiceForm {
   args: string[];
   env: Record<string, string | null>;
   cwd: string;
+  mode: string; // shared | per-session
   idleTimeout: string;
   memoryLimit: string;
   flatten: boolean;
@@ -176,6 +181,7 @@ export interface AgentCell {
   added?: boolean;
   class: EntryClass;
   reason?: string;
+  takeable?: boolean;
 }
 
 /** One MCP server, merged across MCPcell's services and every agent. */
@@ -184,6 +190,7 @@ export interface McpRow {
   name: string;
   kind: string;
   launch: string;
+  mode: string; // the service's mode, or the one a takeover would choose
   detail?: string;
   class: EntryClass;
   reason: string;

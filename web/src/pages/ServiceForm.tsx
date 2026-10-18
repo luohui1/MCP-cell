@@ -6,9 +6,21 @@ import { firstLine } from '../format';
 import { ServiceAvatar } from '../icons';
 import { presets, type Preset } from '../presets';
 import { go } from '../router';
-import { Button, Card, cx, Field, IconButton, Input, PageHeader, Switch, Textarea, useToast } from '../ui';
+import { Button, Card, cx, Field, IconButton, Input, PageHeader, Segmented, Switch, Textarea, useToast } from '../ui';
 
-const blank: ServiceForm = { name: '', command: '', args: [], env: {}, cwd: '', idleTimeout: '', memoryLimit: '', flatten: true, catalog: true, lean: true };
+const blank: ServiceForm = {
+  name: '',
+  command: '',
+  args: [],
+  env: {},
+  cwd: '',
+  mode: 'shared',
+  idleTimeout: '',
+  memoryLimit: '',
+  flatten: true,
+  catalog: true,
+  lean: true,
+};
 
 interface EnvRow {
   key: string;
@@ -16,8 +28,8 @@ interface EnvRow {
   stored: boolean; // value kept on the daemon, not shown here
 }
 
-const idleOptions = [
-  { value: '', label: '默认（3 分钟）' },
+const idleOptions = (mode: string) => [
+  { value: '', label: mode === 'per-session' ? '默认（30 分钟）' : '默认（3 分钟）' },
   { value: '10m', label: '10 分钟' },
   { value: '30m', label: '30 分钟' },
   { value: '1h', label: '1 小时' },
@@ -65,7 +77,7 @@ export function ServiceFormPage({ name }: { name?: string }) {
       setEnv([]);
       return;
     }
-    setForm({ ...blank, name: p.id, command: p.command });
+    setForm({ ...blank, name: p.id, command: p.command, mode: p.stateful ? 'per-session' : 'shared' });
     setArgsText(p.args.join('\n'));
     setEnv((p.env ?? []).map((key) => ({ key, value: '', stored: false })));
   }
@@ -162,10 +174,10 @@ export function ServiceFormPage({ name }: { name?: string }) {
                 </div>
               </div>
             )}
-            {stateful && (
+            {stateful && form.mode !== 'per-session' && (
               <div className="mt-3 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
                 <TriangleAlert className="mt-1 size-4 shrink-0" />
-                这个服务持有浏览器状态。按会话隔离要到后续版本才实现，目前所有会话会共用同一个浏览器。
+                这个服务持有浏览器状态，建议选「按会话」运行；共享时所有会话会共用同一个浏览器。
               </div>
             )}
 
@@ -221,6 +233,21 @@ export function ServiceFormPage({ name }: { name?: string }) {
 
             <div className="my-7 h-px bg-zinc-100 dark:bg-zinc-800" />
             <h2 className="mb-4 text-sm font-medium text-zinc-800 dark:text-zinc-200">运行方式</h2>
+            <div className="mb-5 flex items-center gap-4">
+              <Segmented<string>
+                value={form.mode || 'shared'}
+                onChange={(v) => setForm({ ...form, mode: v })}
+                options={[
+                  { value: 'shared', label: '共享' },
+                  { value: 'per-session', label: '按会话' },
+                ]}
+              />
+              <span className="text-xs leading-5 text-zinc-500">
+                {form.mode === 'per-session'
+                  ? '每个会话一个实例，保留各自的状态（浏览器、连接）；第一次调用时启动，会话结束就回收'
+                  : '所有会话共用一份进程，适合不保存会话状态的服务'}
+              </span>
+            </div>
             <div className="grid grid-cols-2 gap-x-6 gap-y-5">
               <Field label="空闲回收" hint="没有请求后多久结束进程，下次调用自动重启">
                 <select
@@ -228,8 +255,8 @@ export function ServiceFormPage({ name }: { name?: string }) {
                   onChange={(e) => setForm({ ...form, idleTimeout: e.target.value })}
                   className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-3 focus:ring-blue-500/15 dark:border-zinc-700 dark:bg-zinc-900"
                 >
-                  {idleOptions.some((o) => o.value === form.idleTimeout) ? null : <option value={form.idleTimeout}>{form.idleTimeout}</option>}
-                  {idleOptions.map((o) => (
+                  {idleOptions(form.mode).some((o) => o.value === form.idleTimeout) ? null : <option value={form.idleTimeout}>{form.idleTimeout}</option>}
+                  {idleOptions(form.mode).map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
                     </option>

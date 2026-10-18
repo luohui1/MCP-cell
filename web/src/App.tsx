@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Activity, Bot, Layers, Settings as SettingsIcon } from 'lucide-react';
-import { api, Unauthorized, type Status } from './api';
+import { api, instancesOf, Unauthorized, type Status } from './api';
 import { bytes, since } from './format';
 import { Logo } from './icons';
 import { go, useRoute } from './router';
@@ -108,7 +108,7 @@ function NavItem({ icon, label, count, active, onClick }: { icon: ReactNode; lab
 
 function Sidebar({ status, offline }: { status: Status; offline: boolean }) {
   const [page = 'mcp'] = useRoute();
-  const running = status.services.filter((s) => s.instance).length;
+  const running = status.services.flatMap(instancesOf).length;
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/60">
       <div className="flex h-16 items-center gap-2.5 px-5">

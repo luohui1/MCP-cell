@@ -17,7 +17,8 @@ export const presets: Preset[] = [
     name: 'Sequential Thinking',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-sequential-thinking'],
-    hint: '分步推理工具',
+    hint: '分步推理工具；思考历史保存在进程里，按会话运行',
+    stateful: true,
   },
   { id: 'memory', name: 'Memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], hint: '基于知识图谱的长期记忆' },
   {

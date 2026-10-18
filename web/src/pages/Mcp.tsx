@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Activity, ArrowRight, Copy, Cpu, Gauge, Layers, Pencil, Play, Plus, Power, RefreshCw, Square, Trash2, Undo2 } from 'lucide-react';
-import { takeover, type AgentCell, type AgentSummary, type McpRow, type Service } from '../api';
+import { instancesOf, takeover, type AgentCell, type AgentSummary, type McpRow, type Service } from '../api';
 import { useStatus } from '../App';
 import { useServiceActions } from '../actions';
 import { agentBrand, agentsOf, canTake, cellsOf, groupOf, restoreSteps, takeSteps, useAgentActions, useUnified, type Group } from '../agents';
@@ -11,9 +11,8 @@ import { go } from '../router';
 import { Badge, Button, Card, cx, Dot, GroupHeader, Menu, PageHeader, Stat, Switch, TableCard, useCopy, useToast, type MenuItem } from '../ui';
 
 const groups: { id: Group; title: string; hint: string; collapsed?: boolean }[] = [
-  { id: 'managed', title: '已托管', hint: '由 MCPcell 运行，所有会话共用一份进程' },
+  { id: 'managed', title: '已托管', hint: '由 MCPcell 运行：共享的全机一份，按会话的用时才启动' },
   { id: 'available', title: '可以托管', hint: '现在每个会话各起一份进程' },
-  { id: 'blocked', title: '暂不支持', hint: '为每个会话保存状态，需要独立实例（后续版本）', collapsed: true },
   { id: 'other', title: '远程与内置', hint: '不在本机单独运行，不需要托管', collapsed: true },
 ];
 
@@ -52,10 +51,8 @@ export function McpPage() {
   const managedRows = byGroup('managed');
   const offers = candidates(data);
   const offer = offers.length;
-  // Shared ones are recommended; unverified ones are only offered.
-  const recommended = offers.filter((c) => c.steps.every((s) => !s.force)).length;
-  const running = status.services.filter((s) => s.instance);
-  const mcpBytes = running.reduce((n, s) => n + s.instance!.usage.privateBytes, 0);
+  const running = status.services.flatMap(instancesOf);
+  const mcpBytes = running.reduce((n, i) => n + i.usage.privateBytes, 0);
   const allRestore = data.rows.flatMap((r) => restoreSteps(r, agents));
 
   return (
@@ -63,7 +60,7 @@ export function McpPage() {
       {header(
         <>
           {offer > 0 && (
-            <Button variant={recommended ? 'primary' : 'outline'} icon={<Layers className="size-4" />} onClick={() => setOneClick(true)}>
+            <Button variant="primary" icon={<Layers className="size-4" />} onClick={() => setOneClick(true)}>
               一键托管
             </Button>
           )}
@@ -98,7 +95,7 @@ export function McpPage() {
                 <span className="text-base font-normal text-zinc-400"> / {data.rows.length}</span>
               </>
             }
-            sub={recommended ? `还有 ${recommended} 个可以托管` : offer ? `可共享的都已托管 · ${offer} 个未验证` : '可共享的都已托管'}
+            sub={offer ? `还有 ${offer} 个可以托管` : '本机的 MCP 都已托管'}
           />
           <Stat icon={<Cpu className="size-4" />} label="运行中的实例" value={running.length} sub="空闲后自动回收，调用时再启动" />
           <Stat
@@ -110,7 +107,7 @@ export function McpPage() {
           <Stat icon={<Activity className="size-4" />} label="会话" value={status.sessions.length} sub="同一个 MCP 的会话共用进程" />
         </div>
 
-        {recommended > 0 && <OfferBanner first={managedRows.length === 0} count={recommended} onClick={() => setOneClick(true)} />}
+        {offer > 0 && <OfferBanner first={managedRows.length === 0} count={offer} onClick={() => setOneClick(true)} />}
         {managedRows.length > 0 && data.autostart.supported && !data.autostart.enabled && (
           <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
             <Power className="size-4 shrink-0" />
@@ -184,8 +181,8 @@ function OfferBanner({ first, count, onClick }: { first: boolean; count: number;
         <div className="text-[15px] font-semibold">{first ? '把本机的 MCP 交给 MCPcell' : `还有 ${count} 个 MCP 可以托管`}</div>
         <p className="mt-1 text-sm leading-6 text-zinc-500">
           {first
-            ? `各个 Agent 里有 ${count} 个 MCP 可以共享。现在每开一个会话就多一套进程；托管后全机只运行一份，空闲时自动回收。`
-            : '托管后所有会话共用一份进程，工具名不变，随时可以还原。'}
+            ? `各个 Agent 里有 ${count} 个 MCP 可以交给 MCPcell。现在每开一个会话就多一套进程；托管后能共享的全机只跑一份，其余按会话运行、用时才启动。`
+            : '能共享的全机只跑一份，其余按会话运行、用时才启动；工具名不变，随时可以还原。'}
         </p>
       </div>
       <Button variant="primary" icon={<ArrowRight className="size-4" />} onClick={onClick}>
@@ -218,7 +215,6 @@ function McpRowView({
   const managed = back.length > 0;
   const cells = cellsOf(row);
   const allOff = cells.length > 0 && cells.every((c) => !c.enabled);
-  const unverified = group === 'available' && take.every((s) => s.force);
   const meta = [row.launch + (row.detail ? ` ${row.detail}` : ''), svc?.package && `v${svc.package.version}`, svc?.catalog && `${svc.catalog.tools} 个工具`]
     .filter(Boolean)
     .join(' · ');
@@ -233,7 +229,7 @@ function McpRowView({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="truncate text-[15px] font-medium">{row.name}</span>
-            {unverified && <Badge tone="amber">未验证</Badge>}
+            {row.mode === 'per-session' && group !== 'other' && <Badge tone="blue">按会话</Badge>}
             {allOff && <Badge>已停用</Badge>}
           </div>
           <div className="mt-0.5 truncate font-mono text-xs text-zinc-400" title={meta}>
@@ -265,9 +261,16 @@ function McpRowView({
         {svc && (
           <Menu
             items={[
-              svc.instance
-                ? { label: '回收进程', hint: '会话保留，下次调用自动启动', icon: <Square className="size-4" />, onSelect: () => svcActs.stop(svc.name) }
-                : { label: '立即启动', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) },
+              instancesOf(svc).length
+                ? {
+                    label: svc.mode === 'per-session' ? '回收全部实例' : '回收进程',
+                    hint: '会话保留，下次调用自动启动',
+                    icon: <Square className="size-4" />,
+                    onSelect: () => svcActs.stop(svc.name),
+                  }
+                : svc.mode === 'per-session'
+                  ? { label: '检查启动', hint: '启动一次并缓存工具列表', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) }
+                  : { label: '立即启动', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) },
               { label: '编辑', icon: <Pencil className="size-4" />, onSelect: () => go('services', svc.name, 'edit') },
               { label: '复制接入地址', icon: <Copy className="size-4" />, onSelect: () => copy(`${status.baseUrl}/s/${svc.name}`, '已复制接入地址') },
               'sep',
@@ -298,8 +301,18 @@ function RunState({ row, group, svc, sessions }: { row: McpRow; group: Group; sv
   }
   if (svc?.state === 'starting') return line(<Dot tone="amber" pulse />, '启动中…');
   if (svc?.state === 'failed') return line(<Dot tone="red" />, <span className="text-red-600">启动失败</span>, firstLine(svc.lastError));
+  if (svc?.mode === 'per-session') {
+    const runs = svc.instances ?? [];
+    if (!runs.length) return line(<Dot tone="gray" />, sessions ? `${sessions} 个会话 · 都还没调用` : '调用时启动');
+    return line(
+      <Dot tone="green" pulse={runs.some((i) => i.inflight > 0)} />,
+      <>
+        <b className="font-medium text-zinc-800 tabular-nums dark:text-zinc-200">{bytes(runs.reduce((n, i) => n + i.usage.privateBytes, 0))}</b> · {runs.length} 个会话实例
+      </>,
+    );
+  }
   if (svc) return line(<Dot tone="gray" />, sessions ? `空闲 · ${sessions} 个会话` : '空闲 · 调用时启动');
-  const text = { managed: '', available: '每个会话各起一份', blocked: '每个会话各起一份', other: row.kind === 'http' ? '远程服务' : 'Agent 内置' }[group];
+  const text = { managed: '', available: '每个会话各起一份', other: row.kind === 'http' ? '远程服务' : 'Agent 内置' }[group];
   return line(null, <span className="text-zinc-400">{text}</span>);
 }
 
@@ -333,13 +346,13 @@ function AgentIcon({ agent, row, cell, acts }: { agent: AgentSummary; row: McpRo
     look = 'bg-amber-50 ring-[1.5px] ring-amber-400 dark:bg-amber-950';
     title = `${agent.name} · 托管后被改动过${off}`;
     items = [{ label: '忘记托管记录', hint: '保留你现在的配置', icon: <Undo2 className="size-4" />, onSelect: () => acts.forget(agent, cell.entry) }];
-  } else if (canTake(row, cell)) {
+  } else if (canTake(cell)) {
     look = 'bg-zinc-100 dark:bg-zinc-800 [&_svg]:opacity-60';
     title = `${agent.name} · 原生运行，每个会话各起一份${off}`;
     items = [
       {
         label: '交给 MCPcell 托管',
-        hint: cell.class === 'shared' ? '所有会话共用一份进程' : '未验证能否共享，出问题时还原即可',
+        hint: row.mode === 'shared' ? '所有会话共用一份进程' : '按会话运行：每个会话一个实例，调用时才启动',
         icon: <Layers className="size-4" />,
         onSelect: () => acts.takeover(takeSteps(row, [agent])),
       },

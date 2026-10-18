@@ -47,26 +47,28 @@ export const agentsOf = (all: AgentSummary[]) =>
 
 export const cellsOf = (r: McpRow) => Object.values(r.agents);
 
-/** A native entry MCPcell can take over now; unknown ones need force. */
-export const canTake = (r: McpRow, c?: AgentCell) =>
-  !!c && c.state === 'native' && (c.class === 'shared' || (c.class === 'unknown' && r.kind === 'stdio'));
+/** A native entry MCPcell can run: local stdio with an environment it can
+ * reproduce (the daemon decides). */
+export const canTake = (c?: AgentCell) => !!c && c.state === 'native' && !!c.takeable;
 
-export type Group = 'managed' | 'available' | 'blocked' | 'other';
+export type Group = 'managed' | 'available' | 'other';
 
 export function groupOf(r: McpRow): Group {
   const cells = cellsOf(r);
   if (r.service || cells.some((c) => c.state === 'managed' || c.state === 'changed')) return 'managed';
-  if (cells.some((c) => canTake(r, c))) return 'available';
-  if (r.class === 'stateful' || cells.some((c) => c.class === 'stateful')) return 'blocked';
+  if (cells.some((c) => canTake(c))) return 'available';
   return 'other';
 }
+
+export type Mode = 'shared' | 'per-session';
 
 export interface TakeStep {
   agent: AgentSummary;
   entry: string;
   service: string;
   isNew: boolean;
-  force: boolean;
+  mode: Mode;
+  force: boolean; // share an unverified server
 }
 export interface RestoreStep {
   agent: AgentSummary;
@@ -74,12 +76,15 @@ export interface RestoreStep {
   added?: boolean;
 }
 
-/** Steps that take over every eligible cell of a row (optionally one agent). */
-export function takeSteps(r: McpRow, agents: AgentSummary[], only?: string): TakeStep[] {
+/** Steps that take over every eligible cell of a row (optionally one agent).
+ * share runs an unverified server shared instead of per session. */
+export function takeSteps(r: McpRow, agents: AgentSummary[], only?: string, share = false): TakeStep[] {
   return agents.flatMap((a) => {
     const c = r.agents[a.id];
-    if ((only && a.id !== only) || !canTake(r, c)) return [];
-    return [{ agent: a, entry: c.entry, service: r.service ?? r.proposed ?? c.entry, isNew: !r.service, force: c.class !== 'shared' }];
+    if ((only && a.id !== only) || !canTake(c)) return [];
+    const force = c.class === 'unknown' && share;
+    const mode: Mode = r.service ? (r.mode as Mode) : c.class === 'shared' || force ? 'shared' : 'per-session';
+    return [{ agent: a, entry: c.entry, service: r.service ?? r.proposed ?? c.entry, isNew: !r.service, mode, force }];
   });
 }
 
@@ -170,19 +175,23 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
       const n = new Set(steps.map((s) => s.service)).size;
       setPending({
         title: title ?? (n === 1 ? `托管 ${steps[0].service}` : `托管 ${n} 个 MCP`),
-        intro: '改由 MCPcell 运行：所有会话共用一份进程，工具名不变，随时可以还原。',
+        intro: steps.every((s) => s.mode === 'shared')
+          ? '改由 MCPcell 运行：所有会话共用一份进程，工具名不变，随时可以还原。'
+          : '改由 MCPcell 运行，工具名不变，随时可以还原。按会话的 MCP 每个会话一个实例，第一次调用时才启动，会话结束就回收。',
         groups: byAgent(steps).map((g) => ({
           agent: g.agent,
           lines: g.steps.map((s) => (
             <>
               <span className="font-medium text-zinc-800 dark:text-zinc-200">{s.entry}</span>
-              <span className="text-zinc-400"> → /s/{s.service}</span>
-              {s.isNew && <span className="text-zinc-400">（新建服务）</span>}
+              <span className="text-zinc-400">
+                （{s.isNew ? '新建 · ' : ''}
+                {s.mode === 'shared' ? '共享' : '按会话'}）
+              </span>
             </>
           )),
         })),
         warn: steps.some((s) => s.force)
-          ? 'MCPcell 不确定其中有的 MCP 是否保存会话状态（浏览器页面、连接、登录）。如果有，多个会话共享后会互相干扰，出问题时还原即可。'
+          ? '你选择了共享未验证的 MCP。如果它为不同会话保存状态（浏览器页面、连接、登录），共享后会互相干扰；出问题时改回按会话或还原即可。'
           : undefined,
         confirm: '托管',
         run: () => applyTakeover(steps),
@@ -231,7 +240,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
             lines: [
               <>
                 新增 <span className="font-medium text-zinc-800 dark:text-zinc-200">{service}</span>
-                <span className="text-zinc-400"> → /s/{service}</span>
+                <span className="text-zinc-400">，经 MCPcell 运行</span>
               </>,
             ],
           },
@@ -300,7 +309,7 @@ export function AgentChangeCard({ agent, lines }: { agent: AgentSummary; lines: 
           </li>
         ))}
       </ul>
-      <div className="mt-2 text-xs text-zinc-400">只改这些条目，其余内容不动；改之前先备份整个文件。{restartHint[agent.id]}</div>
+      <div className="mt-2 text-xs text-zinc-400">原命令保留，前面加上 mcpcell-run；其余内容不动，改之前先备份整个文件。{restartHint[agent.id]}</div>
     </div>
   );
 }

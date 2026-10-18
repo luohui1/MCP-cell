@@ -26,7 +26,12 @@ export function useServiceActions() {
     }
   }
 
-  const start = (name: string) => run(name, async () => (await api.start(name), `${name} 已启动`));
+  const start = (name: string) =>
+    run(name, async () => {
+      await api.start(name);
+      const perSession = status.services.find((s) => s.name === name)?.mode === 'per-session';
+      return perSession ? `${name} 能正常启动，已缓存工具列表` : `${name} 已启动`;
+    });
   const stop = (name: string) => run(name, async () => (await api.stop(name), `已回收 ${name} 的进程`));
   const update = (name: string) => {
     toast(`正在更新 ${name} 的 npm 包，可能需要一分钟…`);

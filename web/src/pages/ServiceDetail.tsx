@@ -3,6 +3,7 @@ import { ArrowRight, Layers, Package, Pencil, Play, Plus, Square, Trash2, Undo2 
 import { useStatus } from '../App';
 import { useServiceActions } from '../actions';
 import { agentBrand, agentsOf, canTake, takeSteps, useAgentActions, useUnified } from '../agents';
+import { instancesOf } from '../api';
 import { mainClients, masked } from '../clients';
 import { bytes, clock, firstLine, since, span, until } from '../format';
 import { BrandMark, ClientAvatar, ServiceAvatar } from '../icons';
@@ -25,17 +26,21 @@ export function ServiceDetail({ name }: { name: string }) {
   }
 
   const inst = s.instance;
+  const perSession = s.mode === 'per-session';
+  const runs = s.instances ?? [];
   const sessions = status.sessions.filter((x) => x.service === name);
   const url = `${status.baseUrl}/s/${name}`;
   const spec = mainClients.find((c) => c.id === client)!;
   const busy = actions.busy[name] || s.state === 'starting';
   const stateLine = inst
     ? { tone: 'blue' as const, text: '运行中' }
-    : s.state === 'starting'
+    : runs.length
+      ? { tone: 'blue' as const, text: `按会话 · ${runs.length} 个实例运行中` }
+      : s.state === 'starting'
       ? { tone: 'amber' as const, text: '启动中' }
       : s.state === 'failed'
         ? { tone: 'red' as const, text: '启动失败' }
-        : { tone: 'gray' as const, text: '未运行 · 调用时启动' };
+        : { tone: 'gray' as const, text: perSession ? '按会话 · 调用时启动' : '未运行 · 调用时启动' };
 
   return (
     <>
@@ -51,13 +56,13 @@ export function ServiceDetail({ name }: { name: string }) {
         }
         actions={
           <>
-            {inst ? (
+            {instancesOf(s).length ? (
               <Button icon={<Square className="size-4" />} busy={busy} onClick={() => actions.stop(name)}>
-                回收进程
+                {perSession ? '回收全部实例' : '回收进程'}
               </Button>
             ) : (
               <Button icon={<Play className="size-4" />} busy={busy} onClick={() => actions.start(name)}>
-                立即启动
+                {perSession ? '检查启动' : '立即启动'}
               </Button>
             )}
             <Button icon={<Pencil className="size-4" />} onClick={() => go('services', name, 'edit')}>
@@ -87,9 +92,23 @@ export function ServiceDetail({ name }: { name: string }) {
               <Stat label="空闲回收" value={s.idleTimeoutSec ? span(s.idleTimeoutSec * 1000) : '不回收'} sub="无请求后自动结束进程" />
               <Stat label="累计启动" value={`${s.starts} 次`} sub={s.memoryLimit ? `内存上限 ${bytes(s.memoryLimit)}` : '未设内存上限'} />
             </div>
+          ) : perSession && runs.length > 0 ? (
+            <div className="-my-1 divide-y divide-zinc-100 dark:divide-zinc-800">
+              {runs.map((r) => (
+                <div key={r.session} className="flex items-center gap-4 py-2.5 text-sm">
+                  <span className="w-24 font-mono text-xs text-zinc-400">会话 {r.session}</span>
+                  <span className="w-24 font-medium tabular-nums">{bytes(r.usage.privateBytes)}</span>
+                  <span className="text-zinc-500">
+                    {r.usage.processes} 个进程 · PID {r.pid} · 已运行 {since(r.startedAt)} · {r.inflight ? `处理中 ${r.inflight}` : `空闲 ${since(r.lastActiveAt)}`}
+                  </span>
+                </div>
+              ))}
+            </div>
           ) : (
             <p className="text-sm leading-6 text-zinc-500">
-              {s.state === 'failed'
+              {perSession && s.state !== 'failed'
+                ? `每个会话第一次调用工具时启动自己的实例，会话结束或空闲 ${s.idleTimeoutSec ? span(s.idleTimeoutSec * 1000) : '很久'}后回收。连接和列出工具由能力目录回答，不启动进程。`
+                : s.state === 'failed'
                 ? `启动失败，${s.retryAt ? `${until(s.retryAt)}后可以重试` : '可以手动重试'}。`
                 : '当前没有进程。客户端连接和列出工具由能力目录直接回答，第一次调用工具时才会启动。'}
             </p>
@@ -130,6 +149,9 @@ export function ServiceDetail({ name }: { name: string }) {
                 <span className="text-amber-600 dark:text-amber-400">{s.note}</span>
               </Row>
             )}
+            <Row label="运行方式">
+              {perSession ? '按会话：每个会话一个实例，第一次调用时启动，会话结束回收' : '共享：所有会话共用一份进程'}
+            </Row>
             <Row label="Node 内存">{s.lean ? '精简（--max-semi-space-size=1 --optimize-for-size）' : '默认'}</Row>
             <Row label="空闲回收">{s.idleTimeoutSec ? `空闲 ${span(s.idleTimeoutSec * 1000)}后结束进程` : '不回收'}</Row>
             <Row label="内存上限">{s.memoryLimit ? `${bytes(s.memoryLimit)}，超出时立即终止整棵进程树` : '不限制'}</Row>
@@ -225,7 +247,7 @@ function AgentsSection({ name }: { name: string }) {
                 忘记记录
               </Button>
             );
-          } else if (c && canTake(row, c)) {
+          } else if (c && canTake(c)) {
             state = '原生运行，每个会话各起一份';
             action = (
               <Button size="sm" icon={<Layers className="size-3.5" />} onClick={() => acts.takeover(takeSteps(row, [a]))}>
