@@ -171,19 +171,102 @@ context7 的调用本身要访问外部 API（热调用约 1.1–1.5 s），两�
 - 沙箱验证（临时 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`USERPROFILE`）：一键托管 4 个 MCP、共 3 个 Agent 的 6 个条目，再「全部还原」后 Codex、Cursor 配置逐字节一致，Claude Code 的 `mcpServers` 内容一致
 
 **Codex 沙盒实测**（2026-10-17，Codex CLI 0.161.0）
-- 方法：独立的 MCPcell（单独 home 和端口），沙盒 `CODEX_HOME` 里放 context7、fastctx、sequential-thinking 三个原生条目，用接管接口转成 HTTP 条目（fastctx 未验证，强制共享）。真实 Codex 用 `codex exec --ignore-user-config --ephemeral -c mcp_servers.*` 指向沙盒，不读不改用户的 `config.toml`，鉴权照旧。两个会话并发，分别在两个带不同标记的项目里，要求只用 MCP 工具找出项目标记并用 context7 查 React 的库 ID
+- 本机自用的 MCP 在这里用化名：local-search（原生程序，代码检索）、local-py-a、local-py-b（Python 脚本）
+- 方法：独立的 MCPcell（单独 home 和端口），沙盒 `CODEX_HOME` 里放 context7、local-search、sequential-thinking 三个原生条目，用接管接口转成 HTTP 条目（local-search 未验证，强制共享）。真实 Codex 用 `codex exec --ignore-user-config --ephemeral -c mcp_servers.*` 指向沙盒，不读不改用户的 `config.toml`，鉴权照旧。两个会话并发，分别在两个带不同标记的项目里，要求只用 MCP 工具找出项目标记并用 context7 查 React 的库 ID
 - Codex 0.161 以 2025-11-25 协议连接，握手和工具列表来自能力目录
 
 | 两个并发会话 | Codex 自己启动（stdio） | 经 MCPcell |
 |---|---|---|
-| 会话下的 MCP 进程 | 10 个（fastctx ×2、cmd ×4、node ×4），峰值私有提交约 663 MB | 0 个；全机 3 个服务实例约 122 MB + 守护进程 54 MB，和会话数无关 |
+| 会话下的 MCP 进程 | 10 个（local-search ×2、cmd ×4、node ×4），峰值私有提交约 663 MB（含 Codex 代码模式的 node 进程，偏高，见下方「包装方式原型」的复测） | 0 个；全机 3 个服务实例约 122 MB + 守护进程 54 MB，和会话数无关 |
 | context7 | 两个会话都没拿到：模型查找工具时它的工具还不在列表里，回答 UNAVAILABLE（单会话重跑也一样） | 两轮都答对 `/reactjs/react.dev` |
-| fastctx | 正确 | 正确：两个项目共用一个进程，各自拿到自己的标记 |
+| local-search | 正确 | 正确：两个项目共用一个进程，各自拿到自己的标记 |
 
-- fastctx 共享后，不传 `path` 的调用以 MCPcell 的工作目录（用户目录）为准：一次 `glob` 扫了整个用户目录，用时 32 s；原生时是会话所在项目。它的说明要求传绝对路径，Codex 实际也传了绝对路径，所以能用；这类依赖当前目录的工具是 M3b「按项目一份」的候选
-- 协议层（`tools/mcpprobe`）：fastctx 绝对路径调用 21–36 ms，3 个客户端并发正常；context7 调用约 2.5 s（外部 API）；sequential-thinking 7 ms。崩溃的会话没有断开连接，留下的会话在 10 分钟无活动后清理
+- local-search 共享后，不传 `path` 的调用以 MCPcell 的工作目录（用户目录）为准：一次 `glob` 扫了整个用户目录，用时 32 s；原生时是会话所在项目。它的说明要求传绝对路径，Codex 实际也传了绝对路径，所以能用；这类依赖当前目录的工具是 M3b「按项目一份」的候选
+- 协议层（`tools/mcpprobe`）：local-search 绝对路径调用 21–36 ms，3 个客户端并发正常；context7 调用约 2.5 s（外部 API）；sequential-thinking 7 ms。崩溃的会话没有断开连接，留下的会话在 10 分钟无活动后清理
 
-**M3b 按会话隔离**：chrome-devtools、ssh、pencil、playwright 等有状态服务每个会话独立实例，服务端请求转发给所属会话；之后它们也能接管
+**M3b 按会话隔离** ✅（2026-10-17）
+- 服务新增 `mode: "per-session"`：每个客户端会话一个独立实例，**第一次调用工具时才启动**，会话结束（DELETE，或 GET 流断开 2 分钟无活动）就回收；空闲回收默认 30 分钟。握手和工具列表仍由能力目录回答，连接本身不启动进程
+- 按会话的实例用该会话自己的 `initialize` 参数（clientInfo、capabilities）握手，服务端请求（roots/list、sampling、elicitation）转发给所属会话：优先走它正在等待的 POST 流，否则走 GET 流；客户端通知（roots/list_changed 等）原样转发，`logging/setLevel` 只在实例已运行时转发。共享实例行为不变，仍然拒绝服务端请求
+- 实例池按「槽」管理：共享服务一个槽，按会话服务每个会话一个槽；名额满时先回收空闲的共享实例，再动会话实例
+- 接管规则：已知无状态的共享；有状态的和未知的默认按会话（和原生一样每个会话一份，但用时才启动、不留孤儿进程），未知的可以选择共享。一键托管默认全选
+- 新建、修改或接管服务后在后台预热一次（启动、缓存工具列表、停止），否则缓存失效时第一批会话会各起一个实例来握手
+- 客户端声明的能力（会话日志里记录名字）：Codex CLI 0.161 只有 `elicitation`；Claude Code 2.1.302 有 `elicitation`、`roots`
+- 测试：池（各会话独立实例、复用、释放只停自己的、握手身份透传、roots 转发、预算先回收共享、空闲回收）；HTTP 端到端用官方 Go SDK 客户端（两个客户端各自的 roots 经 HTTP 转发并由 SDK 应答，断开一个只回收它的实例）
+
+沙盒实测（独立 MCPcell + 沙盒 `CODEX_HOME`；chrome-devtools 用 `--headless --isolated`，local-py-a 照搬真实配置）：
+- 两个 Codex 会话并发：A 用 chrome-devtools 打开 example.com 读标题并查 context7，B 只查 context7。经 MCPcell：两个会话下 0 个 MCP 进程；只有 A 起了 chrome-devtools 实例（含无头 Chrome，峰值 404 MB），B 没起；没人调用的 local-py-a 0 个实例；context7 共享一份 88 MB；A、B 都答对，A 的实例在会话结束时回收
+- 同样两个会话让 Codex 自己启动：10 个进程、峰值 527 MB（每个会话都把 chrome-devtools、context7、local-py-a 全部启动；这个数含 Codex 代码模式的 node 进程，偏高，复测见下方「包装方式原型」），而 chrome-devtools 和 context7 在模型查工具时还没就绪，两个会话都没用上
+- Claude Code（`claude -p --strict-mcp-config`）经 MCPcell 调按会话的 chrome-devtools 成功；`claude -p` 退出不发 DELETE，它的实例在退出后约 2 分钟回收
+- Codex 的 `codex exec` 默认拦下需要审批的 MCP 工具（chrome-devtools 的 new_page），测试时用 `-c mcp_servers.<名>.default_tools_approval_mode="approve"` 放行
+
+**包装方式：mcpcell-run** ✅（2026-10-17 接入，用 Rust 写）
+
+接管时不再把 Agent 条目换成 HTTP 地址，而是保留原命令、加一个前缀：`"command": "mcpcell-run", "args": ["--", "npx", "-y", "@upstash/context7-mcp"]`。Agent 配置仍然写着实际运行的是什么，去掉前缀就是原生。
+
+- 转发程序把会话交给守护进程（`GET /run` 升级后的一条连接，协议见 `internal/httpd/run.go`），发过去原命令、工作目录、完整环境变量。守护进程按命令在内存里找到或建立服务，不写 `config.json`：Agent 条目是唯一的定义
+- 按会话的实例用会话自己的工作目录和环境变量启动，和原生一致；共享实例按「Agent 额外设置的环境变量」区分，Agent 和 shell 自带的变量（CLAUDE*、AI_AGENT、CODEX*、TERM、MSYS…）不参与
+- 连接即会话：Agent 关掉转发程序的输入，会话和它的实例立即结束，不靠超时判断
+- 兜底：守护进程没运行就拉起它（放在同目录的 `mcpcelld.exe`）；守护进程拒绝（版本旧、令牌错）或起不来，就直接运行原命令；守护进程在握手前也可以让它直接运行（比如 MCPcell 起不来的服务）。`--direct` 直接运行，`--shared` / `--per-session` 指定方式
+- 启动提示和错误经 stderr 进入 Agent 的 MCP 日志
+
+转发程序每个会话、每个 MCP 一个，所以它自己的大小决定了收益（私有提交，像 Agent 一样用管道、隐藏窗口启动）：
+
+| | 私有提交 | 工作集 | 进程 | 就绪（工具列表来自缓存） |
+|---|---|---|---|---|
+| Rust 版（`shim/`，只用标准库，253 KB） | 0.9–1.0 MB | 4.7–5.2 MB | 1 | 0.03–0.8 s |
+| Go 版（原型，已删除；不链接 net/http） | 12.4–13.2 MB | 9 MB | 1 | 0.03–0.08 s |
+| Go 版编成控制台程序 | 约 14 MB | 15 MB | 2（多一个 conhost） | 0.07–0.09 s |
+| 原生 npx context7 | 194–383 MB | 231–395 MB | 5 | 8.7–8.9 s |
+
+Go 程序在 Windows 上的下限就是约 11.3–11.9 MB（只读标准输入的空程序），所以转发程序用 Rust。
+
+真实 Agent（沙盒 MCPcell；Codex 两个会话并发：A 用 local-search 不传路径列 md 文件、chrome-devtools 读标题、context7 查 React，B 只查 context7；采样排除 Codex 代码模式的进程）：
+
+| | 包装（Rust） | 原生 |
+|---|---|---|
+| 会话下的 MCP 相关进程 | 8 个 mcpcell-run，共 7 MB | cmd、node、python、local-search，共 1088 MB |
+| 守护进程侧 | chrome-devtools 只为 A 起了一个（含无头 Chrome 416 MB）；local-search 只为 A 起了一个（2 MB）；context7 共享 85 MB；local-py-a 没人用，0 个 | — |
+| 结果 | A、B 全对；A 的 local-search 返回会话自己项目里的 README.md | 只有 local-search 成功，chrome-devtools、context7 没就绪 |
+
+- Claude Code 同样全对，local-search 返回它所在项目的文件；Claude 和 Codex 同时用 context7 时共用一个共享实例
+- 守护进程没运行时由转发程序自动拉起；令牌错、守护进程起不来、`--direct` 三种情况都直接运行原命令并正常工作，不会多拉起守护进程
+- Codex 只把 24 个变量（PATH、USERPROFILE、APPDATA……）加上条目里的 `env` 传给 MCP 进程，自定义变量和 `MCPCELL_HOME` 都传不过去；转发程序转交的正是原生 MCP 会拿到的那一份
+- 测量时要排除 Codex 代码模式（`codex-code-mode-host.exe` 和它的 node 子进程），它们不是 MCP
+
+接入：
+- 接管默认写包装格式：Claude Code 经 `claude mcp add-json` 写入（保留 JSON 键顺序），Cursor 只换 command、args 两个成员，Codex 只换 command、args 两行（多行 args 合成一行），env、enabled、超时、注释都不动；新增条目也写包装格式；还原逐字节不变（Codex、Cursor 有 CRLF 用例）
+- 接管时仍在 `config.json` 建服务，守护进程按命令和参数（加上服务设置的环境变量值）把包装连接对到这个服务：模式、空闲回收等设置和 HTTP 客户端共用同一个实例；用户手动加前缀的条目落到内存里的临时服务
+- `mcpcell install` 把三个程序装到 `~/.mcpcell/bin`，Agent 配置引用那里的 mcpcell-run，开机自启和快捷方式只在原本指向旧位置时才改过去（它们是用户级设置，不随 MCPCELL_HOME 变化）
+- 沙盒全流程：install → 接管（Codex 4 个、Claude Code 3 个，包括真实 `claude` CLI 写入）→ 真实 Claude Code 和 Codex 直接用写出的条目，全部答对，会话落在已配置的服务上，两个 Agent 共用 context7 → 全部还原后 Codex 配置逐字节一致，Claude Code 条目一致
+- 本机迁移：11 个 HTTP 方式的托管全部改成包装格式；真实配置下 Claude Code、Codex（含正在运行的桌面版）都经转发程序连上守护进程，没有退回直接运行
+
+多会话、多 MCP 实测（2026-10-17，沙盒 MCPcell，Codex CLI 0.161；3 个会话并发，每个会话配 9 个 MCP：context7、shadcn-ui、sequential-thinking、memory、filesystem、local-search、chrome-devtools、local-py-a、local-py-b；每个会话只用其中 2 个，chrome-devtools、local-py-a、local-py-b 谁都不用；启动超时都设 60 秒；各跑一轮预热后计数）：
+
+| | 原生 | 包装（mcpcell-run） |
+|---|---|---|
+| 会话下的进程 | 72 个（node ×18、cmd ×18、conhost ×27、python ×6、local-search ×3） | 27 个 mcpcell-run，共 23 MB |
+| MCP 内存峰值（私有提交） | 4308 MB | 453 MB（含守护进程；共享实例 context7、shadcn-ui、filesystem、memory 各一份，按会话的只为用到它的会话启动，没人用的 3 个为 0） |
+| 6 次工具调用 | 只有 local-search 成功；npx 启动的 5 个 MCP 在模型查工具时都没就绪 | 全部成功，答案全对 |
+
+- sequential-thinking 按会话运行时返回的历史长度是 1，和原生一致；共享的话会把别的会话的思考算进去，所以它从共享清单移到了有状态清单
+- 首次使用（能力目录还没缓存、npm 包还没装进 MCPcell 的缓存）时，包装方式也有同样的就绪问题，而且按会话的服务会在每个会话连接时各起一个实例来握手。正式接管会在后台预热，所以只影响用户自己手写前缀、从没运行过的服务；可以改成第一个会话预热、其余会话等目录
+
+**内存与速度基准**（2026-10-17，`scripts/mcpbench.py`，不经过模型；9 个 MCP，原生与 MCPcell 交替，结果与图在本机 `bench/`）：
+- 并发空闲会话（已连接、已列出工具）：原生每个会话约 +1.7 GB、+37 个进程，4 个会话 6.6 GB / 148 个进程；MCPcell 每个会话约 +9 MB（9 个转发程序），4 个会话 93 MB / 37 个进程（含守护进程）。n = 3
+- 全部 MCP 就绪：原生 15.8 s（1 个会话）到 35.5 s（4 个会话）；MCPcell 0.1–0.9 s。单个 npx 类 MCP 原生就绪 13–16 s，经 MCPcell 0.07–0.1 s（能力目录已缓存）。n = 5
+- 从启动到第一个工具结果（npx 类，含进程启动）：原生 11–14 s；MCPcell 实例未运行时中位数约 1.2 s（本地工具）到 3.5–4.6 s（联网工具），共享实例已在运行时 0.04 s（本地）
+- 每次调用多一跳：本地工具中位数 +0.3–0.5 ms（约 1 ms → 1.4 ms），本身需要十几毫秒或联网的工具看不出差别
+- 真实 Codex（3 会话 × 9 MCP，n = 3 轮）：内存峰值 4.35 GB → 0.38 GB（−91%），会话下进程 72 → 27，要求的 6 个 MCP 成功用上 1 → 6
+
+**泛化测试**（2026-10-18，结果在本机 `bench/2026-10-18/`）：
+- 官方一致性套件（`@modelcontextprotocol/conformance` 0.1.16 的 32 个服务端场景，`scripts/mcpconformance.py`）：原生 40/40；修复前 MCPcell 按会话 40/40、共享 28/32（sampling、elicitation 的 4 个场景）；修复后两种方式都是 40/40
+- 差分测试（`scripts/mcpcompat.py`）：50 个能在本机原生启动的 MCP，同一套客户端动作原生跑一遍、经 mcpcell-run 跑 5 种情况（首次使用、目录已缓存、两个会话并发、换工作目录、客户端请求旧协议版本 2025-03-26），比对握手结果、全部列表、工具调用结果、服务端发给客户端的请求与通知。覆盖 Node（npx 的 `cmd /c`、直接写、`npx.cmd` 全路径、`bun x` 四种写法）34 个、Python（uvx）11 个，Go、.NET、Rust、本机原生程序、mcp-remote 远程桥各 1 个；另有 8 个原生就起不来（假密钥被拒或包本身坏了），不计入
+- 修复前：47/50 只差在旧协议版本（缓存的握手结果不看客户端要的版本），3 个被判共享的服务（server-everything、server-filesystem 带参数与不带参数）在共享时和原生不同——服务按客户端能力注册工具，或向客户端要 roots；filesystem 共享时能读到原生会拒绝的目录
+- 修复：握手按客户端请求的协议版本进行，共享实例按版本分开；能力目录按客户端画像缓存；两个服务移出共享清单；加了共享资格检测，以及共享实例收到服务端请求时自动改为按会话（架构 §8）
+- 修复后：50/50 在全部情况下与原生一致。剩下的差别都是预期的：换目录时用的是会话自己的目录；MCPcell 丢掉服务端写到 stdout 的非 JSON 行；多发一次列表变更通知
+- 客户端配置：24 种写法（Codex TOML 16 种、Cursor JSONC 8 种）接管后语义只改 command/args，还原逐字节一致（`internal/clients/edge_test.go`）
+- 首次启动超过 2 分钟的（要先下载浏览器或大依赖），守护进程会把这次交回包装程序原生运行，功能不受影响
+- 未覆盖：Docker 启动的 MCP（本机 Docker 引擎未运行）、Java 写的 MCP
 
 **M3c**：Claude Desktop 的 shim、shared 端点双版本协议、新版协议上游识别
 
