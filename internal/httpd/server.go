@@ -48,6 +48,8 @@ type Options struct {
 	Exe string
 	// Shutdown stops the daemon (mcpcell stop).
 	Shutdown func()
+	// Desktop is the tray icon and app window, if this daemon has them.
+	Desktop Desktop
 }
 
 type Server struct {
@@ -99,6 +101,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/shutdown", s.api(s.handleShutdown))
+	mux.HandleFunc("GET /api/desktop", s.api(s.handleDesktop))
+	mux.HandleFunc("POST /api/desktop", s.api(s.handleDesktop))
+	mux.HandleFunc("POST /api/window", s.api(s.handleWindow))
 	mux.HandleFunc("POST /api/login-code", s.handleLoginCode)
 	mux.HandleFunc("GET /ui/login", s.handleLogin)
 	sub, _ := fs.Sub(uiFiles, "ui/dist")
@@ -193,6 +198,12 @@ func (s *Server) handleLoginCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未授权"})
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": s.LoginURL()})
+}
+
+// LoginURL mints a one-time link that opens the status page (valid for a
+// minute, usable once).
+func (s *Server) LoginURL() string {
 	code := randomHex(16)
 	s.mu.Lock()
 	now := time.Now()
@@ -203,8 +214,7 @@ func (s *Server) handleLoginCode(w http.ResponseWriter, r *http.Request) {
 	}
 	s.codes[code] = now.Add(time.Minute)
 	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]string{
-		"url": "http://127.0.0.1:" + strconv.Itoa(s.opts.Port) + "/ui/login?code=" + code})
+	return "http://127.0.0.1:" + strconv.Itoa(s.opts.Port) + "/ui/login?code=" + code
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/luohui1/MCP-cell/internal/catalog"
 	"github.com/luohui1/MCP-cell/internal/clients"
+	"github.com/luohui1/MCP-cell/internal/desktop"
 	"github.com/luohui1/MCP-cell/internal/httpd"
 	"github.com/luohui1/MCP-cell/internal/npmcache"
 	"github.com/luohui1/MCP-cell/internal/pool"
@@ -26,6 +27,8 @@ func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	port := fs.Int("port", 0, "监听端口（默认取 config.json 的 port，未设置时为 47621）")
 	logToFile := fs.Bool("log", false, "日志写到 ~/.mcpcell/daemon.log（无窗口运行时使用）")
+	noTray := fs.Bool("no-tray", false, "不显示托盘图标")
+	openWindow := fs.Bool("open", false, "启动后打开 MCPcell 窗口")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -73,9 +76,24 @@ func runDaemon(args []string) error {
 	// Ctrl+C, closing the console window, and mcpcell stop all end up here.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := httpd.New(p, httpd.Options{Port: cfg.Port, Token: token, Version: version,
+
+	// The tray icon and window (Windows only). LoginURL is only called when
+	// the window opens, after srv exists.
+	var srv *httpd.Server
+	var shell httpd.Desktop
+	app, err := desktop.Start(desktop.Options{Home: home, Exe: exe, Tray: !*noTray, Log: log,
+		LoginURL: func() string { return srv.LoginURL() }, Status: trayStatus(p), Quit: stop})
+	switch {
+	case err == nil:
+		defer app.Close()
+		shell = app
+	case !errors.Is(err, desktop.ErrUnsupported):
+		log.Warn("desktop shell unavailable", "err", err)
+	}
+	srv = httpd.New(p, httpd.Options{Port: cfg.Port, Token: token, Version: version,
 		ConfigPath: registry.ConfigPath(home), Home: home, MaxInstances: cfg.Limits.MaxInstances, Log: log,
-		Clients: clients.All(userHome, filepath.Join(home, "backups")), Takeovers: takeovers, Exe: exe, Shutdown: stop})
+		Clients: clients.All(userHome, filepath.Join(home, "backups")), Takeovers: takeovers, Exe: exe, Shutdown: stop,
+		Desktop: shell})
 
 	started := time.Now()
 	if err := registry.WriteDaemonInfo(home, registry.DaemonInfo{PID: os.Getpid(), Port: cfg.Port,
@@ -86,6 +104,11 @@ func runDaemon(args []string) error {
 
 	go p.Run(ctx, 15*time.Second)
 	go srv.Run(ctx)
+	if *openWindow && shell != nil {
+		if err := shell.Show(); err != nil {
+			log.Warn("cannot open window", "err", err)
+		}
+	}
 
 	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

@@ -16,14 +16,28 @@ import (
 
 // runStart launches the windowless daemon in the background.
 func runStart() error {
-	var st psStatus
-	if daemonCall("GET", "/api/status", &st) == nil {
+	st, started, err := ensureDaemon()
+	switch {
+	case err != nil:
+		return err
+	case started:
+		home, _ := registry.Home()
+		fmt.Printf("MCPcell 已启动（PID %d，端口 %d），日志在 %s\n", st.PID, st.Port, filepath.Join(home, "daemon.log"))
+	default:
 		fmt.Printf("MCPcell 已在运行（PID %d，端口 %d）\n", st.PID, st.Port)
-		return nil
+	}
+	return nil
+}
+
+// ensureDaemon starts the windowless daemon unless one is running, and
+// waits until it answers.
+func ensureDaemon() (st psStatus, started bool, err error) {
+	if daemonCall("GET", "/api/status", &st) == nil {
+		return st, false, nil
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return st, false, err
 	}
 	bin := exe
 	if gui := filepath.Join(filepath.Dir(exe), "mcpcelld.exe"); runtime.GOOS == "windows" {
@@ -34,17 +48,15 @@ func runStart() error {
 	cmd := exec.Command(bin, "daemon", "--log")
 	detach(cmd)
 	if err := cmd.Start(); err != nil {
-		return err
+		return st, false, err
 	}
 	_ = cmd.Process.Release()
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
 		if daemonCall("GET", "/api/status", &st) == nil {
-			home, _ := registry.Home()
-			fmt.Printf("MCPcell 已启动（PID %d，端口 %d），日志在 %s\n", st.PID, st.Port, filepath.Join(home, "daemon.log"))
-			return nil
+			return st, true, nil
 		}
 	}
-	return errors.New("守护进程没有在 10 秒内响应，请查看 ~/.mcpcell/daemon.log")
+	return st, false, errors.New("守护进程没有在 10 秒内响应，请查看 ~/.mcpcell/daemon.log")
 }
 
 func runStop() error {

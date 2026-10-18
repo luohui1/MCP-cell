@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/luohui1/MCP-cell/internal/desktop"
 )
 
 const version = "0.6.0-dev"
@@ -13,15 +15,18 @@ const usage = `mcpcell %s — 本机 MCP 运行时：每个服务一份进程，
 
 用法: mcpcell <命令> [参数]
 
-  start                在后台启动守护进程（无窗口，日志写到 ~/.mcpcell/daemon.log）
+  open                 打开 MCPcell 窗口（需要时先启动守护进程）；双击 mcpcelld.exe 同此
+  ui [--browser]       同 open；--browser 在浏览器中打开管理页
+  start                在后台启动守护进程（无窗口，带托盘图标，日志写到 ~/.mcpcell/daemon.log）
   stop                 停止守护进程
-  daemon [--port N]    在前台运行守护进程（Ctrl+C 退出）
+  daemon [--port N] [--no-tray] [--open]
+                       在前台运行守护进程（Ctrl+C 退出）
   ps                   查看服务、实例、会话与内存（私有提交）
-  ui                   在浏览器中打开管理页
   clients              列出各客户端的 MCP 条目与接管状态
   restore --all        还原所有被接管的客户端配置（不需要守护进程）
   restore <客户端> [条目...]
   autostart [on|off]   开机自启
+  shortcut [on|off]    桌面和开始菜单快捷方式
   update <服务>        把 npx 服务的 npm 包更新到最新版本并重新锁定
   version              显示版本
 
@@ -30,8 +35,13 @@ const usage = `mcpcell %s — 本机 MCP 运行时：每个服务一份进程，
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, usage, version)
-		os.Exit(2)
+		if !desktop.HasConsole() {
+			// mcpcelld.exe double-clicked or pinned: open the window.
+			os.Args = append(os.Args, "open")
+		} else {
+			fmt.Fprintf(os.Stderr, usage, version)
+			os.Exit(2)
+		}
 	}
 	var err error
 	switch os.Args[1] {
@@ -39,8 +49,17 @@ func main() {
 		err = runDaemon(os.Args[2:])
 	case "ps":
 		err = runPS()
-	case "ui":
-		err = runUI()
+	case "open", "ui":
+		err = runOpen(os.Args[2:])
+		if err != nil && !desktop.HasConsole() {
+			desktop.Alert("MCPcell", err.Error())
+		}
+	case "shortcut":
+		err = runShortcut(os.Args[2:])
+	case "window":
+		if err = runWindow(os.Args[2:]); err != nil {
+			desktop.Alert("MCPcell", "无法打开 MCPcell 窗口："+err.Error()+"\n\n可以运行 mcpcell ui --browser 在浏览器里打开管理页。")
+		}
 	case "start":
 		err = runStart()
 	case "stop":

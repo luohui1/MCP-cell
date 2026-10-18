@@ -5,9 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -152,27 +149,6 @@ func runUpdate(service string) error {
 	}
 	if out.Error != "" {
 		return errors.New(out.Error)
-	}
-	return nil
-}
-
-func runUI() error {
-	var out struct{ URL string }
-	if err := daemonCall("POST", "/api/login-code", &out); err != nil {
-		return err
-	}
-	fmt.Println("管理页：" + out.URL + "（链接 1 分钟内有效，只能用一次）")
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", out.URL)
-	case "darwin":
-		cmd = exec.Command("open", out.URL)
-	default:
-		cmd = exec.Command("xdg-open", out.URL)
-	}
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintln(os.Stderr, "无法自动打开浏览器，请手动打开上面的链接。")
 	}
 	return nil
 }

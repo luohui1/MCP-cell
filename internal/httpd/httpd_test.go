@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -694,5 +695,61 @@ func TestArgsTextHidesSecrets(t *testing.T) {
 	got := argsText([]string{"--app", "desktop", "--api-key", "sk-1", "--token=abc", "-y"})
 	if want := "--app desktop --api-key *** --token=*** -y"; got != want {
 		t.Fatalf("argsText = %q, want %q", got, want)
+	}
+}
+
+type fakeDesktop struct {
+	shown             int
+	desktop, startMnu bool
+	missing           error
+}
+
+func (f *fakeDesktop) Show() error                          { f.shown++; return f.missing }
+func (f *fakeDesktop) Available() error                     { return f.missing }
+func (f *fakeDesktop) Shortcuts() (desktop, startMenu bool) { return f.desktop, f.startMnu }
+func (f *fakeDesktop) SetShortcuts(desktop, startMenu *bool) error {
+	if desktop != nil {
+		f.desktop = *desktop
+	}
+	if startMenu != nil {
+		f.startMnu = *startMenu
+	}
+	return nil
+}
+
+func TestDesktopAPI(t *testing.T) {
+	h := start(t)
+	if code, body := h.apiCall(t, "GET", "/api/desktop", ""); code != 200 || !strings.Contains(body, `"supported":false`) {
+		t.Fatalf("no desktop: %d %s", code, body)
+	}
+	if code, _ := h.apiCall(t, "POST", "/api/window", ""); code != 400 {
+		t.Fatalf("window without desktop: %d", code)
+	}
+
+	fake := &fakeDesktop{}
+	h.srv.opts.Desktop = fake
+	code, body := h.apiCall(t, "GET", "/api/desktop", "")
+	if want := `{"supported":true,"webview":true,"desktopShortcut":false,"startMenuShortcut":false}`; code != 200 || strings.TrimSpace(body) != want {
+		t.Fatalf("GET /api/desktop = %d %s, want %s", code, body, want)
+	}
+	code, body = h.apiCall(t, "POST", "/api/desktop", `{"startMenuShortcut":true}`)
+	if code != 200 || !strings.Contains(body, `"desktopShortcut":false,"startMenuShortcut":true`) || fake.desktop {
+		t.Fatalf("POST /api/desktop = %d %s", code, body)
+	}
+	if code, body := h.apiCall(t, "POST", "/api/window", ""); code != 200 || fake.shown != 1 || !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("POST /api/window = %d %s (shown %d)", code, body, fake.shown)
+	}
+
+	fake.missing = errors.New("没有找到 WebView2 运行时")
+	if _, body := h.apiCall(t, "GET", "/api/desktop", ""); !strings.Contains(body, `"webview":false,"webviewError":"没有找到 WebView2 运行时"`) {
+		t.Fatalf("missing runtime not reported: %s", body)
+	}
+	if code, _ := h.apiCall(t, "POST", "/api/window", ""); code != 500 {
+		t.Fatalf("window without runtime: %d", code)
+	}
+
+	// LoginURL mints the same one-time links as /api/login-code.
+	if !strings.HasPrefix(h.srv.LoginURL(), "http://127.0.0.1:") {
+		t.Fatalf("LoginURL = %s", h.srv.LoginURL())
 	}
 }
