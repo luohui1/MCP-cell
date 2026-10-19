@@ -64,8 +64,15 @@ func runStop() error {
 	if err := daemonCall("POST", "/api/shutdown", &out); err != nil {
 		return err
 	}
-	fmt.Println("MCPcell 正在退出，所有 MCP 服务进程会一起结束。")
+	fmt.Println("MCPcell 正在退出，所有 MCP 服务进程会一起结束；正在运行的 Agent 会话改为直接运行原命令。")
 	return nil
+}
+
+// restartDaemon stops the daemon for a new one (install): wrapped sessions
+// wait for the new daemon and reconnect instead of running directly.
+func restartDaemon() error {
+	var out map[string]bool
+	return daemonCall("POST", "/api/shutdown?restart=1", &out)
 }
 
 func openTakeovers() ([]clients.Client, *clients.Store, error) {

@@ -64,6 +64,10 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	codes    map[string]time.Time // one-time UI login codes
+	runs     map[net.Conn]*runWriter
+	// leaving is set once the daemon is going away: runRestart when a new
+	// daemon takes over (install), runStop otherwise. Wrappers are told which.
+	leaving string
 
 	cfgMu  sync.Mutex // serializes config.json edits
 	takeMu sync.Mutex // serializes client config takeovers
@@ -74,7 +78,7 @@ func New(p *pool.Pool, opts Options) *Server {
 		opts.Log = slog.Default()
 	}
 	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
-		sessions: map[string]*session{}, codes: map[string]time.Time{}}
+		sessions: map[string]*session{}, codes: map[string]time.Time{}, runs: map[net.Conn]*runWriter{}}
 	p.OnListChange(s.notifyListChanged)
 	return s
 }
@@ -125,6 +129,7 @@ func (s *Server) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.closeRuns()
 			s.closeAllSessions()
 			return
 		case now := <-t.C:
@@ -343,6 +348,9 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Shutdown == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "不支持"})
 		return
+	}
+	if r.URL.Query().Get("restart") == "1" {
+		s.leave(runRestart) // a new daemon follows: wrappers wait for it
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"stopping": true})
 	go s.opts.Shutdown()

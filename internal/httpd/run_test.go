@@ -208,3 +208,36 @@ func TestRunUsesTheConfiguredService(t *testing.T) {
 		t.Fatalf("sessions: %+v", sessions)
 	}
 }
+
+func TestRunToldWhyTheDaemonLeaves(t *testing.T) {
+	h := startConfig(t, nil, `{"services":{}}`)
+	env := map[string]string{"MCPCELL_FAKE_MCP": "1"}
+	for _, kv := range os.Environ() {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" && env[k] == "" {
+			env[k] = v
+		}
+	}
+	c := dialRun(t, h, map[string]any{"argv": []string{"npx", "-y", "some-unknown-mcp"}, "cwd": t.TempDir(), "env": env, "mode": "auto"})
+	c.init()
+	// install stops the daemon for a new one: wrappers are told to come back.
+	h.srv.leave(runRestart)
+	h.srv.closeRuns()
+	if _, control := c.read(); control != runRestart {
+		t.Fatalf("control before closing = %q", control)
+	}
+	if _, err := c.r.ReadString('\n'); err == nil {
+		t.Fatal("connection still open")
+	}
+	// Until it is gone, wrappers that try again are turned away to retry.
+	addr := strings.TrimPrefix(h.base, "http://")
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET /run HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nConnection: Upgrade\r\nUpgrade: mcpcell-run\r\n\r\n", addr, token)
+	status, _ := bufio.NewReader(conn).ReadString('\n')
+	if !strings.Contains(status, " 503 ") {
+		t.Fatalf("while leaving: %q", status)
+	}
+}

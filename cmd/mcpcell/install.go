@@ -68,7 +68,7 @@ func runInstall() error {
 	var st psStatus
 	wasRunning := daemonCall("GET", "/api/status", &st) == nil
 	if wasRunning {
-		if err := runStop(); err != nil {
+		if err := restartDaemon(); err != nil {
 			return err
 		}
 		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {

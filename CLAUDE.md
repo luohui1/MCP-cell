@@ -13,7 +13,7 @@
 - `shim/` — `mcpcell-run`（Rust，只用标准库）：接管时包在 Agent 条目原命令前面的转发程序，每个会话、每个 MCP 一个，必须保持约 1 MB 私有提交（Go 运行时在 Windows 上的下限约 11 MB，所以不用 Go）；协议见 `internal/httpd/run.go`。守护进程按命令和参数把包装连接对到已配置的服务上
 - 接管写的是包装格式（`clients/wrap.go`：Claude Code、Cursor 保留 JSON 键顺序，Codex 只替换 command、args 两行）；没有安装 `mcpcell-run` 时退回 HTTP 端点格式
 - `legacy/python-0.5/` — 0.5.0a1 Python 原型，只读参考。M3 移植配置发现/改写时以它为准（`discovery.py`、`patching.py`、`management.py`）
-- `scripts/measure-mcp.ps1` — 内存基线测量；`scripts/mcpbench.py`（内存与速度）、`scripts/mcpcompat.py`（真实 MCP 原生 vs 经 MCPcell 的差分测试）、`scripts/mcpconformance.py`（官方一致性套件，原生 / 共享 / 按会话对照）；`bench/` 存本机结果，已 git-ignore（仓库公开，结果会暴露本机装了哪些 MCP）
+- `scripts/measure-mcp.ps1` — 内存基线测量；`scripts/mcpbench.py`（内存与速度）、`scripts/mcpcompat.py`（真实 MCP 原生 vs 经 MCPcell 的差分测试）、`scripts/mcpconformance.py`（官方一致性套件，原生 / 共享 / 按会话对照）、`scripts/mcpreconnect.py`（守护进程重启、崩溃、退出时包装会话不断，端到端）；`bench/` 存本机结果，已 git-ignore（仓库公开，结果会暴露本机装了哪些 MCP）
 
 ## 命令
 

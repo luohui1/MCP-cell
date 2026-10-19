@@ -31,14 +31,52 @@ import (
 // and then the agent's stdin verbatim. The daemon answers with the stdio
 // stream: newline-delimited JSON-RPC, plus lines starting with runStderr
 // (text for the agent's stderr) and runControl (instructions for the
-// wrapper).
+// wrapper). A daemon on its way out answers 503.
+//
+// When the connection drops mid-session the wrapper keeps the agent's
+// session alive: it reconnects (or runs the command itself), replays the
+// agent's initialize, answers the calls that were in flight as result
+// unknown, and carries on. The control line sent before closing says which.
 const (
 	runStderr  = '\x1e'
 	runControl = '\x1f'
 	// runDirect tells the wrapper to run the command itself and replay what
 	// it already sent. Only ever sent before the reply to initialize.
 	runDirect = "direct"
+	// runRestart: this daemon is being replaced; reconnect to the next one.
+	runRestart = "restart"
+	// runStop: MCPcell is quitting; run the command directly from now on.
+	runStop = "stop"
 )
+
+// leave records why the daemon is going away; the first reason wins.
+func (s *Server) leave(reason string) {
+	s.mu.Lock()
+	if s.leaving == "" {
+		s.leaving = reason
+	}
+	s.mu.Unlock()
+}
+
+// closeRuns tells every wrapper why the daemon is going away and drops its
+// connection; wrappers that connect from now on are turned away.
+func (s *Server) closeRuns() {
+	s.leave(runStop)
+	s.mu.Lock()
+	reason := s.leaving
+	runs := make(map[net.Conn]*runWriter, len(s.runs))
+	for c, w := range s.runs {
+		runs[c] = w
+	}
+	s.mu.Unlock()
+	for c, w := range runs {
+		w.control(reason)
+		_ = c.Close()
+	}
+	if len(runs) > 0 {
+		s.opts.Log.Info("wrappers told to "+reason, "count", len(runs))
+	}
+}
 
 type runHeader struct {
 	Argv []string          `json:"argv"`
@@ -54,6 +92,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "mcpcell-run") {
 		http.Error(w, "需要 Upgrade: mcpcell-run", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	leaving := s.leaving != ""
+	s.mu.Unlock()
+	if leaving {
+		http.Error(w, "MCPcell 正在退出", http.StatusServiceUnavailable)
 		return
 	}
 	hj, ok := w.(http.Hijacker)
@@ -78,6 +123,19 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 // ends when the connection does, as a stdio server ends with its stdin.
 func (s *Server) serveRun(conn net.Conn, br *bufio.Reader) {
 	out := &runWriter{w: conn}
+	s.mu.Lock()
+	if s.leaving != "" {
+		s.mu.Unlock()
+		out.control(s.leaving)
+		return
+	}
+	s.runs[conn] = out
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.runs, conn)
+		s.mu.Unlock()
+	}()
 	line, err := readRunLine(br)
 	if err != nil {
 		return
