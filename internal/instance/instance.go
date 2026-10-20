@@ -427,7 +427,8 @@ func (i *Instance) readLoop() {
 			i.dispatch(m)
 		}
 	}
-	if err := sc.Err(); err != nil {
+	// Stopping on purpose closes the pipe under the scanner.
+	if err := sc.Err(); err != nil && i.StopReason() == "" {
 		i.log.Warn("upstream output unreadable", "err", err)
 	}
 	i.p.Kill()
