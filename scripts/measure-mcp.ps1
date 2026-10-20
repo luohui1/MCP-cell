@@ -5,6 +5,8 @@
 .DESCRIPTION
   Walks the process tree under every agent process (Claude Code, Codex, Grok,
   Gemini, Cursor, VS Code, mcpcell) and groups the descendants by MCP server.
+  MCPcell's management window (`mcpcelld.exe window` and its WebView2
+  processes) is not an MCP server: it is reported on a line of its own.
   Reports private commit (PrivatePageCount), not just working set: Windows trims
   the working set of idle processes, so RSS/WS badly undercounts idle MCPs while
   their commit still counts against the system commit limit.
@@ -61,6 +63,7 @@ function Get-Descendants([int]$id, [int]$depth = 0) {
 }
 
 function Get-ServerKey($proc) {
+  if ($proc.Name -eq 'mcpcell-run.exe') { return 'mcpcell-run' } # its path would read as ".mcpcell"
   $cl = [string]$proc.CommandLine
   $m = [regex]::Match($cl, '(@[\w.-]+/[\w.-]+|[\w.-]*mcp[\w.-]*)', 'IgnoreCase')
   if ($m.Success) { return ($m.Value -replace '@(latest|next|[\d^~][\w.^~-]*)$', '') }
@@ -69,13 +72,36 @@ function Get-ServerKey($proc) {
   return $proc.Name -replace '\.exe$', ''
 }
 
+# Every process under $id, whatever it is (for the management window).
+function Get-Tree([int]$id, [int]$depth = 0) {
+  $out = @()
+  if ($depth -gt 16 -or -not $children.ContainsKey($id)) { return $out }
+  $born = $byPid[$id].CreationDate
+  foreach ($c in $children[$id]) {
+    $cid = [int]$c.ProcessId
+    if ($cid -eq $id -or ($born -and $c.CreationDate -lt $born)) { continue }
+    $out += $c
+    $out += Get-Tree $cid ($depth + 1)
+  }
+  return $out
+}
+
+function Test-Window($proc) {
+  $proc.Name -match '^mcpcelld?\.exe$' -and [string]$proc.CommandLine -match '\swindow(\s|$)'
+}
+
 function MB($bytes) { [math]::Round([double]$bytes / 1MB, 1) }
 function SumPriv($procs) { ($procs | ForEach-Object { [double]$_.PrivatePageCount } | Measure-Object -Sum).Sum }
 function SumWS($procs) { ($procs | ForEach-Object { [double]$_.WorkingSetSize } | Measure-Object -Sum).Sum }
 
 $sessions = @()
 $serverProcs = @()
-foreach ($root in ($all | Where-Object { $_.Name -match $agentPattern })) {
+$windowProcs = @()
+foreach ($root in ($all | Where-Object { Test-Window $_ })) {
+  $windowProcs += $root
+  $windowProcs += Get-Tree ([int]$root.ProcessId)
+}
+foreach ($root in ($all | Where-Object { $_.Name -match $agentPattern -and -not (Test-Window $_) })) {
   $desc = @(Get-Descendants ([int]$root.ProcessId))
   $serverProcs += $desc | ForEach-Object { [pscustomobject]@{ Proc = $_; Session = [int]$root.ProcessId } }
   $sessions += [pscustomobject]@{
@@ -109,6 +135,8 @@ $summary = [pscustomobject]@{
   McpShims         = @($allServerProcs | Where-Object Name -eq 'cmd.exe').Count
   McpPrivMB        = MB (SumPriv $allServerProcs)
   McpWSMB          = MB (SumWS $allServerProcs)
+  WindowProcs      = $windowProcs.Count
+  WindowPrivMB     = MB (SumPriv $windowProcs)
   SystemCommitGB   = [math]::Round(($os.TotalVirtualMemorySize - $os.FreeVirtualMemory) / 1MB, 1)
   SystemCommitMaxGB = [math]::Round($os.TotalVirtualMemorySize / 1MB, 1)
 }
@@ -117,6 +145,13 @@ $summary = [pscustomobject]@{
 $sessions | Sort-Object McpPrivMB -Descending | Format-Table -AutoSize | Out-String -Width 200
 '== MCP servers (across all sessions) =='
 $servers | Format-Table -AutoSize | Out-String -Width 200
+'== MCPcell window (not counted as MCP) =='
+if ($windowProcs.Count) {
+  [pscustomobject]@{ Window = 'mcpcelld window + WebView2'; Procs = $windowProcs.Count; PrivMB = MB (SumPriv $windowProcs); WSMB = MB (SumWS $windowProcs) } |
+    Format-Table -AutoSize | Out-String -Width 200
+} else {
+  "not open`n"
+}
 '== Summary =='
 $summary | Format-List | Out-String -Width 200
 
