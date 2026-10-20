@@ -274,3 +274,40 @@ func TestRunAnswersInitializeFirst(t *testing.T) {
 		t.Fatalf("then %+v, want the server's roots/list", m)
 	}
 }
+
+// A server MCPcell failed to start just now is handed back without being
+// started again for every session; the wrapper runs it as the agent would.
+func TestRunHandsBackAServerThatFailsToStart(t *testing.T) {
+	h := startConfig(t, nil, `{"services":{}}`)
+	header := map[string]any{"argv": []string{"missing-mcp"}, "cwd": t.TempDir(), "env": agentEnv(nil)}
+	starts := func() int {
+		n := 0
+		for _, s := range h.status(t).Services {
+			if strings.HasPrefix(s.Name, "run-missing-mcp-") {
+				n += s.Starts
+			}
+		}
+		return n
+	}
+	for i := range 3 {
+		c := dialRun(t, h, header)
+		// A 2026-07-28 client probes first; the probe is not the session.
+		c.send("server/discover", nil)
+		if i == 0 {
+			if m, control := c.read(); control != "" || !strings.Contains(string(m.Error), "-32601") {
+				t.Fatalf("probe answered %q %s", control, m.Error)
+			}
+			c.send("initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{},
+				"clientInfo": map[string]any{"name": "run-test", "version": "1"}})
+		}
+		// Only the control line comes back: nothing the wrapper could take
+		// for the answer to initialize. Later sessions are handed back at
+		// once, and the command run directly answers the probe.
+		if m, control := c.read(); control != runDirect {
+			t.Fatalf("session %d: got %s %s, want %q", i, m.Result, m.Error, runDirect)
+		}
+		if n := starts(); n != 1 {
+			t.Fatalf("session %d: %d starts, want the first session's only", i, n)
+		}
+	}
+}

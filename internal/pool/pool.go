@@ -93,7 +93,8 @@ type entry struct {
 	checked    bool
 	checking   map[string]bool // client capabilities being checked
 	starts     int
-	failures   int // consecutive failed starts
+	failures   int       // consecutive failed starts
+	failedAt   time.Time // the last failed start
 	crashes    []time.Time
 	nextTry    time.Time
 	lastErr    string
@@ -392,9 +393,7 @@ func (p *Pool) start(e *entry, sl *slot, op *startOp, ss Session) {
 	case err == nil && (e.def != def || p.entries[e.name] != e):
 		err = errors.New("服务配置刚被修改或删除，请重试")
 	case err != nil:
-		e.failures++
-		e.lastErr, e.lastErrAt = err.Error(), time.Now()
-		e.nextTry = time.Now().Add(backoff(e.failures))
+		e.failedLocked(err)
 		p.opts.Log.Warn("start failed", "service", e.name, "err", err)
 	case p.closed:
 		err = errors.New("MCPcell 正在退出")
@@ -422,9 +421,40 @@ func (p *Pool) start(e *entry, sl *slot, op *startOp, ss Session) {
 	close(op.done)
 }
 
+// failedLocked records a failed start.
+func (e *entry) failedLocked(err error) {
+	now := time.Now()
+	e.failures++
+	e.lastErr, e.lastErrAt, e.failedAt = err.Error(), now, now
+	e.nextTry = now.Add(backoff(e.failures))
+}
+
 func backoff(failures int) time.Duration {
 	steps := []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 	return steps[min(failures, len(steps))-1]
+}
+
+// handBack is how long after its last failed start a service is left to the
+// wrapper, which runs the command itself. Unlike backoff it costs a wrapped
+// session nothing (the agent gets the server as it would natively), so it
+// can be long; a server that fails to start every time is then not started
+// again for every session.
+func handBack(failures int) time.Duration {
+	steps := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
+	return steps[min(failures, len(steps))-1]
+}
+
+// Failing reports whether the service's last start failed recently enough
+// that a wrapped session should not wait for another try, and why. A
+// successful start, a changed definition or a manual stop clears it.
+func (p *Pool) Failing(name string) (why string, failing bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e := p.entries[name]
+	if e == nil || e.failures == 0 || time.Since(e.failedAt) >= handBack(e.failures) {
+		return "", false
+	}
+	return e.lastErr, true
 }
 
 func (p *Pool) watch(e *entry, sl *slot, inst *instance.Instance) {
@@ -681,7 +711,21 @@ func (p *Pool) Warm(ctx context.Context, name string) error {
 		p.mu.Unlock()
 		return ErrUnknownService
 	}
-	def, closed, perSession := e.def, p.closed, p.perSessionLocked(e)
+	def, perSession := e.def, p.perSessionLocked(e)
+	p.mu.Unlock()
+	return p.warmAll(ctx, name, def, perSession)
+}
+
+// Try starts a service before it is added, the way Warm would once added: it
+// tells whether MCPcell can run the server at all before an agent's entry is
+// pointed at it. The catalog it fetches is kept for the service's name.
+func (p *Pool) Try(ctx context.Context, name string, def *registry.Service) error {
+	return p.warmAll(ctx, name, def, def.PerSession())
+}
+
+func (p *Pool) warmAll(ctx context.Context, name string, def *registry.Service, perSession bool) error {
+	p.mu.Lock()
+	closed := p.closed
 	p.mu.Unlock()
 	if closed {
 		return errors.New("MCPcell 正在退出")
@@ -705,10 +749,12 @@ func (p *Pool) warm(ctx context.Context, name string, def *registry.Service, int
 	inst, err := instance.Start(instance.Options{Name: name, Spec: spec, Version: p.opts.Version,
 		InitTimeout: p.opts.InitTimeout, Log: p.opts.Log, Client: intro})
 	p.mu.Lock()
-	if e := p.entries[name]; e != nil {
+	if e := p.entries[name]; e != nil && e.def == def {
 		e.note = note
 		if err != nil {
-			e.lastErr, e.lastErrAt = err.Error(), time.Now()
+			e.failedLocked(err)
+		} else {
+			e.failures, e.nextTry = 0, time.Time{}
 		}
 	}
 	p.mu.Unlock()

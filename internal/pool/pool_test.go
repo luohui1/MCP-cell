@@ -357,3 +357,33 @@ func TestLeanSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestFailingUntilRedefinedOrStopped(t *testing.T) {
+	p := newPool(t, "10m")
+	if _, failing := p.Failing("broken"); failing {
+		t.Fatal("failing before any start")
+	}
+	if err := p.Warm(context.Background(), "broken"); err == nil {
+		t.Fatal("broken service warmed")
+	}
+	if why, failing := p.Failing("broken"); !failing || why == "" {
+		t.Fatal("a failed warm-up does not count as a failed start")
+	}
+	p.Stop("broken", "手动停止")
+	if _, failing := p.Failing("broken"); failing {
+		t.Fatal("still failing after a manual stop")
+	}
+	if _, err := p.Acquire(context.Background(), "broken", nil); err == nil {
+		t.Fatal("broken service started")
+	}
+	if _, failing := p.Failing("broken"); !failing {
+		t.Fatal("a failed start does not count")
+	}
+	p.Put("broken", &registry.Service{Command: "definitely-not-a-real-binary-xyz", Args: []string{"--fixed"}})
+	if _, failing := p.Failing("broken"); failing {
+		t.Fatal("still failing after the definition changed")
+	}
+	if _, failing := p.Failing("fake"); failing {
+		t.Fatal("a working service is failing")
+	}
+}

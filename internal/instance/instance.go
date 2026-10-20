@@ -179,6 +179,12 @@ func (i *Instance) handshake() error {
 		return fmt.Errorf("上游在 %s 内没有完成初始化", i.opts.InitTimeout)
 	}
 	if len(resp.Error) > 0 {
+		var e struct {
+			Code int `json:"code"`
+		}
+		if json.Unmarshal(resp.Error, &e) == nil && e.Code == jsonrpc.CodeResultUnknown {
+			return errors.New("进程在完成初始化前退出了") // finish answered it
+		}
 		return fmt.Errorf("上游拒绝初始化：%s", resp.Error)
 	}
 	var res struct {

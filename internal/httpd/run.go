@@ -151,6 +151,13 @@ func (s *Server) serveRun(conn net.Conn, br *bufio.Reader) {
 		out.control(runDirect)
 		return
 	}
+	if why, failing := s.pool.Failing(name); failing {
+		// Trying again would most likely fail again, after the agent waited
+		// for it; the wrapper runs the command as the agent would have.
+		s.opts.Log.Info("run: handing back to the wrapper, the service failed to start recently", "service", name, "err", firstLine(why))
+		out.control(runDirect)
+		return
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var ss *session

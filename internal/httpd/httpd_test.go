@@ -60,15 +60,16 @@ func startWith(t *testing.T, store *catalog.Store) *harness {
 	return startConfig(t, store, `{"services":{"fake":{"command":"fake"}}}`)
 }
 
-// startConfig is startWith with a given config; every service is the fake.
+// startConfig is startWith with a given config; every service is the fake,
+// with the service's variables, except that a command named missing-* does
+// not exist and one named exits-* exits before answering.
 func startConfig(t *testing.T, store *catalog.Store, config string) *harness {
 	t.Helper()
 	cfg, err := registry.Parse([]byte(config))
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := pool.New(cfg, pool.Options{Version: "test", Catalog: store,
-		SpecFor: func(string, *registry.Service) proc.Spec { return fakemcp.Spec() }})
+	p := pool.New(cfg, pool.Options{Version: "test", Catalog: store, SpecFor: fakeSpec})
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +86,18 @@ func startConfig(t *testing.T, store *catalog.Store, config string) *harness {
 		p.Close()
 	})
 	return &harness{srv: srv, base: fmt.Sprintf("http://127.0.0.1:%d", port)}
+}
+
+func fakeSpec(_ string, def *registry.Service) proc.Spec {
+	spec := fakemcp.Spec()
+	switch base := filepath.Base(def.Command); {
+	case strings.HasPrefix(base, "missing-"):
+		spec.Argv = []string{filepath.Join(os.TempDir(), "mcpcell-test-no-such-program.exe")}
+	case strings.HasPrefix(base, "exits-"):
+		spec.Env = append(spec.Env, fakemcp.ExitEnv+"=1")
+	}
+	spec.Env = append(spec.Env, envList(def.Env)...)
+	return spec
 }
 
 type authRT struct{ base http.RoundTripper }
@@ -819,5 +832,53 @@ func TestPerSessionOverHTTP(t *testing.T) {
 	}
 	if call(b, "pid") != pb {
 		t.Fatal("closing a disturbed b's instance")
+	}
+}
+
+// An entry whose server does not start under MCPcell stays as it is, and
+// the result says why: MCPcell would only fail it for every session.
+func TestTakeoverLeavesServersThatDoNotStart(t *testing.T) {
+	h, home := startWithHome(t)
+	userHome := t.TempDir()
+	cursorFile := filepath.Join(userHome, ".cursor", "mcp.json")
+	original := `{"mcpServers": {
+  "ok": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+  "noargs": { "command": "exits-mcp" },
+  "gone": { "command": "missing-mcp" }
+}}
+`
+	_ = os.MkdirAll(filepath.Dir(cursorFile), 0o700)
+	_ = os.WriteFile(cursorFile, []byte(original), 0o600)
+	store, _ := clients.OpenStore(home)
+	h.srv.opts.Clients = []clients.Client{clients.NewCursor(userHome, filepath.Join(home, "backups"))}
+	h.srv.opts.Takeovers = store
+
+	_, body := h.apiCall(t, "POST", "/api/clients/cursor/attach", `{"names":["ok","noargs","gone"]}`)
+	var out struct {
+		Results []struct {
+			Name, Error string
+			OK          bool
+		}
+	}
+	_ = json.Unmarshal([]byte(body), &out)
+	if len(out.Results) != 3 || !out.Results[0].OK || out.Results[1].OK || out.Results[2].OK {
+		t.Fatalf("attach: %s", body)
+	}
+	if e := out.Results[1].Error; !strings.Contains(e, "没有接管") || !strings.Contains(e, fakemcp.ExitMessage) {
+		t.Fatalf("why noargs was left: %q", e)
+	}
+	if e := out.Results[2].Error; !strings.Contains(e, "没有接管") {
+		t.Fatalf("why gone was left: %q", e)
+	}
+	cfg, _ := registry.Load(home)
+	if cfg.Services["ok"] == nil || cfg.Services["noargs"] != nil || cfg.Services["gone"] != nil || h.srv.pool.Has("noargs") {
+		t.Fatalf("services after attach: %v", cfg.Names())
+	}
+	b, _ := os.ReadFile(cursorFile)
+	if !strings.Contains(string(b), `"noargs": { "command": "exits-mcp" }`) || !strings.Contains(string(b), `"gone": { "command": "missing-mcp" }`) {
+		t.Fatalf("entries that do not start were rewritten:\n%s", b)
+	}
+	if len(store.All()) != 1 {
+		t.Fatalf("records: %+v", store.All())
 	}
 }

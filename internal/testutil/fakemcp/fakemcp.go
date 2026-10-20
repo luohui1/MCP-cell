@@ -5,6 +5,7 @@ package fakemcp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,11 @@ const envVar = "MCPCELL_FAKE_MCP"
 func MaybeRun() {
 	if os.Getenv(envVar) != "1" {
 		return
+	}
+	if os.Getenv(ExitEnv) == "1" {
+		time.Sleep(300 * time.Millisecond) // after the handshake was sent, as a slower server would
+		fmt.Fprintln(os.Stderr, ExitMessage)
+		os.Exit(1)
 	}
 	_ = newServer().Run(context.Background(), &mcp.StdioTransport{})
 	os.Exit(0)
@@ -41,6 +47,13 @@ func SpecWith(pageSize int) proc.Spec {
 }
 
 const pageEnv = "MCPCELL_FAKE_PAGE"
+
+// ExitEnv set to 1 makes the server print ExitMessage to stderr and exit
+// without answering, as a server missing its required settings does.
+const (
+	ExitEnv     = "MCPCELL_FAKE_EXIT"
+	ExitMessage = "fake: missing required parameters"
+)
 
 // AskRootsEnv set to 1 makes the server ask a client that supports roots for
 // them right after initialization, as server-filesystem does.

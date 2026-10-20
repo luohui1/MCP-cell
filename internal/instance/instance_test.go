@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -227,5 +228,49 @@ func TestDuplicateInflightIDRejected(t *testing.T) {
 	resp := inst.Call(context.Background(), a, toolCall("5", "echo", nil, nil), noEvents)
 	if resp.ErrorCode() != jsonrpc.CodeInvalidRequest {
 		t.Fatalf("duplicate id accepted: %s %s", resp.Result, resp.Error)
+	}
+}
+
+// lockedBuffer is a log destination safe for the instance's goroutines.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func TestStopOnPurposeLogsNoWarning(t *testing.T) {
+	var logs lockedBuffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	// Stopping closes the pipes, possibly under the reader (servers whose
+	// child processes outlive them a moment); a few rounds for the race.
+	for range 3 {
+		inst, err := Start(Options{Name: "fake", Spec: fakemcp.Spec(), Version: "test", InitTimeout: 20 * time.Second, Log: log})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inst.Stop("预热完成")
+	}
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("warnings for instances stopped on purpose:\n%s", logs.String())
+	}
+}
+
+func TestExitDuringHandshake(t *testing.T) {
+	spec := fakemcp.Spec()
+	spec.Env = append(spec.Env, fakemcp.ExitEnv+"=1")
+	_, err := Start(Options{Name: "fake", Spec: spec, Version: "test", InitTimeout: 20 * time.Second})
+	if err == nil || !strings.Contains(err.Error(), "退出") || !strings.Contains(err.Error(), fakemcp.ExitMessage) {
+		t.Fatalf("err = %v, want that the process exited, with its stderr", err)
 	}
 }

@@ -1,10 +1,15 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"slices"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/luohui1/MCP-cell/internal/clients"
 	"github.com/luohui1/MCP-cell/internal/registry"
@@ -79,17 +84,92 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 	}
 	s.takeMu.Lock()
 	defer s.takeMu.Unlock()
+	tried := s.tryForTakeover(c, req.Names, req.Force)
 	results := make([]takeoverResult, 0, len(req.Names))
 	for _, name := range req.Names {
 		res := takeoverResult{Name: name}
-		res.Service, res.Created, res.OK = s.attachOne(c, name, req.Force, &res.Error)
+		res.Service, res.Created, res.OK = s.attachOne(c, name, req.Force, tried, &res.Error)
 		results = append(results, res)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
-// attachOne makes sure the target service exists, then rewrites the entry.
-func (s *Server) attachOne(c clients.Client, name string, force bool, errText *string) (service string, created, ok bool) {
+// tryTimeout bounds one start check; a first start may install an npm
+// package.
+const tryTimeout = 3 * time.Minute
+
+// tryService makes sure MCPcell can start what an entry would be pointed
+// at: def for a service about to be added, otherwise the configured service
+// called name, unless it has started before (it has a catalog). An entry
+// whose server does not start under MCPcell, often because it does not start
+// at all, stays native: MCPcell would only try it again for every session.
+func (s *Server) tryService(name string, def *registry.Service) error {
+	ctx, cancel := context.WithTimeout(context.Background(), tryTimeout)
+	defer cancel()
+	if def != nil {
+		return s.pool.Try(ctx, name, def)
+	}
+	if s.pool.Cataloged(name) {
+		return nil
+	}
+	return s.pool.Warm(ctx, name)
+}
+
+// tryForTakeover runs the start checks of a takeover side by side, before
+// any entry is rewritten. Results are by service name; attachOne checks a
+// service missing here itself.
+func (s *Server) tryForTakeover(c clients.Client, names []string, force bool) map[string]error {
+	cfg, err := registry.Load(s.opts.Home)
+	if err != nil {
+		return nil
+	}
+	views := clients.Overview([]clients.Client{c}, s.opts.Takeovers, cfg.Services, s.baseURL())
+	if views[0].Error != "" {
+		return nil
+	}
+	todo := map[string]*registry.Service{}
+	for _, ev := range views[0].Entries {
+		if !slices.Contains(names, ev.Name) || ev.TakenOver || !clients.Takeable(ev) || ev.Service == "" {
+			continue
+		}
+		if ev.ServiceExists {
+			todo[ev.Service] = nil
+		} else {
+			todo[ev.Service] = clients.Definition(ev.Entry, clients.ModeFor(ev.Class, force))
+		}
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	out := map[string]error{}
+	for name, def := range todo {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := s.tryService(name, def)
+			mu.Lock()
+			out[name] = err
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return out
+}
+
+// startProblem says in one line why a server did not start, with the last
+// thing it printed to stderr, which usually names the cause.
+func startProblem(err error) string {
+	head, tail, _ := strings.Cut(err.Error(), "\nstderr：")
+	msg := firstLine(head)
+	lines := strings.Split(strings.TrimSpace(tail), "\n")
+	if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
+		msg += "；它的输出：" + last
+	}
+	return msg
+}
+
+// attachOne makes sure the target service exists and starts, then rewrites
+// the entry. tried holds start checks already run, by service name.
+func (s *Server) attachOne(c clients.Client, name string, force bool, tried map[string]error, errText *string) (service string, created, ok bool) {
 	fail := func(msg string) (string, bool, bool) { *errText = msg; return service, created, false }
 	cfg, err := registry.Load(s.opts.Home)
 	if err != nil {
@@ -117,8 +197,19 @@ func (s *Server) attachOne(c clients.Client, name string, force bool, errText *s
 	if service == "" {
 		return fail("无法为它生成服务名，请先在服务页手动添加")
 	}
+	var def *registry.Service
 	if !ev.ServiceExists {
-		def := clients.Definition(ev.Entry, clients.ModeFor(ev.Class, force))
+		def = clients.Definition(ev.Entry, clients.ModeFor(ev.Class, force))
+	}
+	err, done := tried[service]
+	if !done {
+		err = s.tryService(service, def)
+	}
+	if err != nil {
+		s.opts.Log.Warn("not taken over: the service does not start", "client", c.ID(), "entry", name, "service", service, "err", firstLine(err.Error()))
+		return fail("MCPcell 试着启动它失败，没有接管，条目保持原样：" + startProblem(err))
+	}
+	if !ev.ServiceExists {
 		err := s.editConfig(func(cfg *registry.Config) error {
 			if _, exists := cfg.Services[service]; exists {
 				return errors.New("同名服务刚被添加，请刷新后重试")
@@ -129,8 +220,7 @@ func (s *Server) attachOne(c clients.Client, name string, force bool, errText *s
 		if err != nil {
 			return fail(err.Error())
 		}
-		s.pool.Put(service, def)
-		go s.warm(service)
+		s.pool.Put(service, def) // the check above cached its catalog
 		created = true
 	}
 	rec, err := c.Attach(name, s.target(service))

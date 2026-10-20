@@ -268,9 +268,15 @@ func (s *Server) addToAgent(c clients.Client, key string) (string, error) {
 		return "", errors.New("这个 Agent 已经配置了它")
 	}
 	service := row.Service
+	var def *registry.Service
 	if service == "" {
 		service = row.Proposed
-		def := clients.Definition(*row.source, clients.ModeFor(row.Class, false))
+		def = clients.Definition(*row.source, clients.ModeFor(row.Class, false))
+	}
+	if err := s.tryService(service, def); err != nil {
+		return "", errors.New("MCPcell 试着启动它失败，没有加入：" + startProblem(err))
+	}
+	if def != nil {
 		err := s.editConfig(func(cfg *registry.Config) error {
 			if _, exists := cfg.Services[service]; exists {
 				return errors.New("同名服务刚被添加，请刷新后重试")
@@ -281,8 +287,7 @@ func (s *Server) addToAgent(c clients.Client, key string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		s.pool.Put(service, def)
-		go s.warm(service)
+		s.pool.Put(service, def) // the check above cached its catalog
 	}
 	rec, err := c.Add(service, s.target(service))
 	if err != nil {
