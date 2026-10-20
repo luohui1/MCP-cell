@@ -186,20 +186,20 @@ func (s *Server) serveRun(conn net.Conn, br *bufio.Reader) {
 					}()
 					continue
 				}
-				if m.Method != "initialize" {
+				switch m.Method {
+				case "initialize":
+				case "server/discover":
+					// A 2026-07-28 client probes first; answer as the stdio
+					// servers MCPcell runs do, so it falls back to initialize.
+					out.message(jsonrpc.NewError(m.ID, jsonrpc.CodeMethodNotFound, "Method not found"))
+					continue
+				default:
 					out.message(jsonrpc.NewError(m.ID, jsonrpc.CodeInvalidRequest, "请先 initialize"))
 					continue
 				}
 				ss = newSession(name, m.Params)
 				// Used only if the session gets an instance of its own.
 				ss.spawnEnv, ss.spawnDir = envList(h.Env), h.Cwd
-				ch := make(chan jsonrpc.Message, 64)
-				_, gen = ss.openStream(ch)
-				go func() {
-					for m := range ch {
-						out.message(m)
-					}
-				}()
 				reply, _ := s.openSession(ctx, ss, m)
 				if len(reply.Error) > 0 {
 					// MCPcell could not start it; the agent might. Let the
@@ -213,6 +213,20 @@ func (s *Server) serveRun(conn net.Conn, br *bufio.Reader) {
 				}
 				out.stderr(runNotice(h.Argv, mode))
 				out.message(reply)
+				// The server's own messages flow only from now on: the agent
+				// hears nothing before the answer to its initialize, and
+				// nothing at all from a session handed back above.
+				ch := make(chan jsonrpc.Message, 64)
+				var queued []jsonrpc.Message
+				queued, gen = ss.openStream(ch)
+				for _, q := range queued {
+					out.message(q)
+				}
+				go func() {
+					for m := range ch {
+						out.message(m)
+					}
+				}()
 			case jsonrpc.Notification:
 				if ss != nil {
 					s.clientNotification(ss, m)

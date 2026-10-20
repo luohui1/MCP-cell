@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/luohui1/MCP-cell/internal/jsonrpc"
+	"github.com/luohui1/MCP-cell/internal/testutil/fakemcp"
 )
 
 // runClient speaks mcpcell-run's side of the wire format.
@@ -239,5 +240,37 @@ func TestRunToldWhyTheDaemonLeaves(t *testing.T) {
 	status, _ := bufio.NewReader(conn).ReadString('\n')
 	if !strings.Contains(status, " 503 ") {
 		t.Fatalf("while leaving: %q", status)
+	}
+}
+
+// agentEnv is an agent's environment: the test's own plus the entry's.
+func agentEnv(entry map[string]string) map[string]string {
+	env := map[string]string{"MCPCELL_FAKE_MCP": "1"}
+	for k, v := range entry {
+		env[k] = v
+	}
+	for _, kv := range os.Environ() {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			if _, set := env[k]; !set {
+				env[k] = v
+			}
+		}
+	}
+	return env
+}
+// The agent hears its server only after the answer to its initialize: a
+// server that asks for roots as soon as it is initialized waits for it.
+func TestRunAnswersInitializeFirst(t *testing.T) {
+	h := startConfig(t, nil, `{"services":{}}`)
+	c := dialRun(t, h, map[string]any{"argv": []string{"npx", "-y", "some-unknown-mcp"}, "cwd": t.TempDir(),
+		"env": agentEnv(map[string]string{fakemcp.AskRootsEnv: "1"}), "mode": "per-session"})
+	c.send("initialize", map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"roots": map[string]any{}},
+		"clientInfo": map[string]any{"name": "run-test", "version": "1"}})
+	if m, control := c.read(); control != "" || string(m.ID) != "1" || len(m.Result) == 0 {
+		t.Fatalf("first message %q %+v, want the answer to initialize", control, m)
+	}
+	m, _ := c.read()
+	if m.Method != "roots/list" {
+		t.Fatalf("then %+v, want the server's roots/list", m)
 	}
 }

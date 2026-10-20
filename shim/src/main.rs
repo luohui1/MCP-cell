@@ -70,41 +70,21 @@ fn note_raw(text: &str) {
 }
 
 /// Runs the session through the daemon. Until the daemon answers the agent's
-/// initialize it may still hand the session back ("direct"); the initialize
-/// request is then replayed to the command run directly.
+/// initialize it may still hand the session back ("direct"); what the daemon
+/// has not answered yet is then replayed to the command run directly.
 fn serve(mut conn: TcpStream, mut reader: BufReader<TcpStream>, argv: &[String], mode: &str) -> i32 {
-    let mut first = Vec::new();
-    if io::stdin().lock().read_until(b'\n', &mut first).unwrap_or(0) == 0 {
-        return 0; // the agent closed stdin before saying anything
-    }
     let mut header = header_json(argv, mode).into_bytes();
     header.push(b'\n');
-    header.extend_from_slice(&first);
-    if conn.write_all(&header).is_err() {
-        note("无法连接 MCPcell，直接运行原命令");
-        return run_direct(argv, Some(first));
-    }
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let n = reader.read_until(b'\n', &mut line).unwrap_or(0);
-        if n == 0 {
-            note("MCPcell 没有应答，直接运行原命令");
-            return run_direct(argv, Some(first));
-        }
-        match line[0] {
-            // "direct", or a daemon on its way out: nothing was answered yet.
-            LINE_CONTROL => return run_direct(argv, Some(first)),
-            LINE_STDERR => {
-                let _ = io::stderr().write_all(&line[1..]);
-            }
-            _ => {
-                write_stdout(&line);
-                break; // the reply to initialize: the daemon has the session
-            }
-        }
-    }
-    let session = Session { argv: argv.to_vec(), mode: mode.to_string(), first, shared: Arc::default() };
+    let opening = {
+        let (stdin, stdout) = (io::stdin(), io::stdout());
+        open(&mut stdin.lock(), &mut conn, &mut reader, &mut stdout.lock(), header)
+    };
+    let (first, init_id) = match opening {
+        Opening::Opened(first, id) => (first, id),
+        Opening::Direct(replay) => return run_direct(argv, Some(replay)),
+        Opening::AgentGone => return 0,
+    };
+    let session = Session { argv: argv.to_vec(), mode: mode.to_string(), first, init_id, shared: Arc::default() };
     match conn.try_clone() {
         Ok(sink) => session.attach(Sink::Tcp(sink)),
         Err(_) => return 1,
@@ -114,6 +94,73 @@ fn serve(mut conn: TcpStream, mut reader: BufReader<TcpStream>, argv: &[String],
     session.run(Source::Daemon(reader))
 }
 
+/// How the start of a session through the daemon ended.
+#[derive(Debug, PartialEq)]
+enum Opening {
+    /// The daemon answered the agent's initialize: the request and its id.
+    Opened(Vec<u8>, Vec<u8>),
+    /// The daemon handed the session back or went away: run the command,
+    /// replaying what the daemon has not answered.
+    Direct(Vec<u8>),
+    /// The agent closed stdin before initializing.
+    AgentGone,
+}
+
+/// Passes the agent's messages to the daemon until the daemon answers the
+/// agent's initialize. Only that answer means the daemon has the session: an
+/// agent may ask something first (a 2026-07-28 client probes with
+/// server/discover), which the daemon answers and the agent follows with its
+/// initialize. Whatever else the daemon sends before is held until then.
+fn open(agent: &mut dyn BufRead, conn: &mut dyn Write, daemon: &mut dyn BufRead, out: &mut dyn Write, mut header: Vec<u8>) -> Opening {
+    // Sent to the daemon and not answered yet: the replay for a hand-back.
+    let mut unanswered = Vec::new();
+    let mut held: Vec<Vec<u8>> = Vec::new();
+    let mut line = Vec::new();
+    let opened = loop {
+        let mut msg = Vec::new();
+        if agent.read_until(b'\n', &mut msg).unwrap_or(0) == 0 {
+            return Opening::AgentGone;
+        }
+        unanswered.extend_from_slice(&msg);
+        let mut send = std::mem::take(&mut header);
+        send.extend_from_slice(&msg);
+        if conn.write_all(&send).is_err() {
+            note("无法连接 MCPcell，直接运行原命令");
+            return Opening::Direct(unanswered);
+        }
+        let Kind::Request(id) = classify(&msg) else {
+            continue; // a notification: nothing comes back
+        };
+        loop {
+            line.clear();
+            if daemon.read_until(b'\n', &mut line).unwrap_or(0) == 0 {
+                note("MCPcell 没有应答，直接运行原命令");
+                return Opening::Direct(unanswered);
+            }
+            match line[0] {
+                // "direct", or a daemon on its way out.
+                LINE_CONTROL => return Opening::Direct(unanswered),
+                LINE_STDERR => {
+                    let _ = io::stderr().write_all(&line[1..]);
+                }
+                _ => match classify(&line) {
+                    Kind::Response(got, _) if got == id => break,
+                    _ => held.push(line.clone()),
+                },
+            }
+        }
+        let _ = out.write_all(&line).and_then(|_| out.flush());
+        unanswered.clear();
+        if top_level(&msg).and_then(|t| t.method).as_deref() == Some(&b"\"initialize\""[..]) {
+            break Opening::Opened(msg, id);
+        }
+    };
+    for l in &held {
+        let _ = out.write_all(l).and_then(|_| out.flush());
+    }
+    opened
+}
+
 /// One agent session, kept alive across the backends that serve it: the
 /// daemon, a reconnected daemon, or the command run directly.
 struct Session {
@@ -121,6 +168,8 @@ struct Session {
     mode: String,
     /// The agent's initialize request, replayed to every new backend.
     first: Vec<u8>,
+    /// Its id: a backend has the session once it answers that id.
+    init_id: Vec<u8>,
     shared: Arc<Shared>,
 }
 
@@ -342,8 +391,8 @@ impl Session {
                 LINE_STDERR => {} // the notice the agent has seen already
                 LINE_CONTROL => return Err(format!("守护进程不接手（{}）", String::from_utf8_lossy(trim(&line[1..])))),
                 _ => match classify(&line) {
-                    Kind::Response(_, false) => break,
-                    Kind::Response(_, true) => return Err("初始化被拒绝".into()),
+                    Kind::Response(id, false) if id == self.init_id => break,
+                    Kind::Response(id, true) if id == self.init_id => return Err("初始化被拒绝".into()),
                     _ => {}
                 },
             }
@@ -374,8 +423,8 @@ impl Session {
                 return Err("进程启动后就退出了".into());
             }
             match classify(&line) {
-                Kind::Response(_, false) => break,
-                Kind::Response(_, true) => return Err("初始化被拒绝".into()),
+                Kind::Response(id, false) if id == self.init_id => break,
+                Kind::Response(id, true) if id == self.init_id => return Err("初始化被拒绝".into()),
                 _ => {}
             }
         }
@@ -434,34 +483,52 @@ enum Kind {
     Other,
 }
 
-/// Reads the top level of one JSON object: just enough to tell requests from
-/// responses and keep their ids as written.
+/// Tells requests from responses, keeping their ids as written.
 fn classify(line: &[u8]) -> Kind {
+    let Some(t) = top_level(line) else { return Kind::Other };
+    match (t.id, t.method.is_some()) {
+        (Some(id), true) if id != b"null" => Kind::Request(id),
+        (Some(id), false) => Kind::Response(id, t.error),
+        _ => Kind::Other,
+    }
+}
+
+/// The top-level members of a JSON-RPC message the wrapper cares about, as
+/// written (strings keep their quotes).
+struct Top {
+    id: Option<Vec<u8>>,
+    method: Option<Vec<u8>>,
+    error: bool,
+}
+
+/// Reads the top level of one JSON object, None when it is not one.
+fn top_level(line: &[u8]) -> Option<Top> {
     let mut p = Scan { s: line, i: 0 };
     p.ws();
     if !p.eat(b'{') {
-        return Kind::Other;
+        return None;
     }
-    let (mut id, mut method, mut error) = (None, false, false);
+    let mut t = Top { id: None, method: None, error: false };
     loop {
         p.ws();
         if p.eat(b'}') {
             break;
         }
-        let Some(key) = p.string() else { return Kind::Other };
+        let key = p.string()?;
         p.ws();
         if !p.eat(b':') {
-            return Kind::Other;
+            return None;
         }
         p.ws();
         let start = p.i;
         if !p.value() {
-            return Kind::Other;
+            return None;
         }
+        let value = line[start..p.i].to_vec();
         match key {
-            b"\"id\"" => id = Some(line[start..p.i].to_vec()),
-            b"\"method\"" => method = true,
-            b"\"error\"" => error = true,
+            b"\"id\"" => t.id = Some(value),
+            b"\"method\"" => t.method = Some(value),
+            b"\"error\"" => t.error = true,
             _ => {}
         }
         p.ws();
@@ -471,13 +538,9 @@ fn classify(line: &[u8]) -> Kind {
         if p.eat(b'}') {
             break;
         }
-        return Kind::Other;
+        return None;
     }
-    match (id, method) {
-        (Some(id), true) if id != b"null" => Kind::Request(id),
-        (Some(id), false) => Kind::Response(id, error),
-        _ => Kind::Other,
-    }
+    Some(t)
 }
 
 struct Scan<'a> {
@@ -794,6 +857,51 @@ mod tests {
         let err = unknown_result(br#""a\"b""#);
         assert_eq!(classify(&err), Kind::Response(br#""a\"b""#.to_vec(), true));
         assert!(err.ends_with(b"}}\n"));
+    }
+
+    /// Runs open over scripted streams: what the agent sends and what the
+    /// daemon answers. Returns the outcome, what reached the agent and what
+    /// reached the daemon.
+    fn opening(agent: &str, daemon: &str) -> (Opening, String, String) {
+        let (mut to_agent, mut to_daemon) = (Vec::new(), Vec::new());
+        let got = open(&mut agent.as_bytes(), &mut to_daemon, &mut daemon.as_bytes(), &mut to_agent, b"HEADER\n".to_vec());
+        (got, String::from_utf8(to_agent).unwrap(), String::from_utf8(to_daemon).unwrap())
+    }
+
+    const PROBE: &str = "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"server/discover\"}\n";
+    const INIT: &str = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n";
+    const PROBE_ERR: &str = "{\"jsonrpc\":\"2.0\",\"id\":0,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}\n";
+    const INIT_OK: &str = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
+
+    #[test]
+    fn opening_after_a_probe() {
+        // The probe is answered and passed on; the session is the daemon's
+        // once initialize is answered, and the replay is initialize.
+        let note = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n";
+        let daemon = format!("{PROBE_ERR}\x1enotice\n{note}{INIT_OK}");
+        let (got, to_agent, to_daemon) = opening(&format!("{PROBE}{INIT}"), &daemon);
+        assert_eq!(got, Opening::Opened(INIT.as_bytes().to_vec(), b"1".to_vec()));
+        assert_eq!(to_agent, format!("{PROBE_ERR}{INIT_OK}{note}"));
+        assert_eq!(to_daemon, format!("HEADER\n{PROBE}{INIT}"));
+    }
+
+    #[test]
+    fn handed_back_after_a_probe() {
+        // The probe's answer is not the initialize reply: a hand-back after
+        // it replays initialize alone and never answers it as result unknown.
+        let (got, to_agent, _) = opening(&format!("{PROBE}{INIT}"), &format!("{PROBE_ERR}\x1fdirect\n"));
+        assert_eq!(got, Opening::Direct(INIT.as_bytes().to_vec()));
+        assert_eq!(to_agent, PROBE_ERR);
+        // Handed back at once: the command answers the probe itself.
+        let (got, to_agent, _) = opening(&format!("{PROBE}{INIT}"), "\x1fdirect\n");
+        assert_eq!(got, Opening::Direct(PROBE.as_bytes().to_vec()));
+        assert_eq!(to_agent, "");
+        // A server message before the hand-back is not an answer either.
+        let stray = "{\"jsonrpc\":\"2.0\",\"id\":\"mcpcell-1\",\"method\":\"roots/list\"}\n";
+        let (got, to_agent, _) = opening(INIT, &format!("{stray}\x1fdirect\n"));
+        assert_eq!(got, Opening::Direct(INIT.as_bytes().to_vec()));
+        assert_eq!(to_agent, "");
+        assert_eq!(opening("", "").0, Opening::AgentGone);
     }
 
     #[test]
