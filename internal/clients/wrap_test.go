@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/luohui1/MCP-cell/internal/registry"
 )
 
 const wrapper = `C:\Users\me\.mcpcell\bin\mcpcell-run.exe`
@@ -187,5 +189,24 @@ func TestClaudeCodeWrapViaCLI(t *testing.T) {
 	entries, _ = c.List()
 	if e := entries[0]; e.Command != "cmd" || len(e.Args) != 4 {
 		t.Fatalf("after restore: %v %v", e.Command, e.Args)
+	}
+}
+
+func TestDriftFromTheTakenOverService(t *testing.T) {
+	def := &registry.Service{Command: "python", Args: []string{"img.py"}, Env: map[string]string{"KEY": "old"}}
+	wrapped := func(args []string, env map[string]string) Entry {
+		return Entry{Kind: "stdio", Command: wrapper, Args: append([]string{"--"}, args...), Env: env}
+	}
+	if d := drift(wrapped([]string{"python", "img.py"}, map[string]string{"KEY": "old"}), def); d != "" {
+		t.Fatalf("unchanged entry drifts: %q", d)
+	}
+	if d := drift(wrapped([]string{"python", "img.py"}, map[string]string{"KEY": "new"}), def); !strings.Contains(d, "环境变量") {
+		t.Fatalf("new key: %q", d)
+	}
+	if d := drift(wrapped([]string{"python", "img2.py"}, map[string]string{"KEY": "old"}), def); !strings.Contains(d, "参数") {
+		t.Fatalf("new script: %q", d)
+	}
+	if d := drift(wrapped([]string{"python", "img.py"}, nil), nil); d != "" {
+		t.Fatalf("no service: %q", d)
 	}
 }

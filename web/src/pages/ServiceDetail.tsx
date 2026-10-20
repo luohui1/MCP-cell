@@ -8,7 +8,7 @@ import { mainClients, masked } from '../clients';
 import { bytes, clock, firstLine, since, span, until } from '../format';
 import { BrandMark, ClientAvatar, ServiceAvatar } from '../icons';
 import { go, href } from '../router';
-import { Badge, Button, Card, CodeBlock, CopyButton, Dot, Menu, PageHeader, Section, Segmented } from '../ui';
+import { Badge, Button, Card, CodeBlock, CopyButton, Dot, Menu, PageHeader, Section, Segmented, cx } from '../ui';
 
 export function ServiceDetail({ name }: { name: string }) {
   const { status } = useStatus();
@@ -235,6 +235,7 @@ function AgentsSection({ name }: { name: string }) {
           let action: ReactNode = null;
           if (c?.state === 'managed') {
             state = c.added ? '由 MCPcell 加入' : '由 MCPcell 托管';
+            if (c.drift) state += `，但${c.drift}，按条目现在的设置单独运行`;
             action = (
               <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => acts.restore([{ agent: a, entry: c.entry, added: c.added }])}>
                 {c.added ? '移除' : '还原'}
@@ -267,8 +268,10 @@ function AgentsSection({ name }: { name: string }) {
             <div key={a.id} className="flex items-center gap-3 py-2.5">
               <BrandMark brand={agentBrand[a.id]} className="size-4" />
               <span className="w-28 text-sm font-medium">{a.name}</span>
-              <span className="flex-1 truncate text-[13px] text-zinc-500">
-                {c?.state === 'managed' && <span className="mr-1.5 inline-block size-1.5 rounded-full bg-blue-500 align-middle" />}
+              <span title={state} className="flex-1 truncate text-[13px] text-zinc-500">
+                {c?.state === 'managed' && (
+                  <span className={cx('mr-1.5 inline-block size-1.5 rounded-full align-middle', c.drift ? 'bg-amber-500' : 'bg-blue-500')} />
+                )}
                 {state}
                 {c && !c.enabled && <span className="text-zinc-400">（在 {a.name} 里已停用）</span>}
               </span>

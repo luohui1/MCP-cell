@@ -27,7 +27,8 @@ type agentCell struct {
 	Class   clients.Class `json:"class"`
 	Reason  string        `json:"reason,omitempty"`
 	// Takeable: native, and MCPcell can run it (local stdio, reproducible env).
-	Takeable bool `json:"takeable,omitempty"`
+	Takeable bool   `json:"takeable,omitempty"`
+	Drift    string `json:"drift,omitempty"` // managed, but edited since (clients.EntryView.Drift)
 }
 
 type mcpRow struct {
@@ -91,7 +92,7 @@ func (s *Server) unified() (unifiedResponse, error) {
 	for _, v := range clients.Overview(s.opts.Clients, s.opts.Takeovers, cfg.Services, base) {
 		sum := agentSummary{ID: v.ID, Name: v.Name, Path: v.Path, Found: v.Found, Error: v.Error, Total: len(v.Entries)}
 		for _, ev := range v.Entries {
-			cell := agentCell{Entry: ev.Name, Enabled: ev.Enabled, Class: ev.Class, Reason: ev.Reason}
+			cell := agentCell{Entry: ev.Name, Enabled: ev.Enabled, Class: ev.Class, Reason: ev.Reason, Drift: ev.Drift}
 			var key string
 			switch {
 			case ev.TakenOver || ev.Class == clients.ClassManaged:

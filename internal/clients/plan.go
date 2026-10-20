@@ -80,6 +80,22 @@ type EntryView struct {
 	TakenOver     bool       `json:"takenOver"`
 	TakenAt       *time.Time `json:"takenAt,omitempty"`
 	Changed       bool       `json:"changed"` // taken over, but edited since
+	// Drift says how a wrapped entry edited since the takeover differs from
+	// its service: MCPcell then runs it apart from that service.
+	Drift string `json:"drift,omitempty"`
+}
+
+// drift compares a wrapped entry with the service it was taken over for.
+func drift(e Entry, def *registry.Service) string {
+	inner, _ := Unwrap(e)
+	switch {
+	case def == nil || EntryKey(e) == DefinitionKey(def):
+		return ""
+	case ServiceKey(inner.Command, inner.Args, nil, "") == ServiceKey(def.Command, def.Args, nil, ""):
+		return "条目在托管后改过环境变量或目录，与登记的服务不一致"
+	default:
+		return "条目在托管后改过命令或参数，与登记的服务不一致"
+	}
 }
 
 type ClientView struct {
@@ -122,6 +138,9 @@ func Overview(cs []Client, store *Store, services map[string]*registry.Service, 
 				_, wrapped := Unwrap(e)
 				ev.TakenOver = wrapped || e.URL == baseURL+"/s/"+rec.Service
 				ev.Changed = !ev.TakenOver
+				if wrapped {
+					ev.Drift = drift(e, services[rec.Service])
+				}
 				if ev.TakenOver {
 					ev.Class, ev.Reason = ClassManaged, "已由 MCPcell 接管"
 				}

@@ -331,6 +331,7 @@ function AgentIcon({ agent, row, cell, acts }: { agent: AgentSummary; row: McpRo
   } else if (cell.state === 'managed') {
     look = 'bg-blue-50 ring-[1.5px] ring-blue-500 dark:bg-blue-950';
     title = `${agent.name} · 由 MCPcell 托管${off}`;
+    if (cell.drift) title += `。${cell.drift}，MCPcell 按条目现在的设置单独运行它`;
     items = [
       cell.added
         ? {
@@ -365,7 +366,12 @@ function AgentIcon({ agent, row, cell, acts }: { agent: AgentSummary; row: McpRo
     <span className={cx('relative grid size-7 place-items-center rounded-full transition', look, cell && !cell.enabled && 'opacity-50')}>
       <BrandMark brand={agentBrand[agent.id]} className="size-[15px]" />
       {cell?.state === 'managed' && (
-        <span className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-white bg-blue-500 dark:border-zinc-900" />
+        <span
+          className={cx(
+            'absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-white dark:border-zinc-900',
+            cell.drift ? 'bg-amber-500' : 'bg-blue-500',
+          )}
+        />
       )}
     </span>
   );

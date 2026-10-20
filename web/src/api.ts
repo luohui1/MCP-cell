@@ -182,6 +182,8 @@ export interface AgentCell {
   class: EntryClass;
   reason?: string;
   takeable?: boolean;
+  /** Managed, but the entry was edited since: how it differs from its service. */
+  drift?: string;
 }
 
 /** One MCP server, merged across MCPcell's services and every agent. */

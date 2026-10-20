@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/luohui1/MCP-cell/internal/jsonrpc"
+	"github.com/luohui1/MCP-cell/internal/pool"
+	"github.com/luohui1/MCP-cell/internal/registry"
 	"github.com/luohui1/MCP-cell/internal/testutil/fakemcp"
 )
 
@@ -258,6 +260,7 @@ func agentEnv(entry map[string]string) map[string]string {
 	}
 	return env
 }
+
 // The agent hears its server only after the answer to its initialize: a
 // server that asks for roots as soon as it is initialized waits for it.
 func TestRunAnswersInitializeFirst(t *testing.T) {
@@ -309,5 +312,59 @@ func TestRunHandsBackAServerThatFailsToStart(t *testing.T) {
 		if n := starts(); n != 1 {
 			t.Fatalf("session %d: %d starts, want the first session's only", i, n)
 		}
+	}
+}
+
+func (h *harness) service(t *testing.T, name string) *pool.ServiceStatus {
+	t.Helper()
+	for _, s := range h.status(t).Services {
+		if s.Name == name {
+			return &s
+		}
+	}
+	return nil
+}
+
+// An agent's entry edited after the takeover (a new key) no longer matches
+// the configured service; it still runs the way that service is configured,
+// with the agent's variables, apart from it.
+func TestRunEntryEditedAfterTakeover(t *testing.T) {
+	h := startConfig(t, nil, `{"services":{"img":{"command":"python","args":["img_mcp.py"],"mode":"shared","idleTimeout":"7m",
+		"env":{"IMG_API_KEY":"old","IMG_MODEL":"m1"}}}}`)
+	argv := []string{"python", "img_mcp.py"}
+	session := func(key string) *runClient {
+		c := dialRun(t, h, map[string]any{"argv": argv, "cwd": t.TempDir(), "env": agentEnv(map[string]string{"IMG_API_KEY": key, "IMG_MODEL": "m2"})})
+		c.init()
+		return c
+	}
+	a, b, other := session("new"), session("new"), session("other")
+	if len(a.stderr) == 0 || !strings.Contains(a.stderr[0], "共享") {
+		t.Fatalf("notice: %q", a.stderr)
+	}
+	if a.call("pid", nil) != b.call("pid", nil) {
+		t.Fatal("sessions with the same variables do not share the instance")
+	}
+	if a.call("pid", nil) == other.call("pid", nil) {
+		t.Fatal("sessions with different keys share an instance")
+	}
+	if got := a.call("getenv", map[string]any{"text": "IMG_API_KEY"}); got != "new" {
+		t.Fatalf("the shared instance has IMG_API_KEY=%q, want the agent's", got)
+	}
+	var variants []pool.ServiceStatus
+	for _, s := range h.status(t).Services {
+		if strings.HasPrefix(s.Name, "run-img-") {
+			variants = append(variants, s)
+		}
+	}
+	if len(variants) != 2 {
+		t.Fatalf("services: %+v", h.status(t).Services)
+	}
+	for _, s := range variants {
+		if s.Mode != registry.ModeShared || s.IdleTimeoutSec != 420 {
+			t.Fatalf("%s runs %s with idle %ds, want the configured service's way", s.Name, s.Mode, s.IdleTimeoutSec)
+		}
+	}
+	if s := h.service(t, "img"); s.Starts != 0 {
+		t.Fatalf("the configured service started %d times with the old key", s.Starts)
 	}
 }

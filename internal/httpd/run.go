@@ -266,6 +266,9 @@ func (s *Server) runService(h runHeader) (name, mode string, err error) {
 	if name, mode, ok := s.configuredService(h); ok {
 		return name, mode, nil
 	}
+	if name, mode, ok := s.variantService(h); ok {
+		return name, mode, nil
+	}
 	switch h.Mode {
 	case registry.ModeShared, registry.ModePerSession:
 		mode = h.Mode
@@ -315,6 +318,67 @@ func (s *Server) configuredService(h runHeader) (name, mode string, ok bool) {
 		}
 	}
 	return name, mode, ok
+}
+
+// variantService serves an entry whose command and arguments are a
+// configured service's but whose variables no longer match it: the agent's
+// entry was edited after the takeover (a new key, address or model). It runs
+// the way that service is configured (shared or per session, idle timeout,
+// memory limit, ...) with the agent's variables, as a service of its own, so
+// differing credentials never share an instance.
+func (s *Server) variantService(h runHeader) (name, mode string, ok bool) {
+	want := clients.ServiceKey(h.Argv[0], h.Argv[1:], nil, "")
+	var base string
+	var def *registry.Service
+	best := -1
+	for n, d := range s.pool.Definitions() {
+		if strings.HasPrefix(n, "run-") || clients.ServiceKey(d.Command, d.Args, nil, "") != want {
+			continue
+		}
+		if (h.Mode == registry.ModeShared || h.Mode == registry.ModePerSession) && d.Mode != h.Mode {
+			continue
+		}
+		same := 0 // the closest one: most variables still the same
+		for k, v := range d.Env {
+			if h.Env[k] == v {
+				same++
+			}
+		}
+		if same > best || same == best && n < base {
+			base, def, best = n, d, same
+		}
+	}
+	if def == nil {
+		return "", "", false
+	}
+	mode = def.Mode
+	if s.pool.PerSession(base) {
+		mode = registry.ModePerSession // a shareability check may have moved it
+	}
+	env := sharedEnv(h.Env)
+	var changed []string
+	for k, v := range def.Env {
+		if got, set := h.Env[k]; set {
+			if env == nil {
+				env = map[string]string{}
+			}
+			env[k] = got // even when the daemon's own value is the same
+		}
+		if h.Env[k] != v {
+			changed = append(changed, k)
+		}
+	}
+	sort.Strings(changed)
+	v := *def
+	v.Env, v.Mode = env, mode
+	key := clients.ServiceKey(v.Command, v.Args, v.Env, v.Cwd) + "\x00" + mode
+	name = "run-" + slug(base) + "-" + shortHash(key)[:6]
+	if !s.pool.Has(name) {
+		s.pool.Put(name, &v)
+		s.opts.Log.Info("run: entry differs from its configured service", "service", name, "configured", base, "mode", mode,
+			"changed", strings.Join(changed, ","))
+	}
+	return name, mode, true
 }
 
 // clientOnly are prefixes of variables that describe the agent or its shell
