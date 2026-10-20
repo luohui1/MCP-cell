@@ -227,6 +227,20 @@ export const desktop = {
   open: () => call<{ ok: boolean }>('POST', '/api/window'),
 };
 
+export type InterfaceMode = 'gui' | 'cli';
+
+/** GUI (tray icon) or command line; the runtime is the same either way. */
+export interface InterfaceStatus {
+  interface: InterfaceMode;
+  tray: boolean; // the daemon shows its tray icon now
+  traySupported: boolean; // false on --no-tray or without a desktop shell
+}
+
+export const uiMode = {
+  status: () => call<InterfaceStatus>('GET', '/api/interface'),
+  set: (mode: InterfaceMode) => call<InterfaceStatus>('POST', '/api/interface', { interface: mode }),
+};
+
 export const unified = {
   load: () => call<{ agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus }>('GET', '/api/mcp'),
   add: (client: string, row: string) => call<{ service: string }>('POST', `/api/agents/${encodeURIComponent(client)}/add`, { row }),

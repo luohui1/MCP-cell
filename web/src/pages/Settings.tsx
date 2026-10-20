@@ -1,17 +1,19 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { AppWindow, Settings as SettingsIcon } from 'lucide-react';
-import { desktop, takeover, type AutostartStatus, type DesktopStatus } from '../api';
+import { desktop, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
 import { useStatus } from '../App';
 import { masked } from '../clients';
 import { bytes, since } from '../format';
-import { Button, CodeBlock, CopyButton, Dot, GroupHeader, PageHeader, Switch, TableCard, useToast } from '../ui';
+import { Button, CodeBlock, CopyButton, Dot, GroupHeader, PageHeader, Segmented, Switch, TableCard, useToast } from '../ui';
 
 const commands = [
   'mcpcell open            # 打开 MCPcell 窗口（需要时先启动守护进程）',
   'mcpcell start           # 在后台启动守护进程',
   'mcpcell stop            # 停止守护进程',
+  'mcpcell mode cli|gui    # 界面方式：命令行 / 图形界面，立即生效',
   'mcpcell ps              # 服务、实例、会话与内存',
   'mcpcell clients         # 各 Agent 的 MCP 条目与托管状态',
+  'mcpcell takeover        # 托管 Agent 的 MCP：先列出计划，确认后执行',
   'mcpcell restore --all   # 还原所有托管（不需要守护进程）',
   'mcpcell autostart on    # 开机自启',
   'mcpcell shortcut on     # 创建桌面和开始菜单快捷方式',
@@ -23,9 +25,11 @@ export function SettingsPage() {
   const toast = useToast();
   const [auto, setAuto] = useState<AutostartStatus | null>(null);
   const [desk, setDesk] = useState<DesktopStatus | null>(null);
+  const [mode, setMode] = useState<InterfaceStatus | null>(null);
   useEffect(() => {
     takeover.autostartStatus().then(setAuto).catch(() => setAuto(null));
     desktop.status().then(setDesk).catch(() => setDesk(null));
+    uiMode.status().then(setMode).catch(() => setMode(null));
   }, []);
 
   async function attempt<T>(task: () => Promise<T>, done: string, set: (v: T) => void) {
@@ -44,9 +48,10 @@ export function SettingsPage() {
         <section>
           <GroupHeader title="常规" />
           <TableCard>
+            {mode && <InterfaceRow status={mode} onChange={(m) => attempt(() => uiMode.set(m), m === 'cli' ? '已改为命令行' : '已改为图形界面', setMode)} />}
             <SettingRow
               title="开机自启"
-              desc={auto?.supported === false ? auto.error : '登录 Windows 时在后台启动 MCPcell，托盘里显示图标。托管了 MCP 时建议开启，否则 MCPcell 没运行时这些 MCP 不可用。'}
+              desc={auto?.supported === false ? auto.error : '登录 Windows 时在后台启动 MCPcell；图形界面方式下托盘里显示图标。托管了 MCP 时建议开启，否则 MCPcell 没运行时这些 MCP 不可用。'}
             >
               {auto?.supported && (
                 <Switch
@@ -72,7 +77,7 @@ export function SettingsPage() {
                     onChange={(on) => attempt(() => desktop.set({ startMenuShortcut: on }), on ? '已添加到开始菜单' : '已从开始菜单移除', setDesk)}
                   />
                 </SettingRow>
-                <SettingRow title="桌面窗口" desc={desk.webview ? '用独立窗口打开管理页；关闭窗口后 MCPcell 继续在托盘里运行。' : (desk.webviewError ?? '本机没有 WebView2 运行时')}>
+                <SettingRow title="桌面窗口" desc={desk.webview ? '用独立窗口打开管理页；关闭窗口后 MCPcell 继续在后台运行。' : (desk.webviewError ?? '本机没有 WebView2 运行时')}>
                   {desk.webview && (
                     <Button size="sm" icon={<AppWindow className="size-3.5" />} onClick={() => desktop.open().catch((e) => toast((e as Error).message, 'error'))}>
                       打开窗口
@@ -125,6 +130,41 @@ export function SettingsPage() {
         </section>
       </div>
     </>
+  );
+}
+
+/** GUI or command line: only the tray icon differs, and switching is
+ * immediate. */
+function InterfaceRow({ status, onChange }: { status: InterfaceStatus; onChange: (m: InterfaceMode) => void }) {
+  const cli = status.interface === 'cli';
+  return (
+    <SettingRow
+      title="界面方式"
+      desc={
+        <>
+          两种方式的内核完全一样：托管、按需启动、能力目录、断线重连都相同，只是操作入口不同，切换立即生效。
+          {cli ? (
+            <>
+              现在是命令行：不显示托盘图标，用 <code className="font-mono text-[12px]">mcpcell ps</code>、<code className="font-mono text-[12px]">clients</code>、
+              <code className="font-mono text-[12px]">takeover</code>、<code className="font-mono text-[12px]">restore</code> 管理，需要时{' '}
+              <code className="font-mono text-[12px]">mcpcell open</code> 打开这个窗口。
+            </>
+          ) : (
+            ' 现在是图形界面：托盘图标常驻，点它打开这个窗口。'
+          )}
+          {!status.traySupported && ' 这个守护进程不显示托盘图标（以 --no-tray 运行）。'}
+        </>
+      }
+    >
+      <Segmented<InterfaceMode>
+        value={status.interface}
+        onChange={(m) => m !== status.interface && onChange(m)}
+        options={[
+          { value: 'gui', label: '图形界面' },
+          { value: 'cli', label: '命令行' },
+        ]}
+      />
+    </SettingRow>
   );
 }
 
