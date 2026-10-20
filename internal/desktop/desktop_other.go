@@ -7,6 +7,7 @@ type App struct{}
 func Start(Options) (*App, error)                        { return nil, ErrUnsupported }
 func (*App) Show() error                                 { return ErrUnsupported }
 func (*App) Close()                                      {}
+func (*App) SetTray(bool)                                {}
 func (*App) Available() error                            { return ErrUnsupported }
 func (*App) Shortcuts() (desktop, startMenu bool)        { return false, false }
 func (*App) SetShortcuts(desktop, startMenu *bool) error { return ErrUnsupported }

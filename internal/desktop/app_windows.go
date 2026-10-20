@@ -55,6 +55,9 @@ type App struct {
 	taskbarCreated uint32
 	tipAt          time.Time
 	closedOnce     bool
+	// trayOn: the icon is wanted. Adding it can fail before Explorer is up;
+	// TaskbarCreated adds it then.
+	trayOn bool
 }
 
 // Start runs the UI thread and, with opts.Tray, adds the tray icon. It
@@ -119,6 +122,16 @@ func (a *App) Show() error {
 	return nil
 }
 
+// SetTray shows or hides the tray icon while the daemon runs, for switching
+// between the GUI and the command line without a restart.
+func (a *App) SetTray(on bool) {
+	var w uintptr
+	if on {
+		w = 1
+	}
+	postMessage(a.tray, wmSetTray, w, 0)
+}
+
 // Close closes the window, removes the tray icon and ends the UI thread.
 func (a *App) Close() {
 	a.stop.Do(func() {
@@ -167,7 +180,8 @@ func (a *App) run(ready chan<- error) {
 	a.tray = hwnd
 	r, _, _ := procRegisterWindowMessageW.Call(uintptr(unsafe.Pointer(utf16("TaskbarCreated"))))
 	a.taskbarCreated = uint32(r)
-	if a.opts.Tray {
+	a.trayOn = a.opts.Tray
+	if a.trayOn {
 		if err := a.addTrayIcon(); err != nil {
 			// Explorer may not be up yet at logon; TaskbarCreated retries.
 			a.log.Warn("desktop: tray icon not added yet", "err", err)
@@ -231,7 +245,7 @@ func (a *App) refreshTooltip() {
 }
 
 func (a *App) balloon(title, text string) {
-	if !a.opts.Tray {
+	if !a.trayOn {
 		return
 	}
 	d := a.trayData()
@@ -323,15 +337,25 @@ func trayProc(hwnd windows.HWND, m uint32, w, l uintptr) uintptr {
 			a.balloon("MCPcell 仍在后台运行", "点托盘图标可以重新打开")
 		}
 		return 0
+	case wmSetTray:
+		if on := w != 0; on != a.trayOn {
+			a.trayOn = on
+			if !on {
+				a.removeTrayIcon()
+			} else if err := a.addTrayIcon(); err != nil {
+				a.log.Warn("desktop: tray icon not added yet", "err", err)
+			}
+		}
+		return 0
 	case wmStop:
-		if a.opts.Tray {
+		if a.trayOn {
 			a.removeTrayIcon()
 		}
 		procDestroyWindow.Call(uintptr(a.tray))
 		procPostQuitMessage.Call(0)
 		return 0
 	}
-	if m == a.taskbarCreated && a.taskbarCreated != 0 && a.opts.Tray {
+	if m == a.taskbarCreated && a.taskbarCreated != 0 && a.trayOn {
 		if err := a.addTrayIcon(); err != nil {
 			a.log.Warn("desktop: re-adding tray icon", "err", err)
 		}

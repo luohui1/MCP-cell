@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -13,7 +16,10 @@ import (
 )
 
 // daemonCall talks to the running daemon's management API.
-func daemonCall(method, path string, out any) error {
+func daemonCall(method, path string, out any) error { return daemonSend(method, path, nil, out) }
+
+// daemonSend is daemonCall with a JSON request body (none when in is nil).
+func daemonSend(method, path string, in, out any) error {
 	home, err := registry.Home()
 	if err != nil {
 		return err
@@ -26,11 +32,22 @@ func daemonCall(method, path string, out any) error {
 	if err != nil {
 		return err
 	}
-	req, _ := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", info.Port, path), nil)
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", info.Port, path), body)
 	req.Header.Set("Authorization", "Bearer "+token)
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	timeout := 5 * time.Second
-	if strings.HasSuffix(path, "/update") {
-		timeout = 10 * time.Minute // npm install
+	if strings.HasSuffix(path, "/update") || strings.HasSuffix(path, "/attach") {
+		timeout = 10 * time.Minute // npm install; a takeover's start checks
 	}
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
@@ -200,7 +217,9 @@ func human(d time.Duration) string {
 }
 
 // printTable pads by display width so CJK columns line up in a terminal.
-func printTable(rows [][]string) {
+func printTable(rows [][]string) { fprintTable(os.Stdout, rows) }
+
+func fprintTable(w io.Writer, rows [][]string) {
 	widths := make([]int, len(rows[0]))
 	for _, r := range rows {
 		for i, c := range r {
@@ -215,7 +234,7 @@ func printTable(rows [][]string) {
 				b.WriteString(strings.Repeat(" ", widths[i]-width(c)+2))
 			}
 		}
-		fmt.Println(b.String())
+		fmt.Fprintln(w, strings.TrimRight(b.String(), " "))
 	}
 }
 

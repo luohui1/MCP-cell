@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -42,8 +43,18 @@ func wrapperNextTo(exe string) string {
 // runInstall copies the programs into <home>/bin, the stable place agent
 // entries, autostart and shortcuts point at, so rebuilding or moving the
 // source never breaks a running agent. A program in use (a wrapper serving an
-// agent session) is renamed aside rather than overwritten.
-func runInstall() error {
+// agent session) is renamed aside rather than overwritten. --cli or --gui
+// also chooses the interface; without either it stays as it is.
+func runInstall(args []string) error {
+	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	cli := fs.Bool("cli", false, "使用命令行：守护进程不显示托盘图标")
+	gui := fs.Bool("gui", false, "使用图形界面：托盘图标常驻（默认）")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *cli && *gui || fs.NArg() > 0 {
+		return errors.New("用法: mcpcell install [--cli|--gui]")
+	}
 	home, err := registry.Home()
 	if err != nil {
 		return err
@@ -64,6 +75,18 @@ func runInstall() error {
 	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
+	}
+	// Recorded before the daemon restarts, so whichever path starts the new
+	// one (this command, a wrapper, autostart) already follows it.
+	if *cli || *gui {
+		mode := registry.InterfaceGUI
+		if *cli {
+			mode = registry.InterfaceCLI
+		}
+		if _, _, err := setInterface(mode); err != nil {
+			return err
+		}
+		fmt.Println("界面方式：" + interfaceName[mode])
 	}
 	var st psStatus
 	wasRunning := daemonCall("GET", "/api/status", &st) == nil

@@ -17,17 +17,21 @@ const usage = `mcpcell %s — 本机 MCP 运行时：每个服务一份进程，
 
   open                 打开 MCPcell 窗口（需要时先启动守护进程）；双击 mcpcelld.exe 同此
   ui [--browser]       同 open；--browser 在浏览器中打开管理页
-  start                在后台启动守护进程（无窗口，带托盘图标，日志写到 ~/.mcpcell/daemon.log）
+  start                在后台启动守护进程（无窗口，日志写到 ~/.mcpcell/daemon.log）
   stop                 停止守护进程
   daemon [--port N] [--no-tray] [--open]
                        在前台运行守护进程（Ctrl+C 退出）
+  mode [cli|gui]       界面方式：gui 图形界面（托盘图标，默认），cli 命令行（不显示托盘图标）；
+                       不带参数显示当前方式。运行中切换立即生效，内核完全一样
   ps                   查看服务、实例、会话与内存（私有提交）
   clients              列出各客户端的 MCP 条目与接管状态
   restore --all        还原所有被接管的客户端配置（不需要守护进程）
   restore <客户端> [条目...]
   autostart [on|off]   开机自启
   shortcut [on|off]    桌面和开始菜单快捷方式
-  install              把程序装到 ~/.mcpcell/bin，开机自启、快捷方式和 Agent 配置都指向那里
+  install [--cli|--gui]
+                       把程序装到 ~/.mcpcell/bin，开机自启、快捷方式和 Agent 配置都指向那里；
+                       --cli/--gui 同时选择界面方式，不写则保持不变
   update <服务>        把 npx 服务的 npm 包更新到最新版本并重新锁定
   version              显示版本
 
@@ -58,7 +62,9 @@ func main() {
 	case "shortcut":
 		err = runShortcut(os.Args[2:])
 	case "install":
-		err = runInstall()
+		err = runInstall(os.Args[2:])
+	case "mode":
+		err = runMode(os.Args[2:])
 	case "window":
 		if err = runWindow(os.Args[2:]); err != nil {
 			desktop.Alert("MCPcell", "无法打开 MCPcell 窗口："+err.Error()+"\n\n可以运行 mcpcell ui --browser 在浏览器里打开管理页。")

@@ -50,6 +50,9 @@ type Options struct {
 	Shutdown func()
 	// Desktop is the tray icon and app window, if this daemon has them.
 	Desktop Desktop
+	// Tray: the daemon started with its tray icon shown. NoTray keeps the
+	// icon hidden whatever the interface choice (daemon --no-tray).
+	Tray, NoTray bool
 	// Wrapper is the installed mcpcell-run. Takeovers keep the entry's
 	// command and wrap it; without it they point entries at /s/<name>.
 	Wrapper string
@@ -68,6 +71,7 @@ type Server struct {
 	// leaving is set once the daemon is going away: runRestart when a new
 	// daemon takes over (install), runStop otherwise. Wrappers are told which.
 	leaving string
+	tray    bool // the tray icon is shown
 
 	cfgMu  sync.Mutex // serializes config.json edits
 	takeMu sync.Mutex // serializes client config takeovers
@@ -77,7 +81,7 @@ func New(p *pool.Pool, opts Options) *Server {
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
-	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
+	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32), tray: opts.Tray,
 		sessions: map[string]*session{}, codes: map[string]time.Time{}, runs: map[net.Conn]*runWriter{}}
 	p.OnListChange(s.notifyListChanged)
 	return s
@@ -112,6 +116,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/desktop", s.api(s.handleDesktop))
 	mux.HandleFunc("POST /api/desktop", s.api(s.handleDesktop))
 	mux.HandleFunc("POST /api/window", s.api(s.handleWindow))
+	mux.HandleFunc("GET /api/interface", s.api(s.handleInterface))
+	mux.HandleFunc("POST /api/interface", s.api(s.handleInterface))
 	mux.HandleFunc("POST /api/login-code", s.handleLoginCode)
 	mux.HandleFunc("GET /ui/login", s.handleLogin)
 	sub, _ := fs.Sub(uiFiles, "ui/dist")

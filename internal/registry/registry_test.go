@@ -109,6 +109,36 @@ func TestSaveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInterface(t *testing.T) {
+	cfg, err := Parse([]byte(`{"services":{}}`))
+	if err != nil || cfg.CLI() {
+		t.Fatalf("the default must be the GUI: %+v %v", cfg, err)
+	}
+	if _, err := Parse([]byte(`{"interface":"tui","services":{}}`)); err == nil {
+		t.Error("unknown interface accepted")
+	}
+	home := t.TempDir()
+	if err := os.WriteFile(ConfigPath(home), []byte(`{"port":1234,"services":{"a":{"command":"x"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetInterface(home, "tui"); err == nil {
+		t.Error("SetInterface accepted tui")
+	}
+	if err := SetInterface(home, InterfaceCLI); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(home)
+	if err != nil || !again.CLI() || again.Port != 1234 || again.Services["a"] == nil {
+		t.Fatalf("after SetInterface(cli): %+v %v", again, err)
+	}
+	if err := SetInterface(home, InterfaceGUI); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ = Load(home); again.CLI() || again.Interface != InterfaceGUI {
+		t.Fatalf("after SetInterface(gui): %q", again.Interface)
+	}
+}
+
 func TestParseService(t *testing.T) {
 	if _, err := ParseService("ok", []byte(`{"command":"x","idleTimeout":"5m"}`)); err != nil {
 		t.Fatal(err)

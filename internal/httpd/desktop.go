@@ -16,6 +16,8 @@ type Desktop interface {
 	// SetShortcuts creates (true) or removes (false) each shortcut; nil
 	// leaves it unchanged.
 	SetShortcuts(desktop, startMenu *bool) error
+	// SetTray shows or hides the tray icon.
+	SetTray(on bool)
 }
 
 type desktopStatus struct {

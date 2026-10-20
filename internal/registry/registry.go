@@ -29,14 +29,35 @@ const (
 	// ModePerSession gives each client session its own instance, started on
 	// its first call and stopped when the session ends.
 	ModePerSession = "per-session"
+
+	// InterfaceGUI shows a tray icon from which the window opens.
+	InterfaceGUI = "gui"
+	// InterfaceCLI leaves the tray icon out: MCPcell is driven with the
+	// mcpcell commands, and `mcpcell open` still opens the window on demand.
+	InterfaceCLI = "cli"
 )
 
 // Config is config.json. Service entries use the same shape as a client's
 // mcpServers entry, so existing definitions can be pasted in.
 type Config struct {
-	Port     int                 `json:"port,omitempty"`
-	Limits   Limits              `json:"limits,omitzero"`
-	Services map[string]*Service `json:"services"`
+	Port int `json:"port,omitempty"`
+	// Interface is how the user runs MCPcell, InterfaceGUI (the default) or
+	// InterfaceCLI. Only the tray icon differs; the runtime is the same.
+	Interface string              `json:"interface,omitempty"`
+	Limits    Limits              `json:"limits,omitzero"`
+	Services  map[string]*Service `json:"services"`
+}
+
+// CLI reports whether the user chose the command line over the tray icon.
+func (c *Config) CLI() bool { return c.Interface == InterfaceCLI }
+
+// ParseInterface accepts "gui" or "cli".
+func ParseInterface(s string) (string, error) {
+	switch s {
+	case InterfaceGUI, InterfaceCLI:
+		return s, nil
+	}
+	return "", fmt.Errorf("界面方式只能是 gui（图形界面）或 cli（命令行），不是 %q", s)
 }
 
 type Limits struct {
@@ -207,6 +228,11 @@ func Parse(data []byte) (*Config, error) {
 	if cfg.Port == 0 {
 		cfg.Port = DefaultPort
 	}
+	if cfg.Interface != "" {
+		if _, err := ParseInterface(cfg.Interface); err != nil {
+			return nil, fmt.Errorf("config.json：%w", err)
+		}
+	}
 	if cfg.Limits.MaxInstances <= 0 {
 		cfg.Limits.MaxInstances = DefaultMaxInstances
 	}
@@ -271,6 +297,23 @@ func Save(home string, cfg *Config) error {
 		return err
 	}
 	return os.Rename(tmp, ConfigPath(home))
+}
+
+// SetInterface records the interface choice in config.json. The daemon
+// edits the file itself while it runs; this is for when it does not.
+func SetInterface(home, mode string) error {
+	if _, err := ParseInterface(mode); err != nil {
+		return err
+	}
+	cfg, err := Load(home)
+	if err != nil {
+		return err
+	}
+	if cfg.Interface == mode {
+		return nil
+	}
+	cfg.Interface = mode
+	return Save(home, cfg)
 }
 
 // Names returns enabled service names in stable order.

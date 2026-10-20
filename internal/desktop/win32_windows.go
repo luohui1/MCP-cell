@@ -85,6 +85,7 @@ const (
 	wmTray         = wmApp + 1 // notification-area icon callback
 	wmWindowClosed = wmApp + 2 // the window process exited
 	wmStop         = wmApp + 3 // remove the tray icon and leave the loop
+	wmSetTray      = wmApp + 4 // show (wParam 1) or hide (0) the tray icon
 
 	ninSelect    = wmUser + 0
 	ninKeySelect = wmUser + 1
