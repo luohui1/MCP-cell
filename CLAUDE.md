@@ -4,7 +4,7 @@
 
 ## 布局
 
-- `cmd/mcpcell/` — 同一份代码构建两个二进制：`mcpcell.exe`（命令行）和 `mcpcelld.exe`（`-H windowsgui`，无窗口：开机自启的守护进程、桌面窗口进程，双击即打开窗口）。命令：`open`、`ui`、`start`、`stop`、`daemon`、`ps`、`clients`、`restore`、`autostart`、`shortcut`、`update`，以及守护进程内部用的 `window`。`rsrc_windows_amd64.syso` 是图标、清单（PerMonitorV2、通用控件 v6）和版本信息，由 `winres/winres.json` 生成
+- `cmd/mcpcell/` — 同一份代码构建两个二进制：`mcpcell.exe`（命令行）和 `mcpcelld.exe`（`-H windowsgui`，无窗口：开机自启的守护进程、桌面窗口进程，双击即打开窗口）。命令：`open`、`ui`、`start`、`stop`、`daemon`、`mode`、`ps`、`clients`、`takeover`、`restore`、`autostart`、`shortcut`、`install`、`update`，以及守护进程内部用的 `window`。界面方式（config.json 的 `interface`：`gui` 默认带托盘图标，`cli` 不带）只决定托盘图标，守护进程启动时读取，`mcpcell mode` 经 `/api/interface` 即时切换；`takeover` 调用和管理页「一键托管」相同的 `/api/mcp` 与 `/api/clients/{client}/attach`，不另写改配置的逻辑。`rsrc_windows_amd64.syso` 是图标、清单（PerMonitorV2、通用控件 v6）和版本信息，由 `winres/winres.json` 生成
 - `internal/jsonrpc` 原始报文 · `registry` 配置/token · `proc` 进程、Job Object、内存上限 · `instance` 单个上游的多会话路由（独占实例还转发服务端请求） · `pool` 实例生命周期、预算、扁平化；共享服务一个槽、按会话服务每个会话一个槽 · `catalog` 能力目录缓存 · `npmcache` npx 包缓存与版本锁定 · `clients` 客户端配置读取、接管与还原 · `autostart` 开机自启 · `desktop` 托盘图标（在守护进程里）、WebView2 窗口（独立进程，直接调 COM，不带 WebView2Loader.dll）、快捷方式 · `httpd` HTTP 入口、管理 API、内嵌状态页（`httpd/ui/`）
 - `web/` — 管理页源码（React + Vite + Tailwind + lucide，风格参照 CC Switch，只做桌面）。`cd web && npm run build` 输出到 `internal/httpd/ui/dist`，由 Go embed 打进二进制；构建产物要一起提交，这样构建 Go 不需要 Node。客户端品牌图标来自 lobe-icons（MIT，见 `docs/icon-notices.md`）
 - `internal/testutil/fakemcp` — 基于官方 Go SDK 的测试上游；测试二进制通过 `MaybeRun()` 自我 re-exec 成为它
@@ -25,7 +25,7 @@ go build -ldflags "-s -w" -o bin/mcpcell.exe ./cmd/mcpcell
 go build -ldflags "-s -w -H windowsgui" -o bin/mcpcelld.exe ./cmd/mcpcell
 MCPCELL_REAL_CLAUDE=1 go test ./internal/clients/ -run RealClaude   # 用真实 claude CLI，临时目录
 cd shim && cargo test --release && cargo build --release && cd .. && cp shim/target/release/mcpcell-run.exe bin/
-bin/mcpcell.exe install    # 装到 ~/.mcpcell/bin 并从那里重启守护进程；用户的 Agent 配置指向那里，改完代码要重新 install
+bin/mcpcell.exe install    # 装到 ~/.mcpcell/bin 并从那里重启守护进程；用户的 Agent 配置指向那里，改完代码要重新 install（--cli/--gui 同时选界面方式，不写不变）
 MCPCELL_HOME=<临时目录> bin/mcpcell.exe daemon   # 试验时别动用户的 ~/.mcpcell；config.json 里换个 port
 # 改了 Logo 或版本号才需要（版本号在 winres.json 里另写一份）：
 go run ./tools/mkicon
@@ -47,5 +47,5 @@ cd cmd/mcpcell && go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64 &&
 - 用 Git Bash 调 Windows 程序时 `/c` 这类参数会被改成路径，测试脚本要设 `MSYS_NO_PATHCONV=1`。
 - **测试绝不能碰真实客户端配置**：适配器会读 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`，`internal/clients` 的 TestMain 会清掉它们，新测试要用临时目录并调用 `inTemp`。测试失败信息不要打印 Entry 的环境变量值。
 - 代码注释用英文，文档和面向用户的提示用中文（与 legacy 一致）。
-- `~/.mcpcell/` 下：`bin/`（安装的 mcpcell、mcpcelld、mcpcell-run；Agent 配置引用这里的 mcpcell-run）、`config.json`、`token`、`daemon.json`、`daemon.log`、`catalog/`（能力目录）、`pkgs/`（npm 包与 `pins.json`）、`takeover.json`（接管记录，含原始条目）、`backups/`（客户端配置整文件备份）、`webview/`（窗口的 WebView2 配置目录）、`window.json`（窗口位置）。
+- `~/.mcpcell/` 下：`bin/`（安装的 mcpcell、mcpcelld、mcpcell-run；Agent 配置引用这里的 mcpcell-run）、`config.json`（服务、端口、界面方式）、`token`、`daemon.json`、`daemon.log`、`catalog/`（能力目录）、`pkgs/`（npm 包与 `pins.json`）、`takeover.json`（接管记录，含原始条目）、`backups/`（客户端配置整文件备份）、`webview/`（窗口的 WebView2 配置目录）、`window.json`（窗口位置）。
 - 结论以测量为准：用 `scripts/measure-mcp.ps1` 或 `mcpcell ps` 对比基线，不写未测过的节省比例。

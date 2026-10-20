@@ -24,6 +24,7 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 - **一键托管，配置照样清楚**：读取 Claude Code、Codex、Cursor 的 MCP 配置，在原命令前加上 `mcpcell-run`（`"command": "…\mcpcell-run.exe", "args": ["--", "npx", "-y", "@upstash/context7-mcp"]`），原命令、环境变量和其他设置原样保留。转发程序约 1 MB，带着 Agent 的工作目录和环境变量把会话交给 MCPcell；MCPcell 没运行就拉起它，拉不起来就直接运行原命令。托管前先试启动一次，原生就起不来的条目（程序不存在、缺参数）保持原样并说明原因。改前整文件备份，随时一键还原（逐字节恢复，被你改过的条目不覆盖）
 - **会话不因 MCPcell 中断**：升级或重启时转发程序等新守护进程起来后自动重连，守护进程崩溃就把它拉起来再连，退出 MCPcell 则改为直接运行原命令；Agent 不用重新握手，只有断开那一刻正在进行的调用报告"结果未知"
 - **桌面应用**：托盘图标常驻，窗口用系统自带的 WebView2 显示管理页，关窗后 WebView2 进程全部退出；支持开机自启、桌面和开始菜单快捷方式
+- **命令行或图形界面任选**：`mcpcell mode cli` 去掉托盘图标，查看、托管、还原都用命令完成（`mcpcell takeover` 等同于管理页的「一键托管」）；`mcpcell mode gui` 换回来。运行中切换立即生效，两种方式的内核完全一样，命令行模式下仍可用 `mcpcell open` 临时打开窗口
 - 管理页和 `mcpcell ps` 显示每个服务的实例、会话、私有提交和缓存的工具数
 
 - **按会话运行**：chrome-devtools、ssh 这类为每个会话保存状态的 MCP，每个会话一个实例，第一次调用时才启动、会话结束就回收；没用到它的会话不占内存。MCPcell 不认识的 MCP 默认也这样运行，确认无状态后可以改为共享
@@ -43,6 +44,16 @@ bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自
 
 打开后在「MCP」页点「一键托管」，勾选要交给 MCPcell 的 MCP 即可；已经打开的 Agent 会话重启后生效。
 
+更习惯命令行的话，安装时加 `--cli`（守护进程不显示托盘图标，之后也可以随时 `mcpcell mode gui|cli` 切换），然后：
+
+```sh
+~/.mcpcell/bin/mcpcell.exe clients     # 各 Agent 的 MCP 条目、能否托管、托管后怎么运行
+~/.mcpcell/bin/mcpcell.exe takeover    # 列出托管计划，确认后执行；-y 直接执行
+~/.mcpcell/bin/mcpcell.exe takeover context7 --client codex   # 只托管 Codex 的 context7
+```
+
+`takeover` 和管理页走同一个守护进程接口：已知无状态的 MCP 共享，需要会话隔离的和未验证的每个会话一个实例；`--shared` 让未验证的也共享（需要会话隔离的仍按会话），`--per-session` 让新建的服务一律按会话。计划里列出要改的文件、每个条目的运行方式，以及跳过的条目和原因。
+
 也可以直接在 `~/.mcpcell/config.json` 的 `services` 里添加服务，写法与客户端的 `mcpServers` 条目相同，然后重启守护进程：
 
 ```json
@@ -57,12 +68,14 @@ bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自
 
 | 命令 | 作用 |
 |---|---|
-| `mcpcell install` | 把程序装到 `~/.mcpcell/bin`（运行中的转发程序会被移到一边再替换），原本指向旧位置的开机自启和快捷方式一并改过去 |
-| `mcpcell open` | 打开 MCPcell 窗口，需要时先启动守护进程 |
-| `mcpcell start` / `stop` | 在后台启动（带托盘图标）/ 停止守护进程 |
-| `mcpcell daemon [--port N]` | 前台运行守护进程，Ctrl+C 退出 |
-| `mcpcell clients` | 各客户端的 MCP 条目、分类与接管状态 |
-| `mcpcell restore --all` | 还原所有被接管的客户端配置，不需要守护进程 |
+| `mcpcell install [--cli\|--gui]` | 把程序装到 `~/.mcpcell/bin`（运行中的转发程序会被移到一边再替换），原本指向旧位置的开机自启和快捷方式一并改过去；`--cli`/`--gui` 同时选择界面方式，不写则不变 |
+| `mcpcell mode [cli\|gui]` | 界面方式：`gui` 图形界面（托盘图标，默认），`cli` 命令行（无托盘图标）；不带参数显示当前方式，运行中切换立即生效 |
+| `mcpcell open` | 打开 MCPcell 窗口，需要时先启动守护进程；命令行模式下也可用 |
+| `mcpcell start` / `stop` | 在后台启动 / 停止守护进程（图形界面方式下带托盘图标） |
+| `mcpcell daemon [--port N] [--no-tray]` | 前台运行守护进程，Ctrl+C 退出 |
+| `mcpcell clients` | 各客户端的 MCP 条目、分类、托管状态与运行方式 |
+| `mcpcell takeover [条目...] [--client 客户端] [--shared\|--per-session] [-y]` | 托管 Agent 的 MCP，同管理页「一键托管」：先列出计划，确认后执行 |
+| `mcpcell restore --all` | 还原所有被托管的客户端配置，不需要守护进程；`restore <客户端> [条目...]` 只还原部分 |
 | `mcpcell autostart on` | 开机自启 |
 | `mcpcell ps` | 服务、实例、会话、私有提交 |
 | `mcpcell ui --browser` | 在浏览器里用一次性链接打开管理页 |
@@ -73,6 +86,7 @@ bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自
 
 ```json
 {
+  "interface": "cli",
   "limits": { "maxInstances": 32 },
   "services": {
     "context7": {
@@ -84,6 +98,7 @@ bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自
 }
 ```
 
+- `interface`：`"gui"`（默认，托盘图标）或 `"cli"`（命令行，无托盘图标），用 `mcpcell mode` 改可以立即生效
 - `idleTimeout`：空闲多久回收，`"0"` 表示不回收
 - `memoryLimit`：整棵进程树的内存上限（目前仅 Windows）
 - `flatten`：默认开启；设为 `false` 时保留 npx 启动

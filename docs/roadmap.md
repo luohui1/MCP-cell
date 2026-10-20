@@ -268,6 +268,13 @@ Go 程序在 Windows 上的下限就是约 11.3–11.9 MB（只读标准输入�
 - 首次启动超过 2 分钟的（要先下载浏览器或大依赖），守护进程会把这次交回包装程序原生运行，功能不受影响
 - 未覆盖：Docker 启动的 MCP（本机 Docker 引擎未运行）、Java 写的 MCP
 
+**命令行或图形界面**
+- `config.json` 的 `interface`（`gui` 默认，`cli`）只决定托盘图标。守护进程启动时读取，开机自启、包装程序拉起、`mcpcell start` 都自动遵守；`--no-tray` 仍然优先
+- `mcpcell mode [cli|gui]` 和设置页的「界面方式」经 `POST /api/interface` 即时切换：守护进程写回配置，在 UI 线程上添加或移除托盘图标，不重启；命令行方式下 `mcpcell open` 仍能打开窗口；`mcpcell install --cli|--gui` 安装时选择，不写则不变
+- `mcpcell takeover`：命令行的一键托管。读 `/api/mcp` 列出计划（每个 Agent 的条目、共享还是按会话、新建还是沿用服务、要改的文件、跳过的条目和原因），确认后调用管理页用的同一个 `/api/clients/{client}/attach`；`-y` 直接执行，可按 `--client` 和条目名筛选；`--shared` 让未验证的也共享，`--per-session`（接口新增 `mode` 字段）让新建的服务一律按会话
+- 实测（试验守护进程，没有服务，启动后 5 秒，两轮）：命令行 47.3–47.4 MB 私有提交、15.8 MB 工作集；图形界面 47.8–48.0 MB、18.2–18.3 MB。托盘多 0.4–0.6 MB 私有提交、约 2.5 MB 工作集。运行中切换后用 `Shell_NotifyIconGetRect` 确认图标立即出现、消失
+- 试验环境（临时 `MCPCELL_HOME`、`CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`USERPROFILE`）全流程：列出计划 → 拒绝后三个配置文件逐字节不变 → 托管 Claude Code（真实 `claude` CLI）和 Codex 的 4 个条目，启动不了的 1 个保持原样并给出原因 → `--per-session` 把可共享的 shadcn 建成按会话 → `restore --all` 后 Codex 逐字节一致、Claude Code 条目一致
+
 **M3c**：Claude Desktop 的 shim、shared 端点双版本协议、新版协议上游识别
 
 原 M3 交付清单：

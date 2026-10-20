@@ -51,7 +51,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 一个二进制 `mcpcell.exe`，三种角色：
 - `mcpcell daemon`：常驻，空闲时预计十几 MB（M1 实测）
 - `mcpcell shim <service>`：给只支持 stdio 的客户端用，在 stdio 和守护进程之间转发，也能在守护进程不在时把它拉起来
-- CLI：`ps`、`import`、`attach`、`restore`、`doctor`
+- CLI：`ps`、`clients`、`takeover`、`restore`、`mode` 等（`doctor` 待做）。命令行和图形界面（托盘 + 管理页窗口）是同一个守护进程的两种操作入口，见 §9.4
 
 ## 4. 组件
 
@@ -203,13 +203,19 @@ cold ──acquire──► starting ──握手+能力校验──► ready �
 
 ### 9.2 接管与还原
 
-`mcpcell attach <client>` 优先调用客户端自带的 CLI 修改配置（例如 `claude mcp add --transport http …`），因为 `~/.claude.json` 会被 Claude Code 自己频繁改写，外部直接写文件容易冲突。没有 CLI 时用 legacy 的局部改写逻辑：先备份、只改目标条目、写后校验、可逐条还原。改完需要重启对应客户端。
+接管有两个入口：管理页的「一键托管」和 `mcpcell takeover`。两者都先读 `GET /api/mcp` 列出计划，确认后调用同一个 `POST /api/clients/{client}/attach`，由守护进程先试着启动服务、再改写条目；命令行不另写改配置的逻辑。运行方式的规则也相同：已知无状态的共享，其余按会话；`force`（`--shared`）让未验证的也共享，`mode: "per-session"`（`--per-session`）让新建的服务一律按会话，已有服务沿用自己的模式。
+
+改写时优先调用客户端自带的 CLI 修改配置（例如 `claude mcp add --transport http …`），因为 `~/.claude.json` 会被 Claude Code 自己频繁改写，外部直接写文件容易冲突。没有 CLI 时用 legacy 的局部改写逻辑：先备份、只改目标条目、写后校验、可逐条还原。改完需要重启对应客户端。
 
 ### 9.3 守护进程自启动
 
 HTTP 客户端无法拉起守护进程，所以自启动是必需项：Windows 用当前用户的登录计划任务，失败时自动重启。守护进程不在时客户端会显示连接失败，`mcpcell restore --all` 一条命令回退到原始配置。
 
-### 9.4 客户端支持矩阵
+### 9.4 界面方式
+
+`config.json` 的 `interface` 是 `gui`（默认）或 `cli`，只决定守护进程显不显示托盘图标。守护进程启动时读取它，所以开机自启（`daemon --log`）、包装程序拉起、`mcpcell start` 三条启动路径不用改参数；`--no-tray` 仍然优先。运行中切换走 `POST /api/interface`：守护进程写回配置，并在 UI 线程上即时添加或移除托盘图标，不重启，包装程序的会话不受影响。命令行方式下守护进程仍然创建隐藏的消息窗口，`mcpcell open` 照样能打开管理页窗口。两种方式的接管、按需启动、能力目录、重连完全相同。
+
+### 9.5 客户端支持矩阵
 
 2026-10-17 调研（官方文档、changelog 与 issue）。标"未核实"的项在 M3 真机测试时确认。
 
