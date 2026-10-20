@@ -332,8 +332,11 @@ func TestRunEntryEditedAfterTakeover(t *testing.T) {
 	h := startConfig(t, nil, `{"services":{"img":{"command":"python","args":["img_mcp.py"],"mode":"shared","idleTimeout":"7m",
 		"env":{"IMG_API_KEY":"old","IMG_MODEL":"m1"}}}}`)
 	argv := []string{"python", "img_mcp.py"}
+	n := 0
 	session := func(key string) *runClient {
-		c := dialRun(t, h, map[string]any{"argv": argv, "cwd": t.TempDir(), "env": agentEnv(map[string]string{"IMG_API_KEY": key, "IMG_MODEL": "m2"})})
+		n++ // and a variable of the agent's own session, which must not split the instance
+		env := agentEnv(map[string]string{"IMG_API_KEY": key, "IMG_MODEL": "m2", "SENTRY-TRACE": fmt.Sprint("trace-", n)})
+		c := dialRun(t, h, map[string]any{"argv": argv, "cwd": t.TempDir(), "env": env})
 		c.init()
 		return c
 	}

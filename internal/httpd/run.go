@@ -355,16 +355,22 @@ func (s *Server) variantService(h runHeader) (name, mode string, ok bool) {
 	if s.pool.PerSession(base) {
 		mode = registry.ModePerSession // a shareability check may have moved it
 	}
-	env := sharedEnv(h.Env)
+	// The variables the service is configured with, at the agent's values.
+	// Not the agent's whole environment: it also carries variables of its
+	// own session (trace ids and the like), which would give every session
+	// its own "shared" instance. A session's own instance gets the agent's
+	// whole environment anyway.
+	var env map[string]string
 	var changed []string
 	for k, v := range def.Env {
-		if got, set := h.Env[k]; set {
+		got, set := h.Env[k]
+		if set {
 			if env == nil {
 				env = map[string]string{}
 			}
-			env[k] = got // even when the daemon's own value is the same
+			env[k] = got
 		}
-		if h.Env[k] != v {
+		if !set || got != v {
 			changed = append(changed, k)
 		}
 	}
