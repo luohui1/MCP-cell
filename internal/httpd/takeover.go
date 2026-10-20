@@ -39,6 +39,19 @@ type takeoverRequest struct {
 	// Force shares a server MCPcell does not know to be stateless; without
 	// it such a server gets one instance per session.
 	Force bool `json:"force"`
+	// Mode "per-session" runs every service the takeover creates one
+	// instance per session, even one that could be shared; "shared" is Force.
+	// Existing services keep their mode.
+	Mode string `json:"mode,omitempty"`
+}
+
+// modeFor is how a service created for an entry of class runs. A server
+// that needs session isolation never becomes shared.
+func (req takeoverRequest) modeFor(class clients.Class) string {
+	if req.Mode == registry.ModePerSession {
+		return registry.ModePerSession
+	}
+	return clients.ModeFor(class, req.Force || req.Mode == registry.ModeShared)
 }
 
 type takeoverResult struct {
@@ -52,7 +65,8 @@ type takeoverResult struct {
 func (s *Server) readTakeover(w http.ResponseWriter, r *http.Request) (clients.Client, takeoverRequest, bool) {
 	var req takeoverRequest
 	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16))
-	if err := json.Unmarshal(body, &req); err != nil || len(req.Names) == 0 {
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Names) == 0 ||
+		req.Mode != "" && req.Mode != registry.ModeShared && req.Mode != registry.ModePerSession {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
 		return nil, req, false
 	}
@@ -84,11 +98,11 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 	}
 	s.takeMu.Lock()
 	defer s.takeMu.Unlock()
-	tried := s.tryForTakeover(c, req.Names, req.Force)
+	tried := s.tryForTakeover(c, req)
 	results := make([]takeoverResult, 0, len(req.Names))
 	for _, name := range req.Names {
 		res := takeoverResult{Name: name}
-		res.Service, res.Created, res.OK = s.attachOne(c, name, req.Force, tried, &res.Error)
+		res.Service, res.Created, res.OK = s.attachOne(c, name, req, tried, &res.Error)
 		results = append(results, res)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
@@ -118,7 +132,7 @@ func (s *Server) tryService(name string, def *registry.Service) error {
 // tryForTakeover runs the start checks of a takeover side by side, before
 // any entry is rewritten. Results are by service name; attachOne checks a
 // service missing here itself.
-func (s *Server) tryForTakeover(c clients.Client, names []string, force bool) map[string]error {
+func (s *Server) tryForTakeover(c clients.Client, req takeoverRequest) map[string]error {
 	cfg, err := registry.Load(s.opts.Home)
 	if err != nil {
 		return nil
@@ -129,13 +143,13 @@ func (s *Server) tryForTakeover(c clients.Client, names []string, force bool) ma
 	}
 	todo := map[string]*registry.Service{}
 	for _, ev := range views[0].Entries {
-		if !slices.Contains(names, ev.Name) || ev.TakenOver || !clients.Takeable(ev) || ev.Service == "" {
+		if !slices.Contains(req.Names, ev.Name) || ev.TakenOver || !clients.Takeable(ev) || ev.Service == "" {
 			continue
 		}
 		if ev.ServiceExists {
 			todo[ev.Service] = nil
 		} else {
-			todo[ev.Service] = clients.Definition(ev.Entry, clients.ModeFor(ev.Class, force))
+			todo[ev.Service] = clients.Definition(ev.Entry, req.modeFor(ev.Class))
 		}
 	}
 	var mu sync.Mutex
@@ -169,7 +183,7 @@ func startProblem(err error) string {
 
 // attachOne makes sure the target service exists and starts, then rewrites
 // the entry. tried holds start checks already run, by service name.
-func (s *Server) attachOne(c clients.Client, name string, force bool, tried map[string]error, errText *string) (service string, created, ok bool) {
+func (s *Server) attachOne(c clients.Client, name string, req takeoverRequest, tried map[string]error, errText *string) (service string, created, ok bool) {
 	fail := func(msg string) (string, bool, bool) { *errText = msg; return service, created, false }
 	cfg, err := registry.Load(s.opts.Home)
 	if err != nil {
@@ -199,7 +213,7 @@ func (s *Server) attachOne(c clients.Client, name string, force bool, tried map[
 	}
 	var def *registry.Service
 	if !ev.ServiceExists {
-		def = clients.Definition(ev.Entry, clients.ModeFor(ev.Class, force))
+		def = clients.Definition(ev.Entry, req.modeFor(ev.Class))
 	}
 	err, done := tried[service]
 	if !done {

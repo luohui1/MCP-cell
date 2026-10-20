@@ -24,8 +24,10 @@ const usage = `mcpcell %s — 本机 MCP 运行时：每个服务一份进程，
   mode [cli|gui]       界面方式：gui 图形界面（托盘图标，默认），cli 命令行（不显示托盘图标）；
                        不带参数显示当前方式。运行中切换立即生效，内核完全一样
   ps                   查看服务、实例、会话与内存（私有提交）
-  clients              列出各客户端的 MCP 条目与接管状态
-  restore --all        还原所有被接管的客户端配置（不需要守护进程）
+  clients              列出各客户端的 MCP 条目、托管状态与运行方式
+  takeover [条目...] [--client 客户端] [--shared|--per-session] [-y]
+                       托管 Agent 的 MCP（同管理页「一键托管」）：先列出计划，确认后执行
+  restore --all        还原所有被托管的客户端配置（不需要守护进程）
   restore <客户端> [条目...]
   autostart [on|off]   开机自启
   shortcut [on|off]    桌面和开始菜单快捷方式
@@ -65,6 +67,8 @@ func main() {
 		err = runInstall(os.Args[2:])
 	case "mode":
 		err = runMode(os.Args[2:])
+	case "takeover":
+		err = runTakeover(os.Args[2:])
 	case "window":
 		if err = runWindow(os.Args[2:]); err != nil {
 			desktop.Alert("MCPcell", "无法打开 MCPcell 窗口："+err.Error()+"\n\n可以运行 mcpcell ui --browser 在浏览器里打开管理页。")

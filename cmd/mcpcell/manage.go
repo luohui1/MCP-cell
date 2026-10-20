@@ -149,7 +149,8 @@ func runClients() error {
 		return err
 	}
 	label := map[clients.Class]string{clients.ClassShared: "可共享", clients.ClassStateful: "需要会话隔离",
-		clients.ClassUnknown: "未知", clients.ClassRemote: "远程 HTTP", clients.ClassManaged: "已接管", clients.ClassInternal: "客户端内置"}
+		clients.ClassUnknown: "未验证", clients.ClassRemote: "远程 HTTP", clients.ClassManaged: "已托管", clients.ClassInternal: "客户端内置"}
+	takeable, managed := 0, 0
 	for _, v := range clients.Overview(cs, store, cfg.Services, fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)) {
 		switch {
 		case v.Error != "":
@@ -160,16 +161,39 @@ func runClients() error {
 			continue
 		}
 		fmt.Printf("%s  %s\n", v.Name, v.Path)
-		rows := [][]string{{"条目", "类别", "启动", "MCPcell 服务"}}
+		rows := [][]string{{"条目", "类别", "启动", "MCPcell 服务", "运行方式"}}
 		for _, e := range v.Entries {
 			what := e.Package
 			if e.Kind == "http" {
 				what = e.URL
 			}
-			rows = append(rows, []string{e.Name, label[e.Class], what, e.Service})
+			// How it runs under MCPcell: its service's mode once taken over,
+			// the mode a takeover would choose while it can be.
+			mode := "-"
+			switch {
+			case e.TakenOver || e.Class == clients.ClassManaged:
+				managed++
+				if def := cfg.Services[e.Service]; def != nil {
+					mode = modeName[def.Mode]
+				}
+			case clients.Takeable(e) && e.Service != "" && !e.Changed:
+				takeable++
+				if def := cfg.Services[e.Service]; def != nil && e.ServiceExists {
+					mode = modeName[def.Mode]
+				} else {
+					mode = "可托管：" + modeName[clients.ModeFor(e.Class, false)]
+				}
+			}
+			rows = append(rows, []string{e.Name, label[e.Class], what, e.Service, mode})
 		}
 		printTable(rows)
 		fmt.Println()
+	}
+	if takeable > 0 {
+		fmt.Printf("可以托管 %d 个条目：mcpcell takeover 列出计划，确认后执行（可按 --client 和条目名筛选）\n", takeable)
+	}
+	if managed > 0 {
+		fmt.Println("还原：mcpcell restore <客户端> [条目...]，或 mcpcell restore --all")
 	}
 	return nil
 }
