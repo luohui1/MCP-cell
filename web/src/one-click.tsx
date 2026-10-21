@@ -3,6 +3,7 @@ import { Layers } from 'lucide-react';
 import { takeover, type AgentSummary, type McpRow } from './api';
 import { agentBrand, applyTakeover, AutostartOption, takeSteps } from './agents';
 import { useStatus, type Unified } from './data';
+import { mcpView } from './model';
 import { firstLine } from './format';
 import { BrandMark, ServiceAvatar } from './icons';
 import { Badge, Button, Checkbox, cx, Modal, Segmented, useToast } from './ui';
@@ -36,7 +37,7 @@ export function OneClickDialog({
   keys?: string[];
   reload: () => Promise<void>;
 }) {
-  const { refresh } = useStatus();
+  const { status, refresh } = useStatus();
   const toast = useToast();
   const live = useMemo(() => candidates(data, only, keys), [data, only, keys?.join()]);
   // While it runs, the rows it is taking over leave the live list.
@@ -48,9 +49,11 @@ export function OneClickDialog({
   const [busy, setBusy] = useState(false);
   const offerAuto = data.autostart.supported && !data.autostart.enabled;
 
+  // One that cannot open now would fail the start check; leave it unpicked.
+  const broken = new Map(list.map((c) => [c.row.key, mcpView(c.row, status)] as const).filter(([, v]) => v.kind === 'broken').map(([k, v]) => [k, v.text]));
   useEffect(() => {
     if (open) {
-      setPicked(new Set(list.map((c) => c.row.key)));
+      setPicked(new Set(list.filter((c) => !broken.has(c.row.key)).map((c) => c.row.key)));
       setShared(new Set());
     }
   }, [open]);
@@ -92,13 +95,13 @@ export function OneClickDialog({
           <Layers className="size-5" />
         </div>
         <div>
-          <h2 className="text-base font-semibold">{only ? `托管 ${data.agents.find((a) => a.id === only)?.name} 的 MCP` : '一键托管本机 MCP'}</h2>
-          <p className="mt-1 text-sm leading-6 text-zinc-500">选中的 MCP 改由 MCPcell 运行，工具名不变，随时可以还原。</p>
+          <h2 className="text-base font-semibold">{only ? `一键托管：${data.agents.find((a) => a.id === only)?.name} 的 MCP` : '一键托管'}</h2>
+          <p className="mt-1 text-sm leading-6 text-zinc-500">选中的 MCP 改由 MCPcell 打开，同一个 MCP 全机只开一份。工具名不变，随时可以改回原样。</p>
         </div>
       </div>
 
       {list.length === 0 ? (
-        <p className="mt-6 rounded-xl bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500 dark:bg-zinc-800/50">没有可以托管的 MCP 了。</p>
+        <p className="mt-6 rounded-xl bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500 dark:bg-zinc-800/50">所有 MCP 都已经在用 MCPcell 这份了。</p>
       ) : (
         <div className="mt-5 max-h-[360px] divide-y divide-zinc-100 overflow-y-auto rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-700">
           {list.map(({ row, steps }) => (
@@ -109,6 +112,7 @@ export function OneClickDialog({
               checked={picked.has(row.key)}
               onChange={(v) => setPicked((p) => flip(p, row.key, v))}
               share={shared.has(row.key)}
+              broken={broken.get(row.key)}
               onShare={(v) => setShared((s) => flip(s, row.key, v))}
             />
           ))}
@@ -118,21 +122,21 @@ export function OneClickDialog({
       <dl className="mt-4 space-y-1.5 text-[13px] leading-5 text-zinc-500">
         <div className="flex gap-2">
           <dt className="shrink-0">
-            <Badge tone="green">共享</Badge>
+            <Badge tone="green">共用一份</Badge>
           </dt>
-          <dd>所有会话共用一份进程，空闲后回收。</dd>
+          <dd>所有对话共用一份，一段时间没人用就自动关掉。</dd>
         </div>
         <div className="flex gap-2">
           <dt className="shrink-0">
-            <Badge tone="blue">按会话</Badge>
+            <Badge tone="blue">每个对话一份</Badge>
           </dt>
-          <dd>和原来一样每个会话一份，保留各自的状态；但第一次调用时才启动、会话结束就回收，用不到它的会话不占内存。</dd>
+          <dd>和原来一样每个对话单独一份，各记各的；但用到时才打开、对话结束就关掉，用不到它的对话不占内存。</dd>
         </div>
       </dl>
       {touched.length > 0 && (
         <p className="mt-3 text-[13px] leading-5 text-zinc-400">
-          将修改 {touched.map((a) => a.name).join('、')} 的配置文件，只改选中的条目，改之前先备份整个文件。
-          {perSession > 0 && ` 其中 ${perSession} 个按会话运行。`}
+          会改 {touched.map((a) => a.name).join('、')} 的配置文件，只改选中的项，改之前先备份整个文件。
+          {perSession > 0 && ` 其中 ${perSession} 个每个对话一份。`}
         </p>
       )}
       {offerAuto && <AutostartOption checked={auto} onChange={setAuto} />}
@@ -142,7 +146,7 @@ export function OneClickDialog({
           取消
         </Button>
         <Button variant="primary" busy={busy} disabled={chosen.length === 0} onClick={run}>
-          托管 {chosen.length} 个
+          确定，改 {chosen.length} 个
         </Button>
       </div>
     </Modal>
@@ -156,6 +160,7 @@ function CandidateRow({
   onChange,
   share,
   onShare,
+  broken,
 }: {
   row: McpRow;
   steps: ReturnType<typeof takeSteps>;
@@ -163,6 +168,7 @@ function CandidateRow({
   onChange: (v: boolean) => void;
   share: boolean;
   onShare: (v: boolean) => void;
+  broken?: string;
 }) {
   const unverified = row.class === 'unknown';
   const mode = row.class === 'shared' || share ? 'shared' : 'per-session';
@@ -173,10 +179,16 @@ function CandidateRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{row.name}</span>
-          {!unverified && (mode === 'shared' ? <Badge tone="green">共享</Badge> : <Badge tone="blue">按会话</Badge>)}
+          {!unverified && (mode === 'shared' ? <Badge tone="green">共用一份</Badge> : <Badge tone="blue">每个对话一份</Badge>)}
         </div>
-        <div className="mt-0.5 truncate text-xs text-zinc-400" title={row.reason}>
-          {row.class === 'stateful' ? row.reason : unverified ? '未验证：默认按会话；确认它不保存会话状态可以改为共享' : row.launch}
+        <div className={cx('mt-0.5 truncate text-xs', broken ? 'text-red-600 dark:text-red-400' : 'text-zinc-400')} title={row.reason}>
+          {broken
+            ? `现在${broken}，先修好再改`
+            : row.class === 'stateful'
+            ? '它为每个对话记着各自的东西（比如浏览器），所以每个对话一份'
+            : unverified
+              ? '没确认过能不能共用：先每个对话一份；确认它不记各对话的东西，可以改成共用一份'
+              : row.launch}
         </div>
       </div>
       {unverified && (
@@ -185,8 +197,8 @@ function CandidateRow({
             value={mode}
             onChange={(v) => onShare(v === 'shared')}
             options={[
-              { value: 'per-session', label: '按会话' },
-              { value: 'shared', label: '共享' },
+              { value: 'per-session', label: '每个对话一份' },
+              { value: 'shared', label: '共用一份' },
             ]}
           />
         </div>

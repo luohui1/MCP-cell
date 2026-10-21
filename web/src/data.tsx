@@ -1,9 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { skillsShown } from './features';
 import { skillsApi, unified, type AgentSummary, type AutostartStatus, type McpRow, type SkillStatus, type Status } from './api';
 
 // What every page reads: the daemon's status (polled by App), the MCP rows
 // merged across agents (polled here) and the skill scan (loaded on demand:
-// it reads every skill directory, about a second).
+// it reads every skill directory, about a second; the skill page is hidden
+// for now, see features.ts).
 
 interface StatusCtx {
   status: Status;
@@ -80,7 +82,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     if (Date.now() - loadedAt.current > ms) reloadSkills();
   }, [reloadSkills]);
   useEffect(() => {
-    reloadSkills();
+    if (skillsShown()) reloadSkills(); // hidden for now: scanned when its page opens
   }, [reloadSkills]);
 
   return (

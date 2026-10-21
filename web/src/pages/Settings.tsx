@@ -5,6 +5,7 @@ import { clients as manualClients, masked } from '../clients';
 import { useStatus } from '../data';
 import { bytes, clock, since } from '../format';
 import { BrandMark, brandOf } from '../icons';
+import { showSkills, useSkillsShown } from '../features';
 import { Body } from '../layout';
 import { agentOrder } from '../model';
 import { useRoute } from '../router';
@@ -15,10 +16,10 @@ const commands = [
   'mcpcell start           # 在后台启动守护进程',
   'mcpcell stop            # 停止守护进程',
   'mcpcell mode cli|gui    # 界面方式：命令行 / 图形界面，立即生效',
-  'mcpcell ps              # 服务、实例、会话与内存',
-  'mcpcell clients         # 各 Agent 的 MCP 条目与托管状态',
-  'mcpcell takeover        # 托管 Agent 的 MCP：先列出计划，确认后执行',
-  'mcpcell restore --all   # 还原所有托管（不需要守护进程）',
+  'mcpcell ps              # 各个 MCP 开着几份、连着的对话、占多少内存',
+  'mcpcell clients         # 各应用的 MCP，以及是否在用 MCPcell 这份',
+  'mcpcell takeover        # 一键托管：先列出要改的内容，确认后执行',
+  'mcpcell restore --all   # 全部改回原样（不需要守护进程）',
   'mcpcell autostart on    # 开机自启',
   'mcpcell shortcut on     # 创建桌面和开始菜单快捷方式',
   'mcpcell update <服务>   # 更新 npx 服务的 npm 包',
@@ -56,7 +57,7 @@ export function SettingsPage({ diag }: { diag: boolean }) {
             {mode && <InterfaceRow status={mode} onChange={(m) => attempt(() => uiMode.set(m), m === 'cli' ? '已改为命令行' : '已改为图形界面', setMode)} />}
             <SettingRow
               title="开机自启"
-              desc={auto?.supported === false ? auto.error : '登录 Windows 时在后台启动 MCPcell；图形界面方式下托盘里显示图标。托管了 MCP 时建议开启，否则 MCPcell 没运行时这些 MCP 不可用。'}
+              desc={auto?.supported === false ? auto.error : '登录 Windows 时在后台打开 MCPcell；图形界面方式下托盘里显示图标。应用在用 MCPcell 的 MCP 时建议开启，否则 MCPcell 没开着时这些 MCP 用不了。'}
             >
               {auto?.supported && (
                 <Switch
@@ -111,12 +112,12 @@ export function SettingsPage({ diag }: { diag: boolean }) {
               PID {status.pid} · 私有提交 {bytes(status.daemon.privateBytes)}
               <span className="text-zinc-400"> · 工作集 {bytes(status.daemon.workingSetBytes)}</span>
             </InfoRow>
-            <InfoRow label="实例上限">同时最多 {status.maxInstances} 个；满了先回收最久没用的空闲实例</InfoRow>
+            <InfoRow label="同时最多开">{status.maxInstances} 份 MCP；满了先关掉最久没用的</InfoRow>
             <InfoRow label="访问令牌">
               <span className="flex items-center gap-1">
                 <code className="font-mono text-[13px]">{masked(status.token)}</code>
                 <CopyButton text={status.token} label="复制访问令牌" />
-                <span className="text-zinc-400">Agent 配置里的 Bearer 令牌，不要分享</span>
+                <span className="text-zinc-400">应用配置里用的 Bearer 令牌，不要分享</span>
               </span>
             </InfoRow>
             <InfoRow label="配置文件">
@@ -161,7 +162,7 @@ function ManualAgents({ open }: { open: boolean }) {
   const list = manualClients.filter((c) => !agentOrder.includes(c.id));
   return (
     <section ref={ref}>
-      <GroupHeader title="手动接入" count={list.length} hint="还不能自动托管的 Agent：复制配置，替换原来的同名条目后重启" open={shown} onToggle={() => setShown(!shown)} />
+      <GroupHeader title="手动接入" count={list.length} hint="还不能自动接管的应用：复制配置，替换原来同名的一项后重开" open={shown} onToggle={() => setShown(!shown)} />
       {shown && (
         <TableCard>
           {list.map((c) => {
@@ -212,6 +213,7 @@ const stateText = { cold: '未运行', starting: '启动中', ready: '运行中'
  * daemon runs, including the run- variants the lists fold into their MCP. */
 function Diagnostics({ open }: { open: boolean }) {
   const { status } = useStatus();
+  const skills = useSkillsShown();
   const [shown, setShown] = useState(open);
   const ref = useReveal(open);
   const sessions = [...status.sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -254,7 +256,7 @@ function Diagnostics({ open }: { open: boolean }) {
               <span>属于</span>
               <span>运行方式</span>
               <span>状态</span>
-              <span>实例 · 内存</span>
+              <span>开着几份 · 内存</span>
             </div>
             <TableCard>
               {status.services.map((s) => {
@@ -263,7 +265,7 @@ function Diagnostics({ open }: { open: boolean }) {
                   <div key={s.name} className={cx(diagGrid, 'px-5 py-2.5 text-[13px]')}>
                     <span className="truncate font-mono text-xs">{s.name}</span>
                     <span className="truncate text-zinc-500">{s.of ? `${s.of} 的变体（条目改过）` : s.name.startsWith('run-') ? '包装的条目' : '—'}</span>
-                    <span className="text-zinc-500">{s.mode === 'per-session' ? '按会话' : '共享'}</span>
+                    <span className="text-zinc-500">{s.mode === 'per-session' ? '每个对话一份' : '共用一份'}</span>
                     <span className="text-zinc-500">
                       {stateText[s.state]}
                       {s.failures ? ` · 失败 ${s.failures} 次` : ''}
@@ -276,6 +278,11 @@ function Diagnostics({ open }: { open: boolean }) {
               })}
             </TableCard>
           </div>
+          <TableCard>
+            <SettingRow title="显示 Skill 页" desc="统一管理各应用的 Skill（暂时隐藏的功能）。打开后左侧出现「Skill」；mcpcell skills 命令不受影响。">
+              <Switch checked={skills} label="显示 Skill 页" onChange={showSkills} />
+            </SettingRow>
+          </TableCard>
         </div>
       )}
     </section>
@@ -291,7 +298,7 @@ function InterfaceRow({ status, onChange }: { status: InterfaceStatus; onChange:
       title="界面方式"
       desc={
         <>
-          两种方式的内核完全一样：托管、按需启动、能力目录、断线重连都相同，只是操作入口不同，切换立即生效。
+          两种方式的内核完全一样：接管、用到时才打开、记住工具列表、断线重连都相同，只是操作入口不同，切换立即生效。
           {cli ? (
             <>
               现在是命令行：不显示托盘图标，用 <code className="font-mono text-[12px]">mcpcell ps</code>、<code className="font-mono text-[12px]">clients</code>、

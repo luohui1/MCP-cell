@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { House, Layers, Puzzle, Settings as SettingsIcon } from 'lucide-react';
+import { Layers, Puzzle, Settings as SettingsIcon } from 'lucide-react';
 import { api, Unauthorized, type Status } from './api';
-import { agentsOf } from './agents';
-import { DataProvider, StatusContext, useSkills, useStatus, useUnified } from './data';
+import { DataProvider, StatusContext, useStatus, useUnified } from './data';
+import { useSkillsShown } from './features';
 import { Logo } from './icons';
-import { mcpView, skillView } from './model';
+import { mcpView } from './model';
 import { href, redirect, useRoute } from './router';
 import { Card, cx, ToastProvider } from './ui';
+import { HomePage } from './pages/Home';
 import { McpPage } from './pages/Mcp';
-import { OverviewPage } from './pages/Overview';
 import { SettingsPage } from './pages/Settings';
 import { SkillsPage } from './pages/Skills';
 
@@ -65,21 +65,24 @@ export function App() {
 function Routes() {
   const { parts, query } = useRoute();
   const [page = '', id, sub] = parts;
-  // Routes of the earlier page layout still work.
+  const skills = useSkillsShown();
+  // Routes of earlier page layouts still work.
   useEffect(() => {
-    if (page === 'services') redirect(id ? ['mcp', id] : ['mcp'], sub === 'edit' ? { edit: '1' } : undefined);
-    else if (page === 'agents' || page === 'clients') redirect([]);
+    if (page === 'services') redirect(id ? ['mcp', id] : [], sub === 'edit' ? { edit: '1' } : undefined);
     else if (page === 'sessions') redirect(['settings'], { diag: '1' });
-  }, [page, id, sub]);
+    else if ((page === 'mcp' && !id) || ['agents', 'clients', 'overview'].includes(page) || (page === 'skills' && !skills)) redirect([]);
+  }, [page, id, sub, skills]);
   switch (page) {
     case 'mcp':
-      return <McpPage id={id} agent={query.get('agent') ?? ''} />;
+      if (id) return <McpPage id={id} />;
+      break;
     case 'skills':
-      return <SkillsPage name={id} agent={query.get('agent') ?? ''} />;
+      if (skills) return <SkillsPage name={id} agent={query.get('agent') ?? ''} />;
+      break;
     case 'settings':
       return <SettingsPage diag={query.get('diag') === '1'} />;
   }
-  return <OverviewPage />;
+  return <HomePage />;
 }
 
 function NavItem({ icon, label, badge, active, to }: { icon: ReactNode; label: string; badge?: number; active: boolean; to: string }) {
@@ -97,7 +100,7 @@ function NavItem({ icon, label, badge, active, to }: { icon: ReactNode; label: s
       <span className={cx('grid size-5 place-items-center', active ? 'text-blue-600 dark:text-blue-400' : 'text-zinc-400')}>{icon}</span>
       <span className="flex-1">{label}</span>
       {!!badge && (
-        <span title={`${badge} 项需要处理`} className="grid h-5 min-w-5 place-items-center rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-800 tabular-nums dark:bg-amber-900/60 dark:text-amber-200">
+        <span title={`${badge} 个打不开`} className="grid h-5 min-w-5 place-items-center rounded-full bg-red-100 px-1.5 text-[11px] font-semibold text-red-700 tabular-nums dark:bg-red-900/60 dark:text-red-200">
           {badge}
         </span>
       )}
@@ -108,11 +111,9 @@ function NavItem({ icon, label, badge, active, to }: { icon: ReactNode; label: s
 function Sidebar() {
   const { status } = useStatus();
   const { data } = useUnified();
-  const skills = useSkills().data;
   const [page = ''] = useRoute().parts;
-  const agents = data ? agentsOf(data.agents) : [];
-  const mcpAttention = data?.rows.filter((r) => mcpView(r, status, agents).group === 'attention').length ?? 0;
-  const skillAttention = skills?.skills.filter((k) => skillView(k, skills).group === 'attention').length ?? 0;
+  const broken = data?.rows.filter((r) => mcpView(r, status).kind === 'broken').length ?? 0;
+  const skills = useSkillsShown();
   return (
     <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/60">
       <div className="flex h-16 items-center gap-2.5 px-5">
@@ -120,9 +121,8 @@ function Sidebar() {
         <span className="text-base font-semibold tracking-tight">MCPcell</span>
       </div>
       <nav className="space-y-0.5 px-3 pt-1">
-        <NavItem icon={<House className="size-4" />} label="概览" active={!['mcp', 'skills', 'settings'].includes(page)} to={href([])} />
-        <NavItem icon={<Layers className="size-4" />} label="MCP" badge={mcpAttention} active={page === 'mcp'} to={href(['mcp'])} />
-        <NavItem icon={<Puzzle className="size-4" />} label="Skill" badge={skillAttention} active={page === 'skills'} to={href(['skills'])} />
+        <NavItem icon={<Layers className="size-4" />} label="我的 MCP" badge={broken} active={!['skills', 'settings'].includes(page)} to={href([])} />
+        {skills && <NavItem icon={<Puzzle className="size-4" />} label="Skill" active={page === 'skills'} to={href(['skills'])} />}
       </nav>
       <div className="mt-auto border-t border-zinc-200/80 px-3 py-3 dark:border-zinc-800">
         <NavItem icon={<SettingsIcon className="size-4" />} label="设置" active={page === 'settings'} to={href(['settings'])} />

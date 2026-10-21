@@ -9,12 +9,12 @@ import { Button, Checkbox, Modal, useToast } from './ui';
 
 export const agentBrand: Record<string, string> = { 'claude-code': 'claude', codex: 'openai', cursor: 'cursor' };
 export const restartHint: Record<string, string> = {
-  'claude-code': '新开的 Claude Code 会话立即生效，已打开的会话重启后生效',
+  'claude-code': 'Claude Code 新开的对话立即生效，已经开着的重开后生效',
   codex: '重启 Codex（包括桌面版）后生效',
   cursor: '在 Cursor 的 MCP 设置里刷新，或重启 Cursor',
 };
 const shortHint: Record<string, string> = {
-  'claude-code': 'Claude Code 新会话立即生效',
+  'claude-code': 'Claude Code 新开的对话立即生效',
   codex: 'Codex 重启后生效',
   cursor: 'Cursor 刷新 MCP 后生效',
 };
@@ -86,8 +86,8 @@ export async function applyTakeover(steps: TakeStep[]): Promise<string> {
       for (const r of results) r.ok ? ok++ : failed.push(`${g.agent.name} ${r.name}：${r.error}`);
     }
   }
-  if (failed.length) throw new Error(`${ok ? `已托管 ${ok} 个，` : ''}${failed.length} 个失败。${failed[0]}`);
-  return `已托管 ${ok} 个。${hints(byAgent(steps).map((g) => g.agent))}`;
+  if (failed.length) throw new Error(`${ok ? `已改好 ${ok} 个，` : ''}${failed.length} 个没改成。${failed[0]}`);
+  return `已改好 ${ok} 个。${hints(byAgent(steps).map((g) => g.agent))}`;
 }
 
 async function applyRestore(steps: RestoreStep[]): Promise<string> {
@@ -97,8 +97,8 @@ async function applyRestore(steps: RestoreStep[]): Promise<string> {
     const { results } = await takeover.restore(g.agent.id, g.steps.map((s) => s.entry));
     for (const r of results) r.ok ? ok++ : failed.push(`${g.agent.name} ${r.name}：${r.error}`);
   }
-  if (failed.length) throw new Error(`${ok ? `已还原 ${ok} 个，` : ''}${failed.length} 个失败。${failed[0]}`);
-  return `已还原 ${ok} 个。${hints(byAgent(steps).map((g) => g.agent))}`;
+  if (failed.length) throw new Error(`${ok ? `已改回 ${ok} 个，` : ''}${failed.length} 个没改成。${failed[0]}`);
+  return `已改回原样 ${ok} 个。${hints(byAgent(steps).map((g) => g.agent))}`;
 }
 
 interface Pending {
@@ -143,82 +143,82 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
       if (!steps.length) return;
       const n = new Set(steps.map((s) => s.service)).size;
       setPending({
-        title: title ?? (n === 1 ? `托管 ${steps[0].service}` : `托管 ${n} 个 MCP`),
+        title: title ?? (n === 1 ? `${steps[0].service} 改为用 MCPcell 这份` : `${n} 个 MCP 改为用 MCPcell 这份`),
         intro: steps.every((s) => s.mode === 'shared')
-          ? '改由 MCPcell 运行：所有会话共用一份进程，工具名不变，随时可以还原。'
-          : '改由 MCPcell 运行，工具名不变，随时可以还原。按会话的 MCP 每个会话一个实例，第一次调用时才启动，会话结束就回收。',
+          ? '改由 MCPcell 打开：所有对话共用一份，同一个 MCP 全机只开一份。工具名不变，随时可以改回原样。'
+          : '改由 MCPcell 打开，工具名不变，随时可以改回原样。标着「每个对话一份」的，仍然每个对话单独一份，但用到时才打开、对话结束就关掉。',
         groups: byAgent(steps).map((g) => ({
           agent: g.agent,
           lines: g.steps.map((s) => (
             <>
               <span className="font-medium text-zinc-800 dark:text-zinc-200">{s.entry}</span>
               <span className="text-zinc-400">
-                （{s.isNew ? '新建 · ' : ''}
-                {s.mode === 'shared' ? '共享' : '按会话'}）
+                （{s.isNew ? '新加 · ' : ''}
+                {s.mode === 'shared' ? '共用一份' : '每个对话一份'}）
               </span>
             </>
           )),
         })),
         warn: steps.some((s) => s.force)
-          ? '你选择了共享未验证的 MCP。如果它为不同会话保存状态（浏览器页面、连接、登录），共享后会互相干扰；出问题时改回按会话或还原即可。'
+          ? '你让没确认过的 MCP 共用一份。如果它为不同对话记着各自的东西（浏览器页面、连接、登录），共用后会互相干扰；出问题时改成每个对话一份，或改回原样。'
           : undefined,
-        confirm: '托管',
+        confirm: '确定',
         run: () => applyTakeover(steps),
       });
     },
     restore(steps: RestoreStep[], title?: string) {
       if (!steps.length) return;
       setPending({
-        title: title ?? (steps.length === 1 ? (steps[0].added ? `从 ${steps[0].agent.name} 移除 ${steps[0].entry}` : `还原 ${steps[0].entry}`) : `还原 ${steps.length} 个托管`),
-        intro: '恢复成托管前的原始配置（逐字节），之后每个会话会各自启动进程。托管后被你改过的条目不会被覆盖。',
+        title: title ?? (steps.length === 1 ? (steps[0].added ? `从 ${steps[0].agent.name} 去掉 ${steps[0].entry}` : `${steps[0].entry} 改回原样`) : `${steps.length} 项改回原样`),
+        intro: '恢复成交给 MCPcell 之前的配置（一个字节都不差），之后应用每开一个对话就自己再开一份。之后被你改过的项不会被覆盖。',
         groups: byAgent(steps).map((g) => ({
           agent: g.agent,
           lines: g.steps.map((s) => (
             <>
               <span className="font-medium text-zinc-800 dark:text-zinc-200">{s.entry}</span>
-              <span className="text-zinc-400">{s.added ? ' · 由 MCPcell 加入，将被移除' : ' · 还原为原生'}</span>
+              <span className="text-zinc-400">{s.added ? ' · 是 MCPcell 加的，会去掉' : ' · 改回应用自己开'}</span>
             </>
           )),
         })),
-        note: '条目恢复成托管前的样子，其余内容不动，改之前先备份整个文件。',
-        confirm: '还原',
+        note: '这一项恢复成原来的样子，其他内容不动，改之前先备份整个文件。',
+        confirm: '改回原样',
         danger: true,
         run: () => applyRestore(steps),
       });
     },
     forget(agent: AgentSummary, entry: string) {
       setPending({
-        title: `忘记 ${entry} 的托管记录`,
-        intro: '这个条目在托管后被改过。保留你现在的配置，只删除 MCPcell 的记录。',
+        title: `不再管 ${entry}`,
+        intro: '这一项后来在应用里被改过。保留你现在的配置，只删掉 MCPcell 的记录。',
         groups: [{ agent, lines: [entry] }],
         note: '配置文件不改动。',
-        confirm: '忘记记录',
+        confirm: '不再管它',
         run: async () => {
           const { results } = await takeover.restore(agent.id, [entry], true);
           if (!results[0]?.ok) throw new Error(results[0]?.error ?? '失败');
-          return '已忘记记录';
+          return '已删掉记录';
         },
       });
     },
     add(agent: AgentSummary, row: McpRow) {
       const service = row.service ?? row.proposed ?? row.name;
       setPending({
-        title: `把 ${row.name} 加入 ${agent.name}`,
-        intro: row.service ? undefined : `会先在 MCPcell 里创建服务 ${service}，配置取自其他 Agent 里的同一个 MCP。`,
+        title: `把 ${row.name} 加到 ${agent.name}`,
+        intro: row.service ? undefined : `会先在 MCPcell 里建好 ${service}，设置照搬其他应用里的同一个 MCP。`,
         groups: [
           {
             agent,
             lines: [
               <>
-                新增 <span className="font-medium text-zinc-800 dark:text-zinc-200">{service}</span>
-                <span className="text-zinc-400">，经 MCPcell 运行</span>
+                新加 <span className="font-medium text-zinc-800 dark:text-zinc-200">{service}</span>
+                <span className="text-zinc-400">，用 MCPcell 这份</span>
               </>,
             ],
           },
         ],
-        note: '新增一个连到 MCPcell 的条目，其余内容不动，改之前先备份整个文件。',
-        confirm: '加入',
-        run: async () => (await unified.add(agent.id, row.key), `已把 ${row.name} 加入 ${agent.name}。${shortHint[agent.id] ?? ''}`),
+        note: '新加一项，其他内容不动，改之前先备份整个文件。',
+        confirm: '加上',
+        run: async () => (await unified.add(agent.id, row.key), `已把 ${row.name} 加到 ${agent.name}。${shortHint[agent.id] ?? ''}`),
       });
     },
   };
@@ -282,7 +282,7 @@ export function AgentChangeCard({ agent, lines, note }: { agent: AgentSummary; l
         ))}
       </ul>
       <div className="mt-2 text-xs text-zinc-400">
-        {note ?? '原命令保留，前面加上 mcpcell-run；其余内容不动，改之前先备份整个文件。'}
+        {note ?? '原来的命令保留，前面加上 mcpcell-run；其他内容不动，改之前先备份整个文件。'}
         {restartHint[agent.id]}
       </div>
     </div>
@@ -294,7 +294,7 @@ export function AutostartOption({ checked, onChange }: { checked: boolean; onCha
     <label className="mt-4 flex cursor-pointer items-center gap-2.5 text-sm">
       <Checkbox checked={checked} onChange={onChange} />
       同时开启开机自启
-      <span className="text-zinc-400">托管后 Agent 依赖 MCPcell 在后台运行</span>
+      <span className="text-zinc-400">改完后应用要靠 MCPcell 在后台开着</span>
     </label>
   );
 }

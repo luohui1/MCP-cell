@@ -35,7 +35,7 @@ export interface Service {
   direct: boolean;
   lean: boolean;
   package?: { name: string; version: string; installedAt: string };
-  catalog?: { tools: number; prompts: number; resources: number; fetchedAt: string };
+  catalog?: { tools: number; prompts: number; resources: number; fetchedAt: string; description?: string; toolNames?: string[] };
   note?: string;
   lastError?: string;
   lastErrorAt?: string;

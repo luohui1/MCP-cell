@@ -3,6 +3,7 @@ import { TriangleAlert } from 'lucide-react';
 import { api } from './api';
 import { useStatus } from './data';
 import { firstLine } from './format';
+import { plainReason } from './model';
 import { go } from './router';
 import { Button, Modal, useToast } from './ui';
 
@@ -28,11 +29,17 @@ export function useServiceActions() {
 
   const start = (name: string) =>
     run(name, async () => {
-      await api.start(name);
+      try {
+        await api.start(name);
+      } catch (e) {
+        // The reply carries only the first line; the page shows the full reason.
+        const why = plainReason((e as Error).message);
+        throw new Error(why === '一打开就退出了' ? '还是打不开，原因见页面上的说明' : `还是打不开：${why}`);
+      }
       const perSession = status.services.find((s) => s.name === name)?.mode === 'per-session';
-      return perSession ? `${name} 能正常启动，已缓存工具列表` : `${name} 已启动`;
+      return perSession ? `${name} 能正常打开` : `${name} 已打开`;
     });
-  const stop = (name: string) => run(name, async () => (await api.stop(name), `已回收 ${name} 的进程`));
+  const stop = (name: string) => run(name, async () => (await api.stop(name), `已关掉 ${name}，用到时会自动再打开`));
   const update = (name: string) => {
     toast(`正在更新 ${name} 的 npm 包，可能需要一分钟…`);
     return run(name, async () => {
@@ -51,11 +58,11 @@ export function useServiceActions() {
           <TriangleAlert className="size-5" />
         </div>
         <div>
-          <h2 className="text-base font-semibold">删除 {deleting}？</h2>
+          <h2 className="text-base font-semibold">从 MCPcell 删除 {deleting}？</h2>
           <p className="mt-2 text-sm leading-6 text-zinc-500">
-            会从 config.json 中移除这个服务
-            {deleting && sessionsOf(deleting) > 0 ? `，并断开它的 ${sessionsOf(deleting)} 个会话` : ''}
-            。已经改成连 MCPcell 的客户端需要换回原来的配置。
+            会从 config.json 里删掉它的设置
+            {deleting && sessionsOf(deleting) > 0 ? `，正连着它的 ${sessionsOf(deleting)} 个对话会断开` : ''}
+            。在用 MCPcell 这份的应用，最好先改回原样。
           </p>
         </div>
       </div>
