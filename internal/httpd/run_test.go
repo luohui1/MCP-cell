@@ -23,6 +23,7 @@ type runClient struct {
 	conn   net.Conn
 	r      *bufio.Reader
 	stderr []string
+	mode   string // from the "mode" control line after initialize
 	nextID int
 }
 
@@ -73,7 +74,12 @@ func (c *runClient) read() (jsonrpc.Message, string) {
 			c.stderr = append(c.stderr, strings.TrimSpace(line[1:]))
 			continue
 		case runControl:
-			return jsonrpc.Message{}, strings.TrimSpace(line[1:])
+			text := strings.TrimSpace(line[1:])
+			if mode, ok := strings.CutPrefix(text, strings.TrimSpace(runMode)+" "); ok {
+				c.mode = mode
+				continue
+			}
+			return jsonrpc.Message{}, text
 		}
 		msgs, _, err := jsonrpc.Parse([]byte(line))
 		if err != nil {
@@ -126,6 +132,10 @@ func TestRunWrapper(t *testing.T) {
 	b.init()
 	if len(a.stderr) == 0 || !strings.Contains(a.stderr[0], "按会话") {
 		t.Fatalf("notice for the agent's log: %q", a.stderr)
+	}
+	a.call("pid", nil) // reads past the initialize reply
+	if a.mode != "per-session" {
+		t.Fatalf("wrapper told mode %q, want per-session", a.mode)
 	}
 	pa, pb := a.call("pid", nil), b.call("pid", nil)
 	if pa == pb {

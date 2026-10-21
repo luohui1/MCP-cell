@@ -112,7 +112,8 @@ def main():
     home = os.path.join(tmp, 'home')
     os.makedirs(home)
     json.dump({'port': PORT, 'services': {}}, open(os.path.join(home, 'config.json'), 'w'))
-    env = dict(os.environ, MCPCELL_HOME=home, CODEX_HOME=os.path.join(tmp, 'codex'), CLAUDE_CONFIG_DIR=os.path.join(tmp, 'claude'))
+    env = dict(os.environ, MCPCELL_HOME=home, CODEX_HOME=os.path.join(tmp, 'codex'), CLAUDE_CONFIG_DIR=os.path.join(tmp, 'claude'),
+               MCPCELL_RETURN_IDLE_SECS='1')  # how long a direct session waits before going back (30 s by default)
     daemons = []
 
     def start_daemon():
@@ -167,6 +168,17 @@ def main():
     a.p.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
     a.p.stdin.flush()
     check('session through MCPcell after a probe', 'result' in init and a.call('echo', text='a') == 'a')
+    # The same server, shared by every session: it goes back to the daemon
+    # after MCPcell returns from a stop (step 3); the per-session one does not.
+    s = Agent(wrap[:1] + ['--shared'] + wrap[1:] + ['--server'], env)
+    s.reply(s.initialize()[1])
+    s.p.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+    s.p.stdin.flush()
+    check('shared session through MCPcell', s.call('echo', text='s') == 's')
+
+    def parent(pid):
+        return subprocess.run(['powershell', '-NoProfile', '-Command', f'(Get-CimInstance Win32_Process -Filter "ProcessId={pid}").ParentProcessId'],
+                              capture_output=True, text=True).stdout.strip()
 
     # 1. Restart, as install does it, with a call in flight.
     slow = a.send('tools/call', {'name': 'slow', 'arguments': {'seconds': 5}})
@@ -196,8 +208,27 @@ def main():
                          capture_output=True, text=True).stdout.strip()
     check('server now runs under the wrapper', out == str(a.p.pid), f'parent {out}, wrapper {a.p.pid}')
     check('server run directly opens no terminal window', a.call('console') == '0')
+    direct_pid = s.call('pid')
+    check('shared session also runs directly while MCPcell is gone', parent(direct_pid) == str(s.p.pid))
+
+    # 3b. MCPcell is back: the shared session returns once it is quiet; the
+    # per-session one keeps its server (no gain, and its state would go).
+    start_daemon()
+    back = None
+    for _ in range(10):
+        time.sleep(3)  # quiet for longer than MCPCELL_RETURN_IDLE_SECS
+        pid = s.call('pid')
+        if parent(pid) != str(s.p.pid):
+            back = pid
+            break
+    check('shared session went back to MCPcell', back is not None and any('回到共享运行' in l for l in s.stderr), f'pid {back}')
+    gone = subprocess.run(['tasklist', '/FI', f'PID eq {direct_pid}', '/NH'], capture_output=True, text=True).stdout
+    check('its direct server was stopped', direct_pid not in gone)
+    check('per-session session keeps running directly', parent(a.call('pid')) == str(a.p.pid))
+    check('shared session works after going back', s.call('echo', text='t') == 't' and s.replies.empty())
 
     # 4. The agent is done.
+    s.p.stdin.close()
     a.p.stdin.close()
     try:
         code = a.p.wait(10)

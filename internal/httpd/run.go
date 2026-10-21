@@ -47,6 +47,10 @@ const (
 	runRestart = "restart"
 	// runStop: MCPcell is quitting; run the command directly from now on.
 	runStop = "stop"
+	// runMode, sent right after the reply to initialize, says how the server
+	// runs: "mode shared" or "mode per-session". A wrapper that fell back to
+	// running a shared server itself goes back once the daemon returns.
+	runMode = "mode "
 )
 
 // leave records why the daemon is going away; the first reason wins.
@@ -220,6 +224,7 @@ func (s *Server) serveRun(conn net.Conn, br *bufio.Reader) {
 				}
 				out.stderr(runNotice(h.Argv, mode))
 				out.message(reply)
+				out.control(runMode + mode)
 				// The server's own messages flow only from now on: the agent
 				// hears nothing before the answer to its initialize, and
 				// nothing at all from a session handed back above.

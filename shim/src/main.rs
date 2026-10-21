@@ -163,6 +163,7 @@ fn open(agent: &mut dyn BufRead, conn: &mut dyn Write, daemon: &mut dyn BufRead,
 
 /// One agent session, kept alive across the backends that serve it: the
 /// daemon, a reconnected daemon, or the command run directly.
+#[derive(Clone)]
 struct Session {
     argv: Vec<String>,
     mode: String,
@@ -187,6 +188,16 @@ struct State {
     inflight: HashSet<Vec<u8>>,
     agent_done: bool,
     over: bool,
+    /// The daemon runs this server as one instance for every session, so a
+    /// session that fell back to running it directly gains by going back.
+    shared: bool,
+    /// When the agent last sent something.
+    last_agent: Option<Instant>,
+    /// The server while it runs directly.
+    child: Option<Child>,
+    /// A daemon connection that took the session over from the direct
+    /// server: read from it once the server's output ends.
+    returned: Option<BufReader<TcpStream>>,
 }
 
 enum Sink {
@@ -216,7 +227,8 @@ impl Sink {
 
 enum Source {
     Daemon(BufReader<TcpStream>),
-    Child(BufReader<ChildStdout>, Child),
+    /// The directly run server's output; the process is State::child.
+    Child(BufReader<ChildStdout>),
 }
 
 const INITIALIZED: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n";
@@ -248,6 +260,7 @@ fn pump_stdin(shared: &Shared) {
         if let Kind::Request(id) = classify(&line) {
             st.inflight.insert(id);
         }
+        st.last_agent = Some(Instant::now());
         // A broken backend shows up on the reading side.
         let _ = st.sink.as_mut().unwrap().send(&line);
     }
@@ -295,27 +308,40 @@ impl Session {
             line.clear();
             let n = match &mut src {
                 Source::Daemon(r) => r.read_until(b'\n', &mut line),
-                Source::Child(r, _) => r.read_until(b'\n', &mut line),
+                Source::Child(r) => r.read_until(b'\n', &mut line),
             }
             .unwrap_or(0);
             if n == 0 {
+                if let Source::Child(_) = src {
+                    // A daemon took the session back from the direct server.
+                    if let Some(reader) = self.shared.state.lock().unwrap().returned.take() {
+                        src = Source::Daemon(reader);
+                        continue;
+                    }
+                }
                 if self.agent_done() {
-                    return match &mut src {
-                        Source::Child(_, child) => child.wait().ok().and_then(|s| s.code()).unwrap_or(0),
+                    return match src {
+                        Source::Child(_) => self.child_exit(0),
                         Source::Daemon(_) => 0,
                     };
                 }
                 self.detach();
                 let next = match src {
                     Source::Daemon(_) => self.replace_daemon(leaving.take()),
-                    Source::Child(_, mut child) => {
+                    Source::Child(_) => {
                         // The server itself exited, as it would have natively.
                         self.end();
-                        return child.wait().ok().and_then(|s| s.code()).unwrap_or(1);
+                        return self.child_exit(1);
                     }
                 };
                 match next {
-                    Some(s) => src = s,
+                    Some(s) => {
+                        if matches!(s, Source::Child(_)) && self.shared.state.lock().unwrap().shared {
+                            let me = self.clone();
+                            thread::spawn(move || me.return_when_idle());
+                        }
+                        src = s;
+                    }
                     None => {
                         self.end();
                         return 1;
@@ -330,7 +356,11 @@ impl Session {
                         continue;
                     }
                     LINE_CONTROL => {
-                        leaving = Some(trim(&line[1..]).to_vec());
+                        let text = trim(&line[1..]);
+                        match text.strip_prefix(b"mode ") {
+                            Some(mode) => self.shared.state.lock().unwrap().shared = mode == b"shared",
+                            None => leaving = Some(text.to_vec()),
+                        }
                         continue;
                     }
                     _ => {}
@@ -375,7 +405,15 @@ impl Session {
     /// Opens the session again on a new daemon connection: the agent's
     /// initialize is replayed and its answer kept from the agent, which has
     /// one already.
-    fn attach_daemon(&self, mut conn: TcpStream, mut reader: BufReader<TcpStream>) -> Result<Source, String> {
+    fn attach_daemon(&self, conn: TcpStream, reader: BufReader<TcpStream>) -> Result<Source, String> {
+        let (conn, reader) = self.reopen(conn, reader)?;
+        self.attach(Sink::Tcp(conn));
+        Ok(Source::Daemon(reader))
+    }
+
+    /// Replays the agent's initialize on a new daemon connection and keeps the
+    /// answer; the connection is ready to carry the agent's messages after.
+    fn reopen(&self, mut conn: TcpStream, mut reader: BufReader<TcpStream>) -> Result<(TcpStream, BufReader<TcpStream>), String> {
         let mut header = header_json(&self.argv, &self.mode).into_bytes();
         header.push(b'\n');
         header.extend_from_slice(&self.first);
@@ -399,8 +437,68 @@ impl Session {
         }
         let _ = reader.get_ref().set_read_timeout(None);
         conn.write_all(INITIALIZED).map_err(|e| e.to_string())?;
-        self.attach(Sink::Tcp(conn));
-        Ok(Source::Daemon(reader))
+        Ok((conn, reader))
+    }
+
+    /// Takes a session that fell back to running a shared server directly
+    /// back to the daemon once the daemon is there again and the agent is
+    /// between calls: the direct server is one more copy of a process the
+    /// daemon shares. Servers the daemon runs per session are not moved
+    /// (no gain, and their state would be lost); see Session::run.
+    fn return_when_idle(&self) {
+        let idle = return_idle();
+        let mut wait = idle.min(Duration::from_secs(10)).max(Duration::from_millis(500));
+        loop {
+            thread::sleep(wait);
+            {
+                let st = self.shared.state.lock().unwrap();
+                if st.over || st.agent_done || st.child.is_none() {
+                    return;
+                }
+                if !st.inflight.is_empty() || st.last_agent.is_some_and(|t| t.elapsed() < idle) {
+                    continue;
+                }
+            }
+            let Ok((conn, reader)) = dial() else { continue };
+            // Hold the agent's next messages while the daemon takes over.
+            let direct = {
+                let mut st = self.shared.state.lock().unwrap();
+                if !st.inflight.is_empty() || st.over || st.agent_done {
+                    continue;
+                }
+                st.sink.take()
+            };
+            match self.reopen(conn, reader) {
+                Ok((conn, reader)) => {
+                    let child = {
+                        let mut st = self.shared.state.lock().unwrap();
+                        st.returned = Some(reader);
+                        st.child.take()
+                    };
+                    drop(direct); // the direct server's stdin: it ends as at a session's end
+                    if let Some(child) = child {
+                        stop_child(child);
+                    }
+                    self.attach(Sink::Tcp(conn));
+                    note("MCPcell 已恢复，回到共享运行");
+                    return;
+                }
+                Err(e) => {
+                    let mut st = self.shared.state.lock().unwrap();
+                    st.sink = direct;
+                    self.shared.ready.notify_all();
+                    drop(st);
+                    note(&format!("还不能回到 MCPcell（{e}），继续直接运行"));
+                    wait = (wait * 2).min(Duration::from_secs(300));
+                }
+            }
+        }
+    }
+
+    /// The direct server's exit code once it has exited.
+    fn child_exit(&self, otherwise: i32) -> i32 {
+        let child = self.shared.state.lock().unwrap().child.take();
+        child.and_then(|mut c| c.wait().ok()).and_then(|s| s.code()).unwrap_or(otherwise)
     }
 
     /// Runs the command directly and replays the agent's initialize to it, as
@@ -426,9 +524,38 @@ impl Session {
             }
         }
         input.write_all(INITIALIZED).map_err(|e| e.to_string())?;
+        self.shared.state.lock().unwrap().child = Some(child);
         self.attach(Sink::Child(Some(input)));
-        Ok(Source::Child(reader, child))
+        Ok(Source::Child(reader))
     }
+}
+
+/// How long the agent must be quiet before a session goes back to the daemon
+/// (MCPCELL_RETURN_IDLE_SECS overrides it, for tests).
+fn return_idle() -> Duration {
+    let secs = env::var("MCPCELL_RETURN_IDLE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(30);
+    Duration::from_secs(secs)
+}
+
+/// Ends a directly run server whose stdin was just closed: most exit on
+/// their own; the rest, with whatever they started, are killed.
+fn stop_child(mut child: Child) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    if cfg!(windows) {
+        // cmd /c npx leaves node running when only cmd is killed.
+        let mut kill = Command::new("taskkill");
+        kill.args(["/PID", &child.id().to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null());
+        no_window(&mut kill);
+        let _ = kill.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// How long a replayed initialize may take: a server that is not running
