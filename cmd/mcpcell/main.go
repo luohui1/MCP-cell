@@ -29,6 +29,11 @@ const usage = `mcpcell %s — 本机 MCP 运行时：每个服务一份进程，
                        托管 Agent 的 MCP（同管理页「一键托管」）：先列出计划，确认后执行
   restore --all        还原所有被托管的客户端配置（不需要守护进程）
   restore <客户端> [条目...]
+  skills [名称...]     各 Agent 的 Skill 在哪些目录、各处是否一致（不需要守护进程）
+  skills sync <名称...>|--all [--to 位置,...] [--from 位置] [--copy] [-y]
+                       把 Skill 放进 MCPcell 的来源目录，各 Agent 的目录链接到它
+  skills restore <名称...>|--all
+                       逐字节还原同步时替换的内容
   autostart [on|off]   开机自启
   shortcut [on|off]    桌面和开始菜单快捷方式
   install [--cli|--gui]
@@ -81,6 +86,8 @@ func main() {
 		err = runClients()
 	case "restore":
 		err = runRestore(os.Args[2:])
+	case "skills":
+		err = runSkills(os.Args[2:])
 	case "autostart":
 		err = runAutostart(os.Args[2:])
 	case "update":
