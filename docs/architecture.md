@@ -51,7 +51,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 一个二进制 `mcpcell.exe`，三种角色：
 - `mcpcell daemon`：常驻，空闲时预计十几 MB（M1 实测）
 - `mcpcell shim <service>`：给只支持 stdio 的客户端用，在 stdio 和守护进程之间转发，也能在守护进程不在时把它拉起来
-- CLI：`ps`、`clients`、`takeover`、`restore`、`mode` 等（`doctor` 待做）。命令行和图形界面（托盘 + 管理页窗口）是同一个守护进程的两种操作入口，见 §9.4
+- CLI：`ps`、`clients`、`takeover`、`restore`、`mode`、`skills` 等（`doctor` 待做）。命令行和图形界面（托盘 + 管理页窗口）是同一个守护进程的两种操作入口，见 §9.4
 
 ## 4. 组件
 
@@ -67,6 +67,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 | `internal/testutil/fakemcp` ✅ | 基于官方 SDK 的测试用上游 | M1 |
 | `internal/catalog` ✅ | 能力目录：拉取并合并分页、按配置指纹判断有效、按客户端画像（协议版本，按会话时加能力）分别缓存、`list_changed` 时先标记过期再刷新、记录共享资格检测结果，存到 `~/.mcpcell/catalog` | M2 |
 | `internal/clients` | 各客户端配置的发现、改写、备份、还原（移植自 legacy） | M3 |
+| `internal/skills` ✅ | 各 Agent 的 Skill 目录：按内容哈希比较、同步到来源目录（目录链接）、备份与逐字节还原，见 [skills.md](skills.md) | M3 后 |
 | `internal/hub` | 聚合命名空间、元工具、调用策略 | M4 |
 
 ## 5. 数据模型
@@ -215,7 +216,11 @@ HTTP 客户端无法拉起守护进程，所以自启动是必需项：Windows �
 
 `config.json` 的 `interface` 是 `gui`（默认）或 `cli`，只决定守护进程显不显示托盘图标。守护进程启动时读取它，所以开机自启（`daemon --log`）、包装程序拉起、`mcpcell start` 三条启动路径不用改参数；`--no-tray` 仍然优先。运行中切换走 `POST /api/interface`：守护进程写回配置，并在 UI 线程上即时添加或移除托盘图标，不重启，包装程序的会话不受影响。命令行方式下守护进程仍然创建隐藏的消息窗口，`mcpcell open` 照样能打开管理页窗口。两种方式的接管、按需启动、能力目录、重连完全相同。
 
-### 9.5 客户端支持矩阵
+### 9.5 Skill
+
+Skill（`SKILL.md` 加脚本的文件夹）没有进程，问题只在于同一份要在各 Agent 的目录里各放一份。MCPcell 把它当成和 MCP 配置一样的"定义与绑定"：来源目录 `~/.mcpcell/skills` 存唯一的一份，各 Agent 的 Skill 目录用目录链接（Windows 用 junction，不需要管理员权限）指向它。规则与接管相同：改前备份、只改所选的 Skill 和位置、内容不同的副本不覆盖、被用户改过的不动、可以逐字节还原。命令行直接读写文件，不需要守护进程；管理页的「Skill」页调用同一个包。各 Agent 读哪些目录、来源目录的取舍、同步与还原规则见 [skills.md](skills.md)。
+
+### 9.6 客户端支持矩阵
 
 2026-10-17 调研（官方文档、changelog 与 issue）。标"未核实"的项在 M3 真机测试时确认。
 

@@ -293,6 +293,25 @@ Go 程序在 Windows 上的下限就是约 11.3–11.9 MB（只读标准输入�
 - `restore` 后配置内容与备份一致；外部改过的条目报冲突，不强制覆盖
 - 工具全名不变，客户端原有的允许/拒绝规则继续生效
 
+## Skill 统一管理 ✅（2026-10-20）
+
+设计见 [skills.md](skills.md)。
+
+交付：
+- 核实各 Agent 的用户级 Skill 目录（Claude Code、Codex、Gemini CLI、Antigravity、Cursor、OpenCode、GitHub Copilot），`~/.agents/skills` 的使用方
+- `mcpcell skills`：每个 Skill 在哪些位置、按内容哈希是否一致、哪份较新、具体哪些文件不同；只在多处有实体时才读文件
+- `mcpcell skills sync`：来源目录 `~/.mcpcell/skills`，各位置换成 junction（失败时复制）；内容不同的副本不覆盖，`--from` 选版本；其他工具的链接默认不动
+- `mcpcell skills restore`：移回原目录、重建原链接，内容哈希核对；同步后被改过的拒绝
+- 管理页「Skill」页：分组列表、各位置的状态标签、逐处差异，同步与还原先显示计划再执行
+- 记录在 `~/.mcpcell/skills.json`，备份在 `skill-backups/`，命令行不需要守护进程
+
+验收（临时目录，`USERPROFILE`、`HOME`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`MCPCELL_HOME` 都指向沙箱）：
+- 内容不同的两份不带 `--from` 同步：退出码 1，什么都没改
+- `--from` 同步、相同副本同步、外链跳过；通过一个 Agent 的链接编辑，其他 Agent 立即看到
+- 一个链接被换成用户自己的目录后还原：这一项被拒绝，其余还原；用户删掉后再还原，37 个条目（哈希、修改时间、链接目标）与同步前完全一致
+- 管理页上的同步与全部还原走同一套接口，结果一致
+- 本机真实目录只做了只读扫描：60 多个 Skill 冷扫描约 0.4 秒
+
 ## M4 Hub 聚合与上下文瘦身
 
 优先级已下调：Claude Code、Cursor、Codex 已经内置工具检索，这一步只面向没有工具检索的客户端。新版客户端连旧版上游、又确实需要 sampling 或 elicitation 时的 MRTR 双向翻译，也放在这一阶段，等遇到实际需要的服务再做。

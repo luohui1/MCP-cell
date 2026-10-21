@@ -26,6 +26,7 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 - **桌面应用**：托盘图标常驻，窗口用系统自带的 WebView2 显示管理页，关窗后 WebView2 进程全部退出；支持开机自启、桌面和开始菜单快捷方式
 - **命令行或图形界面任选**：`mcpcell mode cli` 去掉托盘图标，查看、托管、还原都用命令完成（`mcpcell takeover` 等同于管理页的「一键托管」）；`mcpcell mode gui` 换回来。运行中切换立即生效，两种方式的内核完全一样，命令行模式下仍可用 `mcpcell open` 临时打开窗口
 - 管理页和 `mcpcell ps` 显示每个服务的实例、会话、私有提交和缓存的工具数
+- **Skill 一处维护**：同一个 Skill 不用再在 Claude Code、Codex、Gemini 等各自的目录里各放一份。`mcpcell skills` 列出每个 Skill 在哪些 Agent 里、各处内容是否一致、哪份较新、哪些文件不同；`mcpcell skills sync <名称>` 把它放进 `~/.mcpcell/skills`，各 Agent 的目录换成指向它的目录链接（Windows 用 junction，不需要管理员权限），之后改一处处处生效。内容不同的副本不覆盖，由你选以哪一份为准；替换前整目录备份，`mcpcell skills restore` 逐字节还原。见 [Skill 统一管理](docs/skills.md)
 
 - **按会话运行**：chrome-devtools、ssh 这类为每个会话保存状态的 MCP，每个会话一个实例，第一次调用时才启动、会话结束就回收；没用到它的会话不占内存。MCPcell 不认识的 MCP 默认也这样运行，确认无状态后可以改为共享
 
@@ -64,7 +65,17 @@ bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自
 }
 ```
 
-「MCP」页把 MCPcell 的服务和 Claude Code、Codex、Cursor 里配置的 MCP 合成一张表，按已托管、可以托管、暂不支持分组，每行一个托管开关，点 Agent 图标可以单独托管、还原或加入其他 Agent；也可以在页面上添加、编辑、删除服务（带常用预设，也能粘贴客户端里的 JSON 条目）。「Agents」页按 Agent 批量托管和还原，其他客户端给出可复制的配置，替换原来的同名条目后重启即可。工具全名保持不变。
+Skill 也一样：
+
+```sh
+~/.mcpcell/bin/mcpcell.exe skills                 # 每个 Skill 在哪些目录、是否一致
+~/.mcpcell/bin/mcpcell.exe skills pdf-tools       # 逐处查看：哪份较新、哪些文件不同
+~/.mcpcell/bin/mcpcell.exe skills sync pdf-tools  # 统一成一份，各 Agent 链接到它；先列计划，确认后执行
+~/.mcpcell/bin/mcpcell.exe skills sync deploy-notes --from codex   # 各处不同时，选以 Codex 那份为准
+~/.mcpcell/bin/mcpcell.exe skills restore --all   # 全部还原
+```
+
+「MCP」页把 MCPcell 的服务和 Claude Code、Codex、Cursor 里配置的 MCP 合成一张表，按已托管、可以托管、暂不支持分组，每行一个托管开关，点 Agent 图标可以单独托管、还原或加入其他 Agent；也可以在页面上添加、编辑、删除服务（带常用预设，也能粘贴客户端里的 JSON 条目）。「Agents」页按 Agent 批量托管和还原，其他客户端给出可复制的配置，替换原来的同名条目后重启即可。工具全名保持不变。「Skill」页按「内容不一致 / 可以统一 / 已统一」分组显示每个 Skill 在各 Agent 目录里的状态，展开可以看每处的文件数、修改时间和差异；统一、选版本、还原都先列出计划再执行。
 
 | 命令 | 作用 |
 |---|---|
@@ -76,6 +87,9 @@ bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自
 | `mcpcell clients` | 各客户端的 MCP 条目、分类、托管状态与运行方式 |
 | `mcpcell takeover [条目...] [--client 客户端] [--shared\|--per-session] [-y]` | 托管 Agent 的 MCP，同管理页「一键托管」：先列出计划，确认后执行 |
 | `mcpcell restore --all` | 还原所有被托管的客户端配置，不需要守护进程；`restore <客户端> [条目...]` 只还原部分 |
+| `mcpcell skills [名称...]` | 各 Agent 的 Skill 在哪些目录、各处是否一致；给出名称时逐处列出差异；`skills dirs` 列出各目录对应的 Agent |
+| `mcpcell skills sync <名称...>\|--all [--to 位置,...] [--from 位置] [--copy] [-y]` | 把 Skill 放进 `~/.mcpcell/skills`，各位置换成指向它的链接；内容不同的副本不覆盖，`--from` 选版本 |
+| `mcpcell skills restore <名称...>\|--all` | 逐字节还原同步时替换的内容（不需要守护进程） |
 | `mcpcell autostart on` | 开机自启 |
 | `mcpcell ps` | 服务、实例、会话、私有提交 |
 | `mcpcell ui --browser` | 在浏览器里用一次性链接打开管理页 |
@@ -120,4 +134,4 @@ pwsh scripts/measure-mcp.ps1          # 测量本机所有 Agent 的 MCP 进程�
 - 不同凭据、不同工作区的服务绝不共用实例；同名或配置相同只是合并候选，不代表可以共享
 - 路由只改写 id 这类归属字段，不重放调用；上游中途退出时报告"结果未知"
 - 只监听 loopback，校验 Host 和 Origin，每个请求都要 token
-- 改写客户端配置前先备份，只改所选的客户端和条目
+- 改写客户端配置和 Skill 目录前先备份，只改所选的客户端、条目和位置；被你改过的不覆盖，随时逐字节还原
