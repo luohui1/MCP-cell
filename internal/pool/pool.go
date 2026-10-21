@@ -1155,6 +1155,9 @@ type CatalogInfo struct {
 	Prompts   int       `json:"prompts"`
 	Resources int       `json:"resources"`
 	FetchedAt time.Time `json:"fetchedAt"`
+	// Description is what the server says it is for (catalog.Entry.Description).
+	Description string   `json:"description,omitempty"`
+	ToolNames   []string `json:"toolNames,omitempty"`
 }
 
 // SessionInstance is a per-session service's instance for one session.
@@ -1265,7 +1268,8 @@ func (p *Pool) Status() []ServiceStatus {
 		if p.opts.Catalog != nil && it.def.CatalogEnabled() {
 			if e := p.opts.Catalog.Get(it.st.Name, p.fingerprint(it.def)); e != nil {
 				it.st.Catalog = &CatalogInfo{Tools: max(e.Count("tools/list"), 0), Prompts: max(e.Count("prompts/list"), 0),
-					Resources: max(e.Count("resources/list"), 0), FetchedAt: e.FetchedAt}
+					Resources: max(e.Count("resources/list"), 0), FetchedAt: e.FetchedAt,
+					Description: e.Description(), ToolNames: e.Names("tools/list")}
 			}
 		}
 		out = append(out, it.st)

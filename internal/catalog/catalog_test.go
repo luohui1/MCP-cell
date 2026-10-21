@@ -137,3 +137,21 @@ func TestStoreProfilesChecksAndOldFiles(t *testing.T) {
 		t.Fatal("entries of the old configuration survived")
 	}
 }
+
+func TestDescription(t *testing.T) {
+	cases := []struct{ init, want string }{
+		{`{"serverInfo":{"name":"c7","description":"Up-to-date docs for libraries. And more."},"instructions":"Use it."}`, "Up-to-date docs for libraries"},
+		{`{"serverInfo":{"name":"x"},"instructions":"Local-file tools: grep and glob.\nUse them first."}`, "Local-file tools: grep and glob"},
+		{`{"serverInfo":{"name":"x"},"instructions":"飞书文档与多维表格。支持搜索"}`, "飞书文档与多维表格"},
+		{`{"serverInfo":{"name":"x"}}`, ""},
+	}
+	for _, c := range cases {
+		if got := (&Entry{InitResult: json.RawMessage(c.init)}).Description(); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.init, got, c.want)
+		}
+	}
+	e := &Entry{Lists: map[string]json.RawMessage{"tools/list": json.RawMessage(`{"tools":[{"name":"a"},{"name":"b"}]}`)}}
+	if got := e.Names("tools/list"); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("names: %v", got)
+	}
+}

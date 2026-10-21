@@ -79,6 +79,52 @@ func (e *Entry) Count(list string) int {
 	return len(items)
 }
 
+// Names returns the names of the items list holds.
+func (e *Entry) Names(list string) []string {
+	var items []struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(jsonrpc.Field(e.Lists[list], Lists[list]), &items)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.Name)
+	}
+	return out
+}
+
+// Description is what the server says it is for: its serverInfo
+// description, or else the first sentence of its instructions.
+func (e *Entry) Description() string {
+	var init struct {
+		ServerInfo struct {
+			Description string `json:"description"`
+		} `json:"serverInfo"`
+		Instructions string `json:"instructions"`
+	}
+	_ = json.Unmarshal(e.InitResult, &init)
+	if d := firstSentence(init.ServerInfo.Description); d != "" {
+		return d
+	}
+	return firstSentence(init.Instructions)
+}
+
+// firstSentence keeps text up to its first sentence end or line break, at
+// most 120 characters.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\n。！？"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.Index(s, ". "); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSuffix(strings.TrimSpace(s), ".")
+	if r := []rune(s); len(r) > 120 {
+		s = string(r[:119]) + "…"
+	}
+	return s
+}
+
 // Fingerprint identifies a configuration. Anything that can change what the
 // server offers belongs in parts (command, args, env values, cwd, pinned
 // package version).
