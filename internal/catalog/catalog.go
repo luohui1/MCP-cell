@@ -99,6 +99,16 @@ type file struct {
 	// Checks maps a client's capabilities to "" when a shared instance serves
 	// such clients as their own would, or to why it does not.
 	Checks map[string]string `json:"checks,omitempty"`
+	// Failure is the last failed start, kept until the service starts or its
+	// configuration changes, so a restarted daemon still shows it.
+	Failure *Failure `json:"failure,omitempty"`
+}
+
+// Failure is a service's failed start as the daemon reports it.
+type Failure struct {
+	Error    string    `json:"error"`
+	At       time.Time `json:"at"`
+	Failures int       `json:"failures"` // consecutive failed starts
 }
 
 type Store struct {
@@ -202,6 +212,35 @@ func (s *Store) Get(service, fingerprint string) *Entry {
 		}
 	}
 	return &cp
+}
+
+// Failure returns the failed start recorded for this configuration, or nil.
+func (s *Store) Failure(service, fingerprint string) *Failure {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f := s.fileLocked(service, fingerprint); f != nil && f.Failure != nil {
+		cp := *f.Failure
+		return &cp
+	}
+	return nil
+}
+
+// SetFailure records a failed start for this configuration; nil clears it.
+func (s *Store) SetFailure(service, fingerprint string, fail *Failure) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fail == nil {
+		f := s.fileLocked(service, fingerprint)
+		if f == nil || f.Failure == nil {
+			return nil
+		}
+		f.Failure = nil
+		return s.saveLocked(service, f)
+	}
+	f := s.fileForWriteLocked(service, fingerprint)
+	cp := *fail
+	f.Failure = &cp
+	return s.saveLocked(service, f)
 }
 
 // Init returns the cached initialize result and protocol version for clients

@@ -402,3 +402,34 @@ func statusOf(p *Pool, name string) ServiceStatus {
 	}
 	return ServiceStatus{}
 }
+
+// A failed start is still reported after the daemon restarts, until the
+// service is redefined or starts.
+func TestFailedStartSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"services":{"broken":{"command":"definitely-not-a-real-binary-xyz"}}}`
+	open := func() *Pool {
+		return newPoolWith(t, cfg, Options{Catalog: catalog.OpenStore(dir),
+			SpecFor: func(_ string, def *registry.Service) proc.Spec {
+				return proc.Spec{Argv: []string{def.Command}, Env: proc.BuildEnv(os.Environ(), nil), Dir: os.TempDir()}
+			}})
+	}
+	p := open()
+	if err := p.Warm(context.Background(), "broken"); err == nil {
+		t.Fatal("broken service warmed")
+	}
+	p.Close()
+	st := statusOf(open(), "broken")
+	if st.Failures != 1 || st.LastError == "" || st.LastErrorAt == nil {
+		t.Fatalf("after a restart: %d failed starts, error %q", st.Failures, st.LastError)
+	}
+	if _, failing := open().Failing("broken"); !failing {
+		t.Fatal("a restored failure does not hand wrapped sessions back")
+	}
+	p = open()
+	p.Put("broken", &registry.Service{Command: "definitely-not-a-real-binary-xyz", Args: []string{"--fixed"}})
+	p.Close()
+	if st := statusOf(open(), "broken"); st.Failures != 0 {
+		t.Fatalf("a saved configuration still reports %d failed starts after a restart", st.Failures)
+	}
+}

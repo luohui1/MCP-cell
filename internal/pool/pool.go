@@ -215,9 +215,37 @@ func New(cfg *registry.Config, opts Options) *Pool {
 	}
 	p := &Pool{opts: opts, entries: map[string]*entry{}}
 	for _, name := range cfg.Names() {
-		p.entries[name] = newEntry(name, cfg.Services[name])
+		e := newEntry(name, cfg.Services[name])
+		p.restoreFailureLocked(e)
+		p.entries[name] = e
 	}
 	return p
+}
+
+// restoreFailureLocked brings back a failed start recorded before the daemon
+// restarted, if the service is still configured the same way.
+func (p *Pool) restoreFailureLocked(e *entry) {
+	if p.opts.Catalog == nil {
+		return
+	}
+	if f := p.opts.Catalog.Failure(e.name, p.fingerprint(e.def)); f != nil {
+		e.failures, e.lastErr, e.lastErrAt, e.failedAt = f.Failures, f.Error, f.At, f.At
+	}
+}
+
+// saveFailureLocked keeps e's failed-start state across daemon restarts:
+// recorded while its starts fail, cleared once one succeeds.
+func (p *Pool) saveFailureLocked(e *entry) {
+	if p.opts.Catalog == nil {
+		return
+	}
+	var f *catalog.Failure
+	if e.failures > 0 {
+		f = &catalog.Failure{Error: e.lastErr, At: e.failedAt, Failures: e.failures}
+	}
+	if err := p.opts.Catalog.SetFailure(e.name, p.fingerprint(e.def), f); err != nil {
+		p.opts.Log.Warn("saving start failure", "service", e.name, "err", err)
+	}
 }
 
 // OnListChange registers the callback for cached lists that changed.
@@ -394,13 +422,17 @@ func (p *Pool) start(e *entry, sl *slot, op *startOp, ss Session) {
 		err = errors.New("服务配置刚被修改或删除，请重试")
 	case err != nil:
 		e.failedLocked(err)
+		p.saveFailureLocked(e)
 		p.opts.Log.Warn("start failed", "service", e.name, "err", err)
 	case p.closed:
 		err = errors.New("MCPcell 正在退出")
 	case e.slots[sl.key] != sl:
 		err = errors.New("实例在启动过程中被停止（会话结束或手动回收）")
 	default:
-		e.failures = 0
+		if e.failures > 0 {
+			e.failures = 0
+			p.saveFailureLocked(e)
+		}
 		sl.inst, sl.direct = inst, direct
 		go p.watch(e, sl, inst)
 		go func() {
@@ -753,8 +785,10 @@ func (p *Pool) warm(ctx context.Context, name string, def *registry.Service, int
 		e.note = note
 		if err != nil {
 			e.failedLocked(err)
-		} else {
+			p.saveFailureLocked(e)
+		} else if e.failures > 0 {
 			e.failures, e.nextTry = 0, time.Time{}
+			p.saveFailureLocked(e)
 		}
 	}
 	p.mu.Unlock()
@@ -948,12 +982,16 @@ func (p *Pool) Put(name string, def *registry.Service) {
 	e := p.entries[name]
 	var old []*instance.Instance
 	if e == nil {
-		p.entries[name] = newEntry(name, def)
+		e = newEntry(name, def)
+		p.restoreFailureLocked(e)
+		p.entries[name] = e
 	} else {
 		old = e.takeAll()
+		e.failures = 0
+		p.saveFailureLocked(e) // changed settings deserve a fresh try
 		e.def = def
-		e.nextTry, e.crashes, e.failures, e.note, e.lastErr, e.lastErrAt = time.Time{}, nil, 0, "", "", time.Time{}
-		e.checked, e.needs = false, ""
+		e.nextTry, e.crashes, e.lastErr, e.lastErrAt = time.Time{}, nil, "", time.Time{}
+		e.note, e.checked, e.needs = "", false, ""
 	}
 	p.mu.Unlock()
 	stopAll(old, "配置已修改")
@@ -967,6 +1005,8 @@ func (p *Pool) Remove(name string) bool {
 	var old []*instance.Instance
 	if e != nil {
 		old = e.takeAll()
+		e.failures = 0
+		p.saveFailureLocked(e)
 	}
 	p.mu.Unlock()
 	stopAll(old, "服务已删除")
@@ -981,8 +1021,12 @@ func (p *Pool) Stop(name, reason string) bool {
 	var old []*instance.Instance
 	if e != nil {
 		old = e.takeAll()
+		failed := e.failures > 0
 		e.nextTry, e.crashes, e.failures = time.Time{}, nil, 0
 		e.checked = false // an update changes the fingerprint the checks belong to
+		if failed {
+			p.saveFailureLocked(e)
+		}
 	}
 	p.mu.Unlock()
 	stopAll(old, reason)
