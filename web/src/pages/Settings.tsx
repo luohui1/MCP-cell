@@ -1,10 +1,14 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { AppWindow, Settings as SettingsIcon } from 'lucide-react';
-import { desktop, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
-import { useStatus } from '../App';
-import { masked } from '../clients';
-import { bytes, since } from '../format';
-import { Button, CodeBlock, CopyButton, Dot, GroupHeader, PageHeader, Segmented, Switch, TableCard, useToast } from '../ui';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AppWindow, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
+import { desktop, instancesOf, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
+import { clients as manualClients, masked } from '../clients';
+import { useStatus } from '../data';
+import { bytes, clock, since } from '../format';
+import { BrandMark, brandOf } from '../icons';
+import { Body } from '../layout';
+import { agentOrder } from '../model';
+import { useRoute } from '../router';
+import { Badge, Button, CodeBlock, CopyButton, cx, Dot, GroupHeader, PageHeader, Segmented, Switch, TableCard, useToast } from '../ui';
 
 const commands = [
   'mcpcell open            # 打开 MCPcell 窗口（需要时先启动守护进程）',
@@ -20,8 +24,9 @@ const commands = [
   'mcpcell update <服务>   # 更新 npx 服务的 npm 包',
 ].join('\n');
 
-export function SettingsPage() {
+export function SettingsPage({ diag }: { diag: boolean }) {
   const { status } = useStatus();
+  const manual = useRoute().query.get('manual') === '1';
   const toast = useToast();
   const [auto, setAuto] = useState<AutostartStatus | null>(null);
   const [desk, setDesk] = useState<DesktopStatus | null>(null);
@@ -44,7 +49,7 @@ export function SettingsPage() {
   return (
     <>
       <PageHeader icon={<SettingsIcon className="size-5 text-zinc-500" />} title="设置" />
-      <div className="mx-auto w-full max-w-[880px] space-y-7 px-8 pt-6 pb-12">
+      <Body width={880}>
         <section>
           <GroupHeader title="常规" />
           <TableCard>
@@ -124,12 +129,156 @@ export function SettingsPage() {
           <p className="mt-2.5 px-1 text-xs leading-5 text-zinc-400">在管理页增删改服务会直接写入配置文件并立即生效；手动改文件后需要重启守护进程。</p>
         </section>
 
+        <ManualAgents open={manual} />
+
         <section>
           <GroupHeader title="命令行" />
           <CodeBlock shown={commands} copy={commands} />
         </section>
-      </div>
+
+        <Diagnostics open={diag} />
+      </Body>
     </>
+  );
+}
+
+/** Scrolls a section into view when a link asked for it. */
+function useReveal(open: boolean) {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (open) ref.current?.scrollIntoView({ block: 'start' });
+  }, [open]);
+  return ref;
+}
+
+/** Agents MCPcell cannot edit: copy a config that points at its endpoints. */
+function ManualAgents({ open }: { open: boolean }) {
+  const { status } = useStatus();
+  const [shown, setShown] = useState(open);
+  const [picked, setPicked] = useState<string | null>(null);
+  const ref = useReveal(open);
+  const eps = status.services.filter((s) => !s.name.startsWith('run-')).map((s) => ({ name: s.name, url: `${status.baseUrl}/s/${s.name}` }));
+  const list = manualClients.filter((c) => !agentOrder.includes(c.id));
+  return (
+    <section ref={ref}>
+      <GroupHeader title="手动接入" count={list.length} hint="还不能自动托管的 Agent：复制配置，替换原来的同名条目后重启" open={shown} onToggle={() => setShown(!shown)} />
+      {shown && (
+        <TableCard>
+          {list.map((c) => {
+            const usable = c.http && eps.length > 0;
+            const expanded = picked === c.id && usable;
+            return (
+              <div key={c.id}>
+                <button
+                  disabled={!usable}
+                  onClick={() => setPicked(expanded ? null : c.id)}
+                  className="flex w-full items-center gap-3.5 px-5 py-3 text-left transition-colors enabled:hover:bg-zinc-50 disabled:cursor-default dark:enabled:hover:bg-zinc-800/40"
+                >
+                  <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+                    <BrandMark brand={c.brand} className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{c.name}</span>
+                      {!c.http && <Badge tone="amber">仅 stdio</Badge>}
+                    </div>
+                    <div className="mt-0.5 truncate text-xs text-zinc-400">
+                      {c.file}
+                      {c.note && ` · ${c.note}`}
+                    </div>
+                  </div>
+                  {usable && <ChevronRight className={cx('size-4 text-zinc-400 transition-transform', expanded && 'rotate-90')} />}
+                </button>
+                {expanded && (
+                  <div className="px-5 pb-4 pl-[66px]">
+                    <CodeBlock shown={c.snippet!(eps, masked(status.token))} copy={c.snippet!(eps, status.token)} />
+                    <p className="mt-2 text-xs text-zinc-400">包含 MCPcell 里全部 {eps.length} 个服务；复制的内容带完整访问令牌。</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </TableCard>
+      )}
+    </section>
+  );
+}
+
+const diagGrid = 'grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_96px_110px_110px] items-center gap-4';
+
+const stateText = { cold: '未运行', starting: '启动中', ready: '运行中', failed: '失败' };
+
+/** Raw state for troubleshooting: every connection and every service the
+ * daemon runs, including the run- variants the lists fold into their MCP. */
+function Diagnostics({ open }: { open: boolean }) {
+  const { status } = useStatus();
+  const [shown, setShown] = useState(open);
+  const ref = useReveal(open);
+  const sessions = [...status.sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return (
+    <section ref={ref}>
+      <GroupHeader title="诊断" hint="原始的连接和服务列表，排查问题时用" open={shown} onToggle={() => setShown(!shown)} />
+      {shown && (
+        <div className="space-y-5">
+          <div>
+            <div className={cx(diagGrid, 'px-5 pb-2 text-xs text-zinc-400')}>
+              <span>连接 · {sessions.length}</span>
+              <span>服务</span>
+              <span>协议</span>
+              <span>连接于</span>
+              <span>活动</span>
+            </div>
+            <TableCard>
+              {sessions.length === 0 && <p className="px-5 py-4 text-sm text-zinc-400">没有连接</p>}
+              {sessions.map((x) => (
+                <div key={x.id} className={cx(diagGrid, 'px-5 py-2.5 text-[13px]')}>
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <BrandMark brand={brandOf(x.client)} className="size-4 shrink-0" />
+                    <span className="truncate">{x.client || '未知客户端'}</span>
+                    <span className="font-mono text-xs text-zinc-400">{x.id}</span>
+                  </div>
+                  <span className="truncate font-mono text-xs">{x.service}</span>
+                  <span className="font-mono text-xs text-zinc-500">{x.protocolVersion}</span>
+                  <span className="text-zinc-500 tabular-nums">{clock(x.createdAt)}</span>
+                  <span className="flex items-center gap-2 text-zinc-500">
+                    <Dot tone={x.inflight ? 'amber' : x.streaming ? 'green' : 'gray'} pulse={x.inflight > 0} />
+                    {x.inflight ? `处理中 ${x.inflight}` : `${since(x.lastSeenAt)}前`}
+                  </span>
+                </div>
+              ))}
+            </TableCard>
+          </div>
+          <div>
+            <div className={cx(diagGrid, 'px-5 pb-2 text-xs text-zinc-400')}>
+              <span>服务 · {status.services.length}</span>
+              <span>属于</span>
+              <span>运行方式</span>
+              <span>状态</span>
+              <span>实例 · 内存</span>
+            </div>
+            <TableCard>
+              {status.services.map((s) => {
+                const runs = instancesOf(s);
+                return (
+                  <div key={s.name} className={cx(diagGrid, 'px-5 py-2.5 text-[13px]')}>
+                    <span className="truncate font-mono text-xs">{s.name}</span>
+                    <span className="truncate text-zinc-500">{s.of ? `${s.of} 的变体（条目改过）` : s.name.startsWith('run-') ? '包装的条目' : '—'}</span>
+                    <span className="text-zinc-500">{s.mode === 'per-session' ? '按会话' : '共享'}</span>
+                    <span className="text-zinc-500">
+                      {stateText[s.state]}
+                      {s.failures ? ` · 失败 ${s.failures} 次` : ''}
+                    </span>
+                    <span className="text-zinc-500 tabular-nums">
+                      {runs.length} · {bytes(runs.reduce((n, i) => n + i.usage.privateBytes, 0))}
+                    </span>
+                  </div>
+                );
+              })}
+            </TableCard>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

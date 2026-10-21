@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { api } from './api';
-import { useStatus } from './App';
+import { useStatus } from './data';
 import { firstLine } from './format';
 import { go } from './router';
 import { Button, Modal, useToast } from './ui';
@@ -68,7 +68,7 @@ export function useServiceActions() {
             const name = deleting!;
             await run(name, async () => (await api.remove(name), `已删除 ${name}`));
             setDeleting(null);
-            go('mcp');
+            go(['mcp']);
           }}
         >
           删除

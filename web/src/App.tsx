@@ -1,30 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Activity, Bot, Layers, Puzzle, Settings as SettingsIcon } from 'lucide-react';
-import { api, instancesOf, Unauthorized, type Status } from './api';
-import { bytes, since } from './format';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { House, Layers, Puzzle, Settings as SettingsIcon } from 'lucide-react';
+import { api, Unauthorized, type Status } from './api';
+import { agentsOf } from './agents';
+import { DataProvider, StatusContext, useSkills, useStatus, useUnified } from './data';
 import { Logo } from './icons';
-import { go, useRoute } from './router';
-import { Card, cx, Dot, ToastProvider } from './ui';
+import { mcpView, skillView } from './model';
+import { href, redirect, useRoute } from './router';
+import { Card, cx, ToastProvider } from './ui';
 import { McpPage } from './pages/Mcp';
-import { AgentsPage } from './pages/Agents';
-import { ServiceDetail } from './pages/ServiceDetail';
-import { ServiceFormPage } from './pages/ServiceForm';
-import { SessionsPage } from './pages/Sessions';
+import { OverviewPage } from './pages/Overview';
 import { SettingsPage } from './pages/Settings';
 import { SkillsPage } from './pages/Skills';
-
-interface StatusCtx {
-  status: Status;
-  refresh: () => Promise<void>;
-}
-
-const StatusContext = createContext<StatusCtx | null>(null);
-
-export function useStatus(): StatusCtx {
-  const ctx = useContext(StatusContext);
-  if (!ctx) throw new Error('status not loaded');
-  return ctx;
-}
 
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -57,44 +43,50 @@ export function App() {
 
   return (
     <ToastProvider>
-      <StatusContext.Provider value={{ status, refresh }}>
-        <div className="flex h-full">
-          <Sidebar status={status} offline={offline} />
-          <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-            <Routes />
-          </main>
-        </div>
+      <StatusContext.Provider value={{ status, offline, refresh }}>
+        <DataProvider>
+          <div className="flex h-full">
+            <Sidebar />
+            <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+              {offline && (
+                <div role="alert" className="bg-red-600 px-8 py-1.5 text-[13px] text-white">
+                  守护进程没有响应，下面是最后一次读到的状态。确认 mcpcell daemon 仍在运行。
+                </div>
+              )}
+              <Routes />
+            </main>
+          </div>
+        </DataProvider>
       </StatusContext.Provider>
     </ToastProvider>
   );
 }
 
 function Routes() {
-  const route = useRoute();
-  const [page = 'mcp', id, sub] = route;
+  const { parts, query } = useRoute();
+  const [page = '', id, sub] = parts;
+  // Routes of the earlier page layout still work.
+  useEffect(() => {
+    if (page === 'services') redirect(id ? ['mcp', id] : ['mcp'], sub === 'edit' ? { edit: '1' } : undefined);
+    else if (page === 'agents' || page === 'clients') redirect([]);
+    else if (page === 'sessions') redirect(['settings'], { diag: '1' });
+  }, [page, id, sub]);
   switch (page) {
-    case 'services':
-      if (id === 'new') return <ServiceFormPage />;
-      if (id && sub === 'edit') return <ServiceFormPage name={id} />;
-      if (id) return <ServiceDetail name={id} />;
-      return <McpPage />;
-    case 'agents':
-    case 'clients':
-      return <AgentsPage />;
+    case 'mcp':
+      return <McpPage id={id} agent={query.get('agent') ?? ''} />;
     case 'skills':
-      return <SkillsPage />;
-    case 'sessions':
-      return <SessionsPage />;
+      return <SkillsPage name={id} agent={query.get('agent') ?? ''} />;
     case 'settings':
-      return <SettingsPage />;
+      return <SettingsPage diag={query.get('diag') === '1'} />;
   }
-  return <McpPage />;
+  return <OverviewPage />;
 }
 
-function NavItem({ icon, label, count, active, onClick }: { icon: ReactNode; label: string; count?: number; active: boolean; onClick: () => void }) {
+function NavItem({ icon, label, badge, active, to }: { icon: ReactNode; label: string; badge?: number; active: boolean; to: string }) {
   return (
-    <button
-      onClick={onClick}
+    <a
+      href={to}
+      aria-current={active ? 'page' : undefined}
       className={cx(
         'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm transition-colors',
         active
@@ -104,39 +96,36 @@ function NavItem({ icon, label, count, active, onClick }: { icon: ReactNode; lab
     >
       <span className={cx('grid size-5 place-items-center', active ? 'text-blue-600 dark:text-blue-400' : 'text-zinc-400')}>{icon}</span>
       <span className="flex-1">{label}</span>
-      {count !== undefined && count > 0 && <span className="text-xs font-normal text-zinc-400 tabular-nums">{count}</span>}
-    </button>
+      {!!badge && (
+        <span title={`${badge} 项需要处理`} className="grid h-5 min-w-5 place-items-center rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-800 tabular-nums dark:bg-amber-900/60 dark:text-amber-200">
+          {badge}
+        </span>
+      )}
+    </a>
   );
 }
 
-function Sidebar({ status, offline }: { status: Status; offline: boolean }) {
-  const [page = 'mcp'] = useRoute();
-  const running = status.services.flatMap(instancesOf).length;
+function Sidebar() {
+  const { status } = useStatus();
+  const { data } = useUnified();
+  const skills = useSkills().data;
+  const [page = ''] = useRoute().parts;
+  const agents = data ? agentsOf(data.agents) : [];
+  const mcpAttention = data?.rows.filter((r) => mcpView(r, status, agents).group === 'attention').length ?? 0;
+  const skillAttention = skills?.skills.filter((k) => skillView(k, skills).group === 'attention').length ?? 0;
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/60">
+    <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/60">
       <div className="flex h-16 items-center gap-2.5 px-5">
         <Logo className="size-7" />
         <span className="text-base font-semibold tracking-tight">MCPcell</span>
       </div>
       <nav className="space-y-0.5 px-3 pt-1">
-        <NavItem icon={<Layers className="size-4" />} label="MCP" active={page === 'mcp' || page === 'services'} onClick={() => go('mcp')} />
-        <NavItem icon={<Puzzle className="size-4" />} label="Skill" active={page === 'skills'} onClick={() => go('skills')} />
-        <NavItem icon={<Bot className="size-4" />} label="Agents" active={page === 'agents' || page === 'clients'} onClick={() => go('agents')} />
-        <NavItem icon={<Activity className="size-4" />} label="会话" count={status.sessions.length} active={page === 'sessions'} onClick={() => go('sessions')} />
+        <NavItem icon={<House className="size-4" />} label="概览" active={!['mcp', 'skills', 'settings'].includes(page)} to={href([])} />
+        <NavItem icon={<Layers className="size-4" />} label="MCP" badge={mcpAttention} active={page === 'mcp'} to={href(['mcp'])} />
+        <NavItem icon={<Puzzle className="size-4" />} label="Skill" badge={skillAttention} active={page === 'skills'} to={href(['skills'])} />
       </nav>
-      <div className="mt-auto px-3 pb-3">
-        <Card className="mb-3 px-3.5 py-3">
-          <div className="flex items-center gap-2 text-[13px] font-medium">
-            <Dot tone={offline ? 'red' : 'green'} pulse={!offline} />
-            {offline ? '守护进程无响应' : '后台运行中'}
-          </div>
-          <div className="mt-1 text-xs leading-5 text-zinc-500">
-            {running} 个实例 · {bytes(status.daemon.privateBytes)} · {since(status.startedAt)}
-          </div>
-        </Card>
-        <div className="border-t border-zinc-200/80 pt-3 dark:border-zinc-800">
-          <NavItem icon={<SettingsIcon className="size-4" />} label="设置" active={page === 'settings'} onClick={() => go('settings')} />
-        </div>
+      <div className="mt-auto border-t border-zinc-200/80 px-3 py-3 dark:border-zinc-800">
+        <NavItem icon={<SettingsIcon className="size-4" />} label="设置" active={page === 'settings'} to={href(['settings'])} />
       </div>
     </aside>
   );

@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Layers } from 'lucide-react';
 import { takeover, type AgentSummary, type McpRow } from './api';
-import { useStatus } from './App';
-import { agentBrand, applyTakeover, AutostartOption, takeSteps, type Unified } from './agents';
+import { agentBrand, applyTakeover, AutostartOption, takeSteps } from './agents';
+import { useStatus, type Unified } from './data';
 import { firstLine } from './format';
 import { BrandMark, ServiceAvatar } from './icons';
 import { Badge, Button, Checkbox, cx, Modal, Segmented, useToast } from './ui';
 
 /** Rows the one-click flow offers, with their steps for the given agents. */
-export function candidates(data: Unified, only?: string) {
+export function candidates(data: Unified, only?: string, keys?: string[]) {
   const agents = data.agents.filter((a) => a.found);
   return data.rows
+    .filter((row) => !keys || keys.includes(row.key))
     .map((row) => ({ row, steps: takeSteps(row, agents, only) }))
     .filter((c) => c.steps.length > 0);
 }
@@ -24,17 +25,23 @@ export function OneClickDialog({
   onClose,
   data,
   only,
+  keys,
   reload,
 }: {
   open: boolean;
   onClose: () => void;
   data: Unified;
   only?: string;
+  /** Offer only these rows (by key). */
+  keys?: string[];
   reload: () => Promise<void>;
 }) {
   const { refresh } = useStatus();
   const toast = useToast();
-  const list = useMemo(() => candidates(data, only), [data, only]);
+  const live = useMemo(() => candidates(data, only, keys), [data, only, keys?.join()]);
+  // While it runs, the rows it is taking over leave the live list.
+  const [frozen, setFrozen] = useState<typeof live | null>(null);
+  const list = frozen ?? live;
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [shared, setShared] = useState<Set<string>>(new Set());
   const [auto, setAuto] = useState(true);
@@ -57,6 +64,7 @@ export function OneClickDialog({
 
   async function run() {
     setBusy(true);
+    setFrozen(list);
     try {
       if (offerAuto && auto) await takeover.autostart(true);
       toast(await applyTakeover(chosen.flatMap((c) => c.steps)));
@@ -65,6 +73,7 @@ export function OneClickDialog({
       toast(firstLine((e as Error).message), 'error');
     } finally {
       setBusy(false);
+      setFrozen(null);
       await Promise.all([reload(), refresh()]);
     }
   }

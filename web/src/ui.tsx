@@ -109,19 +109,6 @@ export function Card({ className, children, onClick }: { className?: string; chi
   );
 }
 
-/** A titled card for settings and detail pages. */
-export function Section({ title, extra, children, className }: { title: string; extra?: ReactNode; children: ReactNode; className?: string }) {
-  return (
-    <section>
-      <div className="mb-2.5 flex items-center justify-between gap-4 px-1">
-        <h3 className="text-[13px] font-medium text-zinc-500">{title}</h3>
-        {extra}
-      </div>
-      <Card className={cx('p-5', className)}>{children}</Card>
-    </section>
-  );
-}
-
 /** A group heading above a table card; collapsible when onToggle is set. */
 export function GroupHeader({
   title,
@@ -163,30 +150,6 @@ export function GroupHeader({
 /** Rows separated by hairlines inside one card, like a native table. */
 export function TableCard({ children, className }: { children: ReactNode; className?: string }) {
   return <Card className={cx('divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800', className)}>{children}</Card>;
-}
-
-export function Stat({ label, value, sub, icon }: { label: string; value: ReactNode; sub?: ReactNode; icon?: ReactNode }) {
-  return (
-    <Card className="px-5 py-4">
-      <div className="flex items-center gap-2 text-[13px] text-zinc-500">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums">{value}</div>
-      {sub && <div className="mt-0.5 truncate text-xs text-zinc-400">{sub}</div>}
-    </Card>
-  );
-}
-
-export function EmptyState({ icon, title, text, action }: { icon: ReactNode; title: string; text?: ReactNode; action?: ReactNode }) {
-  return (
-    <Card className="flex flex-col items-center px-8 py-14 text-center">
-      <div className="grid size-12 place-items-center rounded-2xl bg-zinc-100 text-zinc-500 dark:bg-zinc-800">{icon}</div>
-      <div className="mt-4 text-[15px] font-semibold">{title}</div>
-      {text && <p className="mt-1.5 max-w-md text-sm leading-6 text-zinc-500">{text}</p>}
-      {action && <div className="mt-5">{action}</div>}
-    </Card>
-  );
 }
 
 export function Segmented<T extends string>({

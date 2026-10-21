@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { takeover, unified, type AgentCell, type AgentSummary, type AutostartStatus, type McpRow } from './api';
-import { useStatus } from './App';
+import { useStatus } from './data';
 import { firstLine } from './format';
 import { BrandMark } from './icons';
+import { agentOrder } from './model';
 import { Button, Checkbox, Modal, useToast } from './ui';
 
-export const agentOrder = ['claude-code', 'codex', 'cursor'];
 export const agentBrand: Record<string, string> = { 'claude-code': 'claude', codex: 'openai', cursor: 'cursor' };
 export const restartHint: Record<string, string> = {
   'claude-code': '新开的 Claude Code 会话立即生效，已打开的会话重启后生效',
@@ -19,46 +19,13 @@ const shortHint: Record<string, string> = {
   cursor: 'Cursor 刷新 MCP 后生效',
 };
 
-export type Unified = { agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus };
-
-/** Loads /api/mcp and keeps it fresh. */
-export function useUnified() {
-  const [data, setData] = useState<Unified | null>(null);
-  const [error, setError] = useState('');
-  const reload = useCallback(async () => {
-    try {
-      setData(await unified.load());
-      setError('');
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, []);
-  useEffect(() => {
-    reload();
-    const t = setInterval(() => !document.hidden && reload(), 4000);
-    return () => clearInterval(t);
-  }, [reload]);
-  return { data, error, reload };
-}
-
 /** Agents with a configuration file, in display order. */
 export const agentsOf = (all: AgentSummary[]) =>
   agentOrder.map((id) => all.find((a) => a.id === id)).filter((a): a is AgentSummary => !!a && a.found);
 
-export const cellsOf = (r: McpRow) => Object.values(r.agents);
-
 /** A native entry MCPcell can run: local stdio with an environment it can
  * reproduce (the daemon decides). */
 export const canTake = (c?: AgentCell) => !!c && c.state === 'native' && !!c.takeable;
-
-export type Group = 'managed' | 'available' | 'other';
-
-export function groupOf(r: McpRow): Group {
-  const cells = cellsOf(r);
-  if (r.service || cells.some((c) => c.state === 'managed' || c.state === 'changed')) return 'managed';
-  if (cells.some((c) => canTake(c))) return 'available';
-  return 'other';
-}
 
 export type Mode = 'shared' | 'per-session';
 
@@ -139,6 +106,8 @@ interface Pending {
   intro?: ReactNode;
   groups: { agent: AgentSummary; lines: ReactNode[] }[];
   warn?: string;
+  /** What happens to each agent's file, when it is not a takeover. */
+  note?: string;
   confirm: string;
   danger?: boolean;
   run: () => Promise<string>;
@@ -211,6 +180,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
             </>
           )),
         })),
+        note: '条目恢复成托管前的样子，其余内容不动，改之前先备份整个文件。',
         confirm: '还原',
         danger: true,
         run: () => applyRestore(steps),
@@ -221,6 +191,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
         title: `忘记 ${entry} 的托管记录`,
         intro: '这个条目在托管后被改过。保留你现在的配置，只删除 MCPcell 的记录。',
         groups: [{ agent, lines: [entry] }],
+        note: '配置文件不改动。',
         confirm: '忘记记录',
         run: async () => {
           const { results } = await takeover.restore(agent.id, [entry], true);
@@ -245,6 +216,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
             ],
           },
         ],
+        note: '新增一个连到 MCPcell 的条目，其余内容不动，改之前先备份整个文件。',
         confirm: '加入',
         run: async () => (await unified.add(agent.id, row.key), `已把 ${row.name} 加入 ${agent.name}。${shortHint[agent.id] ?? ''}`),
       });
@@ -268,7 +240,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
           </div>
           <div className="mt-4 space-y-2.5">
             {pending.groups.map((g) => (
-              <AgentChangeCard key={g.agent.id} agent={g.agent} lines={g.lines} />
+              <AgentChangeCard key={g.agent.id} agent={g.agent} lines={g.lines} note={pending.note} />
             ))}
           </div>
           {pending.warn && (
@@ -292,7 +264,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
 }
 
 /** One agent's planned changes, with the file that will be edited. */
-export function AgentChangeCard({ agent, lines }: { agent: AgentSummary; lines: ReactNode[] }) {
+export function AgentChangeCard({ agent, lines, note }: { agent: AgentSummary; lines: ReactNode[]; note?: string }) {
   return (
     <div className="rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-700">
       <div className="flex items-center gap-2">
@@ -309,7 +281,10 @@ export function AgentChangeCard({ agent, lines }: { agent: AgentSummary; lines: 
           </li>
         ))}
       </ul>
-      <div className="mt-2 text-xs text-zinc-400">原命令保留，前面加上 mcpcell-run；其余内容不动，改之前先备份整个文件。{restartHint[agent.id]}</div>
+      <div className="mt-2 text-xs text-zinc-400">
+        {note ?? '原命令保留，前面加上 mcpcell-run；其余内容不动，改之前先备份整个文件。'}
+        {restartHint[agent.id]}
+      </div>
     </div>
   );
 }

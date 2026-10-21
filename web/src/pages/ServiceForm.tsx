@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Check, ClipboardPaste, Lightbulb, Plus, TriangleAlert, X } from 'lucide-react';
-import { api, type ServiceForm } from '../api';
-import { useStatus } from '../App';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ChevronRight, ClipboardPaste, Lightbulb, Plus, TriangleAlert, X } from 'lucide-react';
+import { api, type Service, type ServiceForm } from '../api';
+import { useServiceActions } from '../actions';
+import { useStatus, useUnified } from '../data';
 import { firstLine } from '../format';
-import { ServiceAvatar } from '../icons';
 import { presets, type Preset } from '../presets';
 import { go } from '../router';
-import { Button, Card, cx, Field, IconButton, Input, PageHeader, Segmented, Switch, Textarea, useToast } from '../ui';
+import { Badge, Button, Card, cx, Field, IconButton, Input, Segmented, Switch, Textarea, useToast } from '../ui';
+
+// A service's settings: inline in the MCP detail for an existing service,
+// or the whole right pane when adding one (with presets and pasted JSON).
 
 const blank: ServiceForm = {
   name: '',
@@ -36,56 +39,154 @@ const idleOptions = (mode: string) => [
   { value: '0', label: '不回收' },
 ];
 
-export function ServiceFormPage({ name }: { name?: string }) {
-  const editing = !!name;
+interface Draft {
+  form: ServiceForm;
+  args: string;
+  env: EnvRow[];
+}
+
+const draftOf = (f: ServiceForm): Draft => ({
+  form: f,
+  args: f.args.join('\n'),
+  env: Object.entries(f.env).map(([key, v]) => ({ key, value: v ?? '', stored: v === null })),
+});
+
+function formOf(d: Draft): ServiceForm {
+  return {
+    ...d.form,
+    name: d.form.name.trim(),
+    command: d.form.command.trim(),
+    args: d.args
+      .split('\n')
+      .map((a) => a.trim())
+      .filter(Boolean),
+    env: Object.fromEntries(d.env.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.stored && !r.value ? null : r.value])),
+  };
+}
+
+/** The settings of an existing service, saved in place. */
+export function ServiceSettings({ name, svc, openAdvanced }: { name: string; svc?: Service; openAdvanced?: boolean }) {
   const { refresh } = useStatus();
+  const { reload } = useUnified();
   const toast = useToast();
-  const [form, setForm] = useState<ServiceForm>(blank);
-  const [argsText, setArgsText] = useState('');
-  const [env, setEnv] = useState<EnvRow[]>([]);
-  const [preset, setPreset] = useState<Preset | null>(null);
-  const [pasteOpen, setPasteOpen] = useState(false);
-  const [pasteText, setPasteText] = useState('');
-  const [loading, setLoading] = useState(editing);
-  const [saving, setSaving] = useState(false);
+  const actions = useServiceActions();
+  const [saved, setSaved] = useState<Draft | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [advanced, setAdvanced] = useState(!!openAdvanced);
 
   useEffect(() => {
-    if (!name) return;
+    setSaved(null);
+    setDraft(null);
+    setError('');
     api
       .configs()
       .then((all) => {
         const f = all.find((c) => c.name === name);
-        if (!f) throw new Error('服务不存在');
-        load(f);
+        if (!f) throw new Error('config.json 里没有这个服务');
+        setSaved(draftOf(f));
+        setDraft(draftOf(f));
       })
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setLoading(false));
+      .catch((e) => setError((e as Error).message));
   }, [name]);
 
-  function load(f: Partial<ServiceForm>) {
-    setForm((prev) => ({ ...prev, ...f, name: editing ? prev.name || f.name || '' : f.name ?? prev.name }));
-    if (f.args) setArgsText(f.args.join('\n'));
-    if (f.env) setEnv(Object.entries(f.env).map(([key, v]) => ({ key, value: v ?? '', stored: v === null })));
+  if (!draft || !saved) return <Card className="p-5 text-sm text-zinc-400">{error || '正在读取配置…'}</Card>;
+  const dirty = JSON.stringify(formOf(draft)) !== JSON.stringify(formOf(saved));
+
+  async function save() {
+    setError('');
+    const out = formOf(draft!);
+    if (!out.command) return setError('请填写启动命令');
+    setSaving(true);
+    try {
+      const back = await api.save(out);
+      setSaved(draftOf(back));
+      setDraft(draftOf(back));
+      await Promise.all([refresh(), reload()]);
+      toast(`已保存 ${name}，下次调用按新设置启动`);
+    } catch (e) {
+      setError(firstLine((e as Error).message));
+    } finally {
+      setSaving(false);
+    }
   }
+
+  const set = (f: Partial<ServiceForm>) => setDraft({ ...draft, form: { ...draft.form, ...f } });
+  return (
+    <Card className="divide-y divide-zinc-100 dark:divide-zinc-800">
+      <RunFields form={draft.form} set={set} />
+      {svc?.package && (
+        <SettingRow label="版本" hint="已锁定版本，用 node 直接启动，不经过 npx">
+          <div className="flex items-center gap-3">
+            <span className="min-w-0 truncate font-mono text-[13px]">{svc.package.name}</span>
+            <Badge>{svc.package.version}</Badge>
+            <Button size="sm" className="ml-auto" busy={actions.busy[name]} onClick={() => actions.update(name)}>
+              更新到最新
+            </Button>
+          </div>
+        </SettingRow>
+      )}
+      <div>
+        <button onClick={() => setAdvanced(!advanced)} className="flex w-full items-center gap-2 px-5 py-3 text-left text-sm text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/40">
+          <ChevronRight className={cx('size-4 shrink-0 text-zinc-400 transition-transform', advanced && 'rotate-90')} />
+          <span className="shrink-0">启动命令与高级选项</span>
+          {!advanced && <span className="ml-2 min-w-0 truncate font-mono text-xs text-zinc-400">{svc?.command ?? draft.form.command}</span>}
+        </button>
+        {advanced && (
+          <div className="px-5 pb-5">
+            <LaunchFields draft={draft} setDraft={setDraft} />
+            <Toggles form={draft.form} set={set} />
+          </div>
+        )}
+      </div>
+      {(dirty || error) && (
+        <div className="flex items-center gap-3 bg-zinc-50/80 px-5 py-3 dark:bg-zinc-900">
+          {error ? <span className="text-sm text-red-600 dark:text-red-400">{error}</span> : <span className="text-[13px] text-zinc-500">有未保存的修改</span>}
+          <div className="ml-auto flex gap-2">
+            <Button size="sm" disabled={!dirty || saving} onClick={() => (setDraft(saved), setError(''))}>
+              放弃修改
+            </Button>
+            <Button size="sm" variant="primary" busy={saving} disabled={!dirty} onClick={save}>
+              保存
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Adding a service: a preset, pasted JSON or typed by hand. */
+export function NewService() {
+  const { refresh } = useStatus();
+  const { reload } = useUnified();
+  const toast = useToast();
+  const [draft, setDraft] = useState<Draft>(draftOf(blank));
+  const [preset, setPreset] = useState<Preset | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   function pick(p: Preset | null) {
     setPreset(p);
-    if (!p) {
-      setForm(blank);
-      setArgsText('');
-      setEnv([]);
-      return;
-    }
-    setForm({ ...blank, name: p.id, command: p.command, mode: p.stateful ? 'per-session' : 'shared' });
-    setArgsText(p.args.join('\n'));
-    setEnv((p.env ?? []).map((key) => ({ key, value: '', stored: false })));
+    if (!p) return setDraft(draftOf(blank));
+    setDraft({
+      form: { ...blank, name: p.id, command: p.command, mode: p.stateful ? 'per-session' : 'shared' },
+      args: p.args.join('\n'),
+      env: (p.env ?? []).map((key) => ({ key, value: '', stored: false })),
+    });
   }
 
   function applyPaste() {
     try {
       const parsed = parsePasted(pasteText);
-      load({ ...parsed, name: editing ? undefined : parsed.name });
+      setDraft((d) => ({
+        form: { ...d.form, ...parsed, name: parsed.name ?? d.form.name },
+        args: (parsed.args ?? []).join('\n'),
+        env: Object.entries(parsed.env ?? {}).map(([key, v]) => ({ key, value: v ?? '', stored: false })),
+      }));
       setPreset(null);
       setPasteOpen(false);
       setPasteText('');
@@ -97,22 +198,15 @@ export function ServiceFormPage({ name }: { name?: string }) {
 
   async function submit() {
     setError('');
-    const out: ServiceForm = {
-      ...form,
-      name: form.name.trim(),
-      command: form.command.trim(),
-      args: argsText.split('\n').map((a) => a.trim()).filter(Boolean),
-      env: Object.fromEntries(env.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.stored && !r.value ? null : r.value])),
-    };
+    const out = formOf(draft);
     if (!out.name) return setError('请填写服务名称');
     if (!out.command) return setError('请填写启动命令');
     setSaving(true);
     try {
-      if (editing) await api.save(out);
-      else await api.create(out);
-      await refresh();
-      toast(editing ? `已保存 ${out.name}，下次调用按新配置启动` : `已添加 ${out.name}`);
-      go('services', out.name);
+      await api.create(out);
+      await Promise.all([refresh(), reload()]);
+      toast(`已添加 ${out.name}`);
+      go(['mcp', out.name]);
     } catch (e) {
       setError(firstLine((e as Error).message));
     } finally {
@@ -120,200 +214,214 @@ export function ServiceFormPage({ name }: { name?: string }) {
     }
   }
 
-  const stateful = preset?.stateful;
-  const urlPreview = useMemo(() => (form.name ? `/s/${form.name}` : ''), [form.name]);
-
+  const set = (f: Partial<ServiceForm>) => setDraft({ ...draft, form: { ...draft.form, ...f } });
   return (
-    <div className="flex min-h-full flex-col">
-      <PageHeader back={() => (editing ? go('services', name!) : go('mcp'))} title={editing ? `编辑 ${name}` : '添加 MCP 服务'} />
-
-      <div className="mx-auto w-full max-w-[960px] flex-1 px-8 py-6">
-        {loading ? (
-          <p className="py-16 text-center text-sm text-zinc-400">正在读取配置…</p>
-        ) : (
-          <Card className="p-6">
-            {!editing && (
-              <>
-                <h2 className="mb-3 text-sm font-medium text-zinc-800 dark:text-zinc-200">预设服务</h2>
-                <div className="flex flex-wrap gap-2.5">
-                  <Chip active={preset === null} onClick={() => pick(null)}>
-                    自定义
-                  </Chip>
-                  {presets.map((p) => (
-                    <Chip key={p.id} active={preset?.id === p.id} onClick={() => pick(p)}>
-                      {p.name}
-                    </Chip>
-                  ))}
-                </div>
-              </>
-            )}
-            <div className={cx('flex items-center gap-2 text-sm text-zinc-500', !editing && 'mt-4')}>
-              <Lightbulb className="size-4 text-amber-500" />
-              <span>{preset?.hint ?? '写法与客户端 mcpServers 里的条目相同；也可以直接粘贴那段 JSON。'}</span>
-              <button onClick={() => setPasteOpen((v) => !v)} className="ml-auto inline-flex items-center gap-1.5 text-blue-600 hover:underline dark:text-blue-400">
-                <ClipboardPaste className="size-4" />
-                粘贴 JSON
-              </button>
-            </div>
-            {pasteOpen && (
-              <div className="mt-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
-                <Textarea
-                  rows={6}
-                  autoFocus
-                  placeholder={'"context7": {\n  "command": "npx",\n  "args": ["-y", "@upstash/context7-mcp"]\n}'}
-                  value={pasteText}
-                  onChange={(e) => setPasteText(e.target.value)}
-                />
-                <div className="mt-2 flex justify-end gap-2">
-                  <Button size="sm" onClick={() => setPasteOpen(false)}>
-                    取消
-                  </Button>
-                  <Button size="sm" variant="primary" onClick={applyPaste}>
-                    填入表单
-                  </Button>
-                </div>
-              </div>
-            )}
-            {stateful && form.mode !== 'per-session' && (
-              <div className="mt-3 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
-                <TriangleAlert className="mt-1 size-4 shrink-0" />
-                这个服务持有浏览器状态，建议选「按会话」运行；共享时所有会话会共用同一个浏览器。
-              </div>
-            )}
-
-            <div className="my-7 flex flex-col items-center gap-2">
-              <ServiceAvatar name={form.name} size="lg" />
-              {urlPreview && <span className="font-mono text-xs text-zinc-400">{urlPreview}</span>}
-            </div>
-
-            <div className="grid grid-cols-2 gap-x-6 gap-y-5">
-              <Field label="服务名称" hint="客户端里看到的 MCP 名称，也是接入地址的一部分；保存后不能改">
-                <Input value={form.name} disabled={editing} placeholder="例如：context7" onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </Field>
-              <Field label="工作目录" hint="留空时为用户目录">
-                <Input value={form.cwd} placeholder="可选" onChange={(e) => setForm({ ...form, cwd: e.target.value })} />
-              </Field>
-              <Field label="启动命令" className="col-span-2" hint="npx、uvx、node，或可执行文件的完整路径。Windows 上原样写 cmd /c npx … 也可以">
-                <Input className="font-mono" value={form.command} placeholder="npx" onChange={(e) => setForm({ ...form, command: e.target.value })} />
-              </Field>
-              <Field label="参数" className="col-span-2" hint="每行一个参数">
-                <Textarea rows={3} value={argsText} placeholder={'-y\n@upstash/context7-mcp'} onChange={(e) => setArgsText(e.target.value)} />
-              </Field>
-              <div className="col-span-2">
-                <span className="mb-2 block text-sm font-medium text-zinc-800 dark:text-zinc-200">环境变量</span>
-                <div className="space-y-2">
-                  {env.map((row, i) => (
-                    <div key={i} className="flex gap-2">
-                      <Input
-                        className="w-[38%] font-mono"
-                        placeholder="KEY"
-                        value={row.key}
-                        onChange={(e) => setEnv(env.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)))}
-                      />
-                      <Input
-                        className="flex-1 font-mono"
-                        type="password"
-                        autoComplete="off"
-                        placeholder={row.stored ? '已保存，不显示；留空则保持不变' : '值'}
-                        value={row.value}
-                        onChange={(e) => setEnv(env.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
-                      />
-                      <IconButton label="删除变量" className="size-11" onClick={() => setEnv(env.filter((_, j) => j !== i))}>
-                        <X className="size-4" />
-                      </IconButton>
-                    </div>
-                  ))}
-                  <Button className="h-9" variant="ghost" icon={<Plus className="size-4" />} onClick={() => setEnv([...env, { key: '', value: '', stored: false }])}>
-                    添加变量
-                  </Button>
-                </div>
-                <span className="mt-1.5 block text-xs text-zinc-500">只传给这个服务；值保存在本机配置文件里，管理页不会再显示。</span>
-              </div>
-            </div>
-
-            <div className="my-7 h-px bg-zinc-100 dark:bg-zinc-800" />
-            <h2 className="mb-4 text-sm font-medium text-zinc-800 dark:text-zinc-200">运行方式</h2>
-            <div className="mb-5 flex items-center gap-4">
-              <Segmented<string>
-                value={form.mode || 'shared'}
-                onChange={(v) => setForm({ ...form, mode: v })}
-                options={[
-                  { value: 'shared', label: '共享' },
-                  { value: 'per-session', label: '按会话' },
-                ]}
-              />
-              <span className="text-xs leading-5 text-zinc-500">
-                {form.mode === 'per-session'
-                  ? '每个会话一个实例，保留各自的状态（浏览器、连接）；第一次调用时启动，会话结束就回收'
-                  : '所有会话共用一份进程，适合不保存会话状态的服务'}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-5">
-              <Field label="空闲回收" hint="没有请求后多久结束进程，下次调用自动重启">
-                <select
-                  value={form.idleTimeout}
-                  onChange={(e) => setForm({ ...form, idleTimeout: e.target.value })}
-                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-3 focus:ring-blue-500/15 dark:border-zinc-700 dark:bg-zinc-900"
-                >
-                  {idleOptions(form.mode).some((o) => o.value === form.idleTimeout) ? null : <option value={form.idleTimeout}>{form.idleTimeout}</option>}
-                  {idleOptions(form.mode).map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="内存上限" hint="整棵进程树的上限，超出时立即终止；留空不限制">
-                <Input value={form.memoryLimit} placeholder="例如：1GB" onChange={(e) => setForm({ ...form, memoryLimit: e.target.value })} />
-              </Field>
-            </div>
-            <div className="mt-5 space-y-3">
-              <Toggle
-                checked={form.flatten}
-                onChange={(v) => setForm({ ...form, flatten: v })}
-                title="npm 包直接用 node 启动"
-                desc="首次安装到 MCPcell 的包缓存并锁定版本，之后不经过 npx：少一个约 130 MB 的进程，启动也快得多"
-              />
-              <Toggle
-                checked={form.lean}
-                onChange={(v) => setForm({ ...form, lean: v })}
-                title="精简 Node 内存"
-                desc="给 Node.js 服务加上 --max-semi-space-size=1 --optimize-for-size，实测私有提交少 27%–38%，功能不变"
-              />
-              <Toggle
-                checked={form.catalog}
-                onChange={(v) => setForm({ ...form, catalog: v })}
-                title="缓存能力目录"
-                desc="连接和列出工具时直接用缓存回答，不启动进程。工具列表会在运行中变化、又不发通知的服务才需要关掉"
-              />
-            </div>
-          </Card>
-        )}
-      </div>
-
-      <footer className="sticky bottom-0 z-20 border-t border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
-        <div className="mx-auto flex w-full max-w-[960px] items-center gap-3 px-8 py-4">
-          {error && <span className="text-sm text-red-600 dark:text-red-400">{error}</span>}
-          <div className="ml-auto flex gap-3">
-            <Button onClick={() => (editing ? go('services', name!) : go('mcp'))}>取消</Button>
-            <Button variant="primary" busy={saving} disabled={loading} icon={editing ? <Check className="size-4" /> : <Plus className="size-4" />} onClick={submit}>
-              {editing ? '保存' : '添加'}
-            </Button>
-          </div>
+    <>
+      <Card className="p-5">
+        <div className="mb-3 text-sm font-medium">从预设开始</div>
+        <div className="flex flex-wrap gap-2">
+          <Chip active={preset === null} onClick={() => pick(null)}>
+            自定义
+          </Chip>
+          {presets.map((p) => (
+            <Chip key={p.id} active={preset?.id === p.id} onClick={() => pick(p)}>
+              {p.name}
+            </Chip>
+          ))}
         </div>
-      </footer>
+        <div className="mt-4 flex items-center gap-2 text-sm text-zinc-500">
+          <Lightbulb className="size-4 shrink-0 text-amber-500" />
+          <span>{preset?.hint ?? '写法与 Agent 配置里 mcpServers 的条目相同；也可以直接粘贴那段 JSON。'}</span>
+          <button onClick={() => setPasteOpen((v) => !v)} className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-blue-600 hover:underline dark:text-blue-400">
+            <ClipboardPaste className="size-4" />
+            粘贴 JSON
+          </button>
+        </div>
+        {pasteOpen && (
+          <div className="mt-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
+            <Textarea
+              rows={6}
+              autoFocus
+              placeholder={'"context7": {\n  "command": "npx",\n  "args": ["-y", "@upstash/context7-mcp"]\n}'}
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <Button size="sm" onClick={() => setPasteOpen(false)}>
+                取消
+              </Button>
+              <Button size="sm" onClick={applyPaste}>
+                填入
+              </Button>
+            </div>
+          </div>
+        )}
+        {preset?.stateful && draft.form.mode !== 'per-session' && (
+          <div className="mt-3 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+            <TriangleAlert className="mt-1 size-4 shrink-0" />
+            这个服务持有浏览器状态，建议选「按会话」运行；共享时所有会话会共用同一个浏览器。
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-5">
+        <Field label="服务名称" hint="Agent 里看到的 MCP 名称，也是接入地址的一部分；保存后不能改">
+          <Input value={draft.form.name} placeholder="例如：context7" onChange={(e) => set({ name: e.target.value })} />
+        </Field>
+        <div className="mt-5">
+          <LaunchFields draft={draft} setDraft={setDraft} />
+        </div>
+      </Card>
+
+      <Card className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        <RunFields form={draft.form} set={set} />
+        <div className="px-5 py-4">
+          <Toggles form={draft.form} set={set} />
+        </div>
+      </Card>
+
+      <div className="flex items-center gap-3">
+        {error && <span className="text-sm text-red-600 dark:text-red-400">{error}</span>}
+        <div className="ml-auto flex gap-2">
+          <Button onClick={() => go(['mcp'])}>取消</Button>
+          <Button variant="primary" busy={saving} icon={<Plus className="size-4" />} onClick={submit}>
+            添加
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SettingRow({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[112px_minmax(0,1fr)] items-start gap-4 px-5 py-3.5">
+      <div className="pt-1.5 text-sm text-zinc-500">{label}</div>
+      <div className="min-w-0">
+        {children}
+        {hint && <div className="mt-1.5 text-xs leading-5 text-zinc-400">{hint}</div>}
+      </div>
     </div>
   );
 }
 
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function RunFields({ form, set }: { form: ServiceForm; set: (f: Partial<ServiceForm>) => void }) {
+  return (
+    <>
+      <SettingRow
+        label="运行方式"
+        hint={
+          form.mode === 'per-session'
+            ? '每个会话一个实例，保留各自的状态（浏览器、连接）；第一次调用时启动，会话结束就回收'
+            : '所有会话共用一份进程，适合不保存会话状态的服务'
+        }
+      >
+        <Segmented<string>
+          value={form.mode || 'shared'}
+          onChange={(v) => set({ mode: v })}
+          options={[
+            { value: 'shared', label: '共享' },
+            { value: 'per-session', label: '按会话' },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow label="空闲回收" hint="没有请求后多久结束进程，下次调用自动重启">
+        <select
+          value={form.idleTimeout}
+          onChange={(e) => set({ idleTimeout: e.target.value })}
+          className="h-9 w-56 rounded-lg border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-3 focus:ring-blue-500/15 dark:border-zinc-700 dark:bg-zinc-900"
+        >
+          {idleOptions(form.mode).some((o) => o.value === form.idleTimeout) ? null : <option value={form.idleTimeout}>{form.idleTimeout}</option>}
+          {idleOptions(form.mode).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow label="内存上限" hint="整棵进程树的上限，超出时立即终止；留空不限制">
+        <Input className="!h-9 w-56" value={form.memoryLimit} placeholder="例如：1GB" onChange={(e) => set({ memoryLimit: e.target.value })} />
+      </SettingRow>
+    </>
+  );
+}
+
+function LaunchFields({ draft, setDraft }: { draft: Draft; setDraft: (d: Draft) => void }) {
+  const { form, env } = draft;
+  const setEnv = (rows: EnvRow[]) => setDraft({ ...draft, env: rows });
+  return (
+    <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+      <Field label="启动命令" className="col-span-2" hint="npx、uvx、node，或可执行文件的完整路径。Windows 上原样写 cmd /c npx … 也可以">
+        <Input className="font-mono" value={form.command} placeholder="npx" onChange={(e) => setDraft({ ...draft, form: { ...form, command: e.target.value } })} />
+      </Field>
+      <Field label="参数" className="col-span-2" hint="每行一个参数">
+        <Textarea rows={3} value={draft.args} placeholder={'-y\n@upstash/context7-mcp'} onChange={(e) => setDraft({ ...draft, args: e.target.value })} />
+      </Field>
+      <div className="col-span-2">
+        <span className="mb-2 block text-sm font-medium text-zinc-800 dark:text-zinc-200">环境变量</span>
+        <div className="space-y-2">
+          {env.map((row, i) => (
+            <div key={i} className="flex gap-2">
+              <Input className="w-[38%] font-mono" placeholder="KEY" value={row.key} onChange={(e) => setEnv(env.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)))} />
+              <Input
+                className="flex-1 font-mono"
+                type="password"
+                autoComplete="off"
+                placeholder={row.stored ? '已保存，不显示；留空则保持不变' : '值'}
+                value={row.value}
+                onChange={(e) => setEnv(env.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
+              />
+              <IconButton label="删除变量" className="size-10" onClick={() => setEnv(env.filter((_, j) => j !== i))}>
+                <X className="size-4" />
+              </IconButton>
+            </div>
+          ))}
+          <Button size="sm" variant="ghost" icon={<Plus className="size-4" />} onClick={() => setEnv([...env, { key: '', value: '', stored: false }])}>
+            添加变量
+          </Button>
+        </div>
+        <span className="mt-1.5 block text-xs text-zinc-500">只传给这个服务；值保存在本机配置文件里，管理页不会再显示。</span>
+      </div>
+      <Field label="工作目录" className="col-span-2" hint="留空时为用户目录">
+        <Input value={form.cwd} placeholder="可选" onChange={(e) => setDraft({ ...draft, form: { ...form, cwd: e.target.value } })} />
+      </Field>
+    </div>
+  );
+}
+
+function Toggles({ form, set }: { form: ServiceForm; set: (f: Partial<ServiceForm>) => void }) {
+  return (
+    <div className="mt-5 space-y-2.5">
+      <Toggle
+        checked={form.flatten}
+        onChange={(v) => set({ flatten: v })}
+        title="npm 包直接用 node 启动"
+        desc="首次安装到 MCPcell 的包缓存并锁定版本，之后不经过 npx：少一个约 130 MB 的进程，启动也快得多"
+      />
+      <Toggle
+        checked={form.lean}
+        onChange={(v) => set({ lean: v })}
+        title="精简 Node 内存"
+        desc="给 Node.js 服务加上 --max-semi-space-size=1 --optimize-for-size，实测私有提交少 27%–38%，功能不变"
+      />
+      <Toggle
+        checked={form.catalog}
+        onChange={(v) => set({ catalog: v })}
+        title="缓存能力目录"
+        desc="连接和列出工具时直接用缓存回答，不启动进程。工具列表会在运行中变化、又不发通知的服务才需要关掉"
+      />
+    </div>
+  );
+}
+
+function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       onClick={onClick}
       className={cx(
         'h-8 rounded-lg border px-3 text-[13px] transition-colors',
         active
-          ? 'border-blue-600 bg-blue-600 font-medium text-white shadow-sm shadow-blue-600/20'
+          ? 'border-zinc-900 bg-zinc-900 font-medium text-white dark:border-white dark:bg-white dark:text-zinc-900'
           : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300',
       )}
     >

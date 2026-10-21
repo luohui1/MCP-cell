@@ -59,19 +59,6 @@ export function brandOf(client: string): string {
   return table.find(([k]) => c.includes(k))?.[1] ?? '';
 }
 
-export function Tile({ children, size = 'md' }: { children: React.ReactNode; size?: 'sm' | 'md' | 'lg' }) {
-  return (
-    <div
-      className={cx(
-        'grid shrink-0 place-items-center border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-zinc-700 dark:bg-zinc-900',
-        size === 'lg' ? 'size-20 rounded-3xl' : size === 'sm' ? 'size-10 rounded-xl' : 'size-12 rounded-xl',
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
 const palette = [
   'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300',
   'bg-violet-50 text-violet-600 dark:bg-violet-950 dark:text-violet-300',
@@ -103,13 +90,5 @@ export function ServiceAvatar({ name, size = 'md' }: { name: string; size?: keyo
     <span className={cx('grid shrink-0 place-items-center font-semibold ring-1 ring-black/[0.04] ring-inset', palette[hash(name) % palette.length], avatarSize[size])}>
       {name ? letter : '+'}
     </span>
-  );
-}
-
-export function ClientAvatar({ client }: { client: string }) {
-  return (
-    <Tile>
-      <BrandMark brand={brandOf(client)} className="size-6" />
-    </Tile>
   );
 }

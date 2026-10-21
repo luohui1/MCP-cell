@@ -31,6 +31,7 @@ export interface Service {
   idleTimeoutSec: number;
   memoryLimit?: number;
   starts: number;
+  failures?: number; // consecutive failed starts; 0 once one succeeds
   direct: boolean;
   lean: boolean;
   package?: { name: string; version: string; installedAt: string };
@@ -42,6 +43,7 @@ export interface Service {
   stderrTail?: string;
   instance?: InstanceSnapshot; // a shared service's instance
   instances?: (InstanceSnapshot & { session: string })[]; // a per-session service's instances
+  of?: string; // a run- variant: the configured service it belongs to
 }
 
 /** Every running instance of a service, shared or per session. */
