@@ -245,3 +245,88 @@ export const unified = {
   load: () => call<{ agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus }>('GET', '/api/mcp'),
   add: (client: string, row: string) => call<{ service: string }>('POST', `/api/agents/${encodeURIComponent(client)}/add`, { row }),
 };
+
+// Agent skills (internal/skills): one copy in MCPcell's source directory,
+// linked into each agent's skill directory.
+
+export interface SkillLocation {
+  id: string;
+  name: string;
+  path: string;
+  agents: string[];
+  note?: string;
+  exists: boolean;
+  installed: boolean;
+}
+
+export interface SkillDiff {
+  added?: string[];
+  removed?: string[];
+  changed?: string[];
+}
+
+export type SkillMatch = 'same' | 'newer' | 'older' | 'differs';
+
+export interface SkillCopy {
+  location: string; // a location ID, or "mcpcell" for the source
+  path: string;
+  kind: 'dir' | 'linked' | 'link' | 'broken';
+  target?: string;
+  match?: SkillMatch;
+  variant?: string;
+  files: number;
+  newest: string;
+  managed?: boolean;
+  changed?: boolean;
+  diff?: SkillDiff;
+  error?: string;
+}
+
+export type SkillState = 'synced' | 'same' | 'differs' | 'single' | 'external' | 'source';
+
+export interface SkillInfo {
+  name: string;
+  description?: string;
+  state: SkillState;
+  variants: number;
+  reference?: string;
+  from?: string;
+  copies: SkillCopy[];
+}
+
+export interface SkillStatus {
+  source: string;
+  locations: SkillLocation[];
+  skills: SkillInfo[];
+}
+
+export interface SkillAction {
+  skill: string;
+  location: string;
+  path?: string;
+  do: 'import' | 'update-source' | 'link' | 'replace' | 'update' | 'restore' | 'ok' | 'skip' | 'conflict';
+  copy?: boolean;
+  from?: string;
+  reason?: string;
+  variant?: string;
+  match?: SkillMatch;
+  diff?: SkillDiff;
+  done?: boolean;
+  error?: string;
+  backup?: string;
+}
+
+export interface SkillResult {
+  actions: SkillAction[];
+  dryRun?: boolean;
+}
+
+export const SOURCE = 'mcpcell';
+
+export const skillsApi = {
+  load: () => call<SkillStatus>('GET', '/api/skills'),
+  sync: (req: { names?: string[]; all?: boolean; to?: string[]; from?: string; copy?: boolean; dryRun?: boolean }) =>
+    call<SkillResult>('POST', '/api/skills/sync', req),
+  restore: (req: { names?: string[]; all?: boolean; locations?: string[]; dryRun?: boolean }) =>
+    call<SkillResult>('POST', '/api/skills/restore', req),
+};

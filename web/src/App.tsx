@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Activity, Bot, Layers, Settings as SettingsIcon } from 'lucide-react';
+import { Activity, Bot, Layers, Puzzle, Settings as SettingsIcon } from 'lucide-react';
 import { api, instancesOf, Unauthorized, type Status } from './api';
 import { bytes, since } from './format';
 import { Logo } from './icons';
@@ -11,6 +11,7 @@ import { ServiceDetail } from './pages/ServiceDetail';
 import { ServiceFormPage } from './pages/ServiceForm';
 import { SessionsPage } from './pages/Sessions';
 import { SettingsPage } from './pages/Settings';
+import { SkillsPage } from './pages/Skills';
 
 interface StatusCtx {
   status: Status;
@@ -80,6 +81,8 @@ function Routes() {
     case 'agents':
     case 'clients':
       return <AgentsPage />;
+    case 'skills':
+      return <SkillsPage />;
     case 'sessions':
       return <SessionsPage />;
     case 'settings':
@@ -117,6 +120,7 @@ function Sidebar({ status, offline }: { status: Status; offline: boolean }) {
       </div>
       <nav className="space-y-0.5 px-3 pt-1">
         <NavItem icon={<Layers className="size-4" />} label="MCP" active={page === 'mcp' || page === 'services'} onClick={() => go('mcp')} />
+        <NavItem icon={<Puzzle className="size-4" />} label="Skill" active={page === 'skills'} onClick={() => go('skills')} />
         <NavItem icon={<Bot className="size-4" />} label="Agents" active={page === 'agents' || page === 'clients'} onClick={() => go('agents')} />
         <NavItem icon={<Activity className="size-4" />} label="会话" count={status.sessions.length} active={page === 'sessions'} onClick={() => go('sessions')} />
       </nav>

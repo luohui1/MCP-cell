@@ -141,7 +141,7 @@ export function GroupHeader({
   const body = (
     <>
       {onToggle && <ChevronRight className={cx('size-4 text-zinc-400 transition-transform', open && 'rotate-90')} />}
-      <span className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{title}</span>
+      <span className="shrink-0 text-sm font-semibold whitespace-nowrap text-zinc-800 dark:text-zinc-100">{title}</span>
       {count !== undefined && <span className="text-sm text-zinc-400 tabular-nums">{count}</span>}
       {hint && <span className="ml-1 truncate text-[13px] text-zinc-400">{hint}</span>}
     </>
