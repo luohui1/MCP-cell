@@ -24,6 +24,7 @@ import (
 	"github.com/luohui1/MCP-cell/internal/clients"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/proc"
+	"github.com/luohui1/MCP-cell/internal/skills"
 )
 
 // The status page is built from web/ (npm run build) into ui/dist.
@@ -53,6 +54,8 @@ type Options struct {
 	// Tray: the daemon started with its tray icon shown. NoTray keeps the
 	// icon hidden whatever the interface choice (daemon --no-tray).
 	Tray, NoTray bool
+	// Skills manages agent skills for the Skill page.
+	Skills *skills.Manager
 	// Wrapper is the installed mcpcell-run. Takeovers keep the entry's
 	// command and wrap it; without it they point entries at /s/<name>.
 	Wrapper string
@@ -110,6 +113,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/agents/{client}/add", s.api(s.handleAddToAgent))
 	mux.HandleFunc("POST /api/clients/{client}/attach", s.api(s.handleAttach))
 	mux.HandleFunc("POST /api/clients/{client}/restore", s.api(s.handleRestore))
+	mux.HandleFunc("GET /api/skills", s.api(s.handleSkills))
+	mux.HandleFunc("POST /api/skills/sync", s.api(s.handleSkillSync))
+	mux.HandleFunc("POST /api/skills/restore", s.api(s.handleSkillRestore))
 	mux.HandleFunc("GET /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/shutdown", s.api(s.handleShutdown))

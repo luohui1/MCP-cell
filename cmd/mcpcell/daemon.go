@@ -21,6 +21,7 @@ import (
 	"github.com/luohui1/MCP-cell/internal/npmcache"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/registry"
+	"github.com/luohui1/MCP-cell/internal/skills"
 )
 
 func runDaemon(args []string) error {
@@ -98,7 +99,7 @@ func runDaemon(args []string) error {
 	srv = httpd.New(p, httpd.Options{Port: cfg.Port, Token: token, Version: version,
 		ConfigPath: registry.ConfigPath(home), Home: home, MaxInstances: cfg.Limits.MaxInstances, Log: log,
 		Clients: clients.All(userHome, filepath.Join(home, "backups")), Takeovers: takeovers, Exe: exe, Shutdown: stop,
-		Desktop: shell, Tray: tray, NoTray: *noTray, Wrapper: wrapperNextTo(exe)})
+		Desktop: shell, Tray: tray, NoTray: *noTray, Wrapper: wrapperNextTo(exe), Skills: skills.New(home, userHome)})
 
 	started := time.Now()
 	if err := registry.WriteDaemonInfo(home, registry.DaemonInfo{PID: os.Getpid(), Port: cfg.Port,
