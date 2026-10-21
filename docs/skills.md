@@ -2,6 +2,8 @@
 
 日期：2026-10-20。对应代码：`internal/skills`、`cmd/mcpcell/skills.go`、`internal/httpd/skills.go`、管理页 `web/src/pages/Skills.tsx`。
 
+> 2026-10-21 起管理页上的 Skill 页**暂时隐藏**（导航和首页都不显示；「设置 › 诊断」里有开关，默认关）。`mcpcell skills` 命令和 `/api/skills` 照常可用。
+
 一句话：**每个 Skill 只在 MCPcell 的来源目录存一份，各 Agent 的 Skill 目录用目录链接指向它；能看出各处是否一致，改动前先备份，随时逐字节还原。**
 
 ## 1. 问题
