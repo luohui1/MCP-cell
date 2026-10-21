@@ -406,13 +406,10 @@ impl Session {
     /// Runs the command directly and replays the agent's initialize to it, as
     /// attach_daemon does for a daemon.
     fn attach_child(&self) -> Result<Source, String> {
-        let mut child = Command::new(resolve(&self.argv[0]))
-            .args(&self.argv[1..])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        let mut cmd = Command::new(resolve(&self.argv[0]));
+        cmd.args(&self.argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        no_window(&mut cmd);
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         let (mut input, output) = (child.stdin.take().unwrap(), child.stdout.take().unwrap());
         let mut reader = BufReader::new(output);
         input.write_all(&self.first).map_err(|e| e.to_string())?;
@@ -639,6 +636,7 @@ fn run_direct(argv: &[String], replay: Option<Vec<u8>>) -> i32 {
     let mut cmd = Command::new(resolve(&argv[0]));
     cmd.args(&argv[1..]).stdout(Stdio::inherit()).stderr(Stdio::inherit());
     cmd.stdin(if replay.is_some() { Stdio::piped() } else { Stdio::inherit() });
+    no_window(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -831,6 +829,18 @@ fn detach(cmd: &mut Command, _breakaway: bool) {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
 }
+
+/// Keeps a console server (cmd, node, python) from opening a terminal window.
+/// This program has no console of its own, so without the flag Windows gives
+/// each such child a new, visible one; agents start servers hidden.
+#[cfg(windows)]
+fn no_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(windows))]
+fn no_window(_cmd: &mut Command) {}
 
 #[cfg(test)]
 mod tests {

@@ -23,8 +23,8 @@ CREATE_NO_WINDOW = 0x08000000
 
 
 def tiny_server():
-    """A stdio MCP server: echo, slow (sleeps), pid."""
-    tools = [{'name': n, 'inputSchema': {'type': 'object'}} for n in ('echo', 'slow', 'pid')]
+    """A stdio MCP server: echo, slow (sleeps), pid, console (its console window handle, 0 if none)."""
+    tools = [{'name': n, 'inputSchema': {'type': 'object'}} for n in ('echo', 'slow', 'pid', 'console')]
     for line in sys.stdin:
         m = json.loads(line)
         if 'id' not in m:
@@ -38,7 +38,11 @@ def tiny_server():
             name, args = m['params']['name'], m['params'].get('arguments', {})
             if name == 'slow':
                 time.sleep(args.get('seconds', 3))
-            text = {'echo': args.get('text', ''), 'slow': 'done', 'pid': str(os.getpid())}[name]
+            if name == 'console':
+                import ctypes
+                text = str(ctypes.windll.kernel32.GetConsoleWindow() or 0)
+            else:
+                text = {'echo': args.get('text', ''), 'slow': 'done', 'pid': str(os.getpid())}[name]
             res = {'content': [{'type': 'text', 'text': text}]}
         else:
             res = {}
@@ -191,6 +195,7 @@ def main():
     out = subprocess.run(['powershell', '-NoProfile', '-Command', f'(Get-CimInstance Win32_Process -Filter "ProcessId={pid}").ParentProcessId'],
                          capture_output=True, text=True).stdout.strip()
     check('server now runs under the wrapper', out == str(a.p.pid), f'parent {out}, wrapper {a.p.pid}')
+    check('server run directly opens no terminal window', a.call('console') == '0')
 
     # 4. The agent is done.
     a.p.stdin.close()
