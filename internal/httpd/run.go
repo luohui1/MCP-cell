@@ -379,6 +379,7 @@ func (s *Server) variantService(h runHeader) (name, mode string, ok bool) {
 	v.Env, v.Mode = env, mode
 	key := clients.ServiceKey(v.Command, v.Args, v.Env, v.Cwd) + "\x00" + mode
 	name = "run-" + slug(base) + "-" + shortHash(key)[:6]
+	s.variantOf.Store(name, base)
 	if !s.pool.Has(name) {
 		s.pool.Put(name, &v)
 		s.opts.Log.Info("run: entry differs from its configured service", "service", name, "configured", base, "mode", mode,

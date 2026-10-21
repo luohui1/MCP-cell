@@ -1128,8 +1128,9 @@ type ServiceStatus struct {
 	IdleTimeoutSec int                `json:"idleTimeoutSec"`
 	MemoryLimit    uint64             `json:"memoryLimit,omitempty"`
 	Starts         int                `json:"starts"`
-	Direct         bool               `json:"direct"` // running as node <bin>, without npx
-	Lean           bool               `json:"lean"`   // memory-saving node flags enabled
+	Failures       int                `json:"failures,omitempty"` // consecutive failed starts; 0 once one succeeds
+	Direct         bool               `json:"direct"`             // running as node <bin>, without npx
+	Lean           bool               `json:"lean"`               // memory-saving node flags enabled
 	Package        *PackageInfo       `json:"package,omitempty"`
 	Catalog        *CatalogInfo       `json:"catalog,omitempty"`
 	Note           string             `json:"note,omitempty"`
@@ -1161,7 +1162,7 @@ func (p *Pool) Status() []ServiceStatus {
 			IdleTimeoutSec: int(e.def.Idle().Seconds()),
 			MemoryLimit:    uint64(e.def.MemoryLimit),
 			Lean:           e.def.LeanEnabled(),
-			Starts:         e.starts, Note: e.note, LastError: e.lastErr, StderrTail: e.lastStderr,
+			Starts:         e.starts, Failures: e.failures, Note: e.note, LastError: e.lastErr, StderrTail: e.lastStderr,
 		}
 		if !e.def.PerSession() && p.perSessionLocked(e) {
 			st.Mode = registry.ModePerSession

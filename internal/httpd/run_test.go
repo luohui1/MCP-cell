@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/luohui1/MCP-cell/internal/jsonrpc"
-	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/registry"
 	"github.com/luohui1/MCP-cell/internal/testutil/fakemcp"
 )
@@ -315,7 +314,7 @@ func TestRunHandsBackAServerThatFailsToStart(t *testing.T) {
 	}
 }
 
-func (h *harness) service(t *testing.T, name string) *pool.ServiceStatus {
+func (h *harness) service(t *testing.T, name string) *serviceStatus {
 	t.Helper()
 	for _, s := range h.status(t).Services {
 		if s.Name == name {
@@ -353,7 +352,7 @@ func TestRunEntryEditedAfterTakeover(t *testing.T) {
 	if got := a.call("getenv", map[string]any{"text": "IMG_API_KEY"}); got != "new" {
 		t.Fatalf("the shared instance has IMG_API_KEY=%q, want the agent's", got)
 	}
-	var variants []pool.ServiceStatus
+	var variants []serviceStatus
 	for _, s := range h.status(t).Services {
 		if strings.HasPrefix(s.Name, "run-img-") {
 			variants = append(variants, s)
@@ -365,6 +364,9 @@ func TestRunEntryEditedAfterTakeover(t *testing.T) {
 	for _, s := range variants {
 		if s.Mode != registry.ModeShared || s.IdleTimeoutSec != 420 {
 			t.Fatalf("%s runs %s with idle %ds, want the configured service's way", s.Name, s.Mode, s.IdleTimeoutSec)
+		}
+		if s.Of != "img" { // the page lists it under the service it varies
+			t.Fatalf("%s is reported as a variant of %q", s.Name, s.Of)
 		}
 	}
 	if s := h.service(t, "img"); s.Starts != 0 {

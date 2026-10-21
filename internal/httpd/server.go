@@ -75,6 +75,9 @@ type Server struct {
 	// daemon takes over (install), runStop otherwise. Wrappers are told which.
 	leaving string
 	tray    bool // the tray icon is shown
+	// variantOf maps an in-memory run- service to the configured service it
+	// is a variant of (variantService), so the page shows it under that one.
+	variantOf sync.Map
 
 	cfgMu  sync.Mutex // serializes config.json edits
 	takeMu sync.Mutex // serializes client config takeovers
@@ -256,24 +259,41 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 type statusResponse struct {
-	Version      string               `json:"version"`
-	PID          int                  `json:"pid"`
-	Port         int                  `json:"port"`
-	StartedAt    time.Time            `json:"startedAt"`
-	BaseURL      string               `json:"baseUrl"`
-	Token        string               `json:"token"`
-	ConfigPath   string               `json:"configPath"`
-	MaxInstances int                  `json:"maxInstances"`
-	Daemon       proc.Usage           `json:"daemon"`
-	Services     []pool.ServiceStatus `json:"services"`
-	Sessions     []sessionInfo        `json:"sessions"`
+	Version      string          `json:"version"`
+	PID          int             `json:"pid"`
+	Port         int             `json:"port"`
+	StartedAt    time.Time       `json:"startedAt"`
+	BaseURL      string          `json:"baseUrl"`
+	Token        string          `json:"token"`
+	ConfigPath   string          `json:"configPath"`
+	MaxInstances int             `json:"maxInstances"`
+	Daemon       proc.Usage      `json:"daemon"`
+	Services     []serviceStatus `json:"services"`
+	Sessions     []sessionInfo   `json:"sessions"`
+}
+
+type serviceStatus struct {
+	pool.ServiceStatus
+	Of string `json:"of,omitempty"` // the configured service a run- variant belongs to
+}
+
+func (s *Server) services() []serviceStatus {
+	all := s.pool.Status()
+	out := make([]serviceStatus, len(all))
+	for i, st := range all {
+		out[i].ServiceStatus = st
+		if base, ok := s.variantOf.Load(st.Name); ok {
+			out[i].Of = base.(string)
+		}
+	}
+	return out
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, statusResponse{
 		Version: s.opts.Version, PID: pid(), Port: s.opts.Port, StartedAt: s.started,
 		BaseURL: "http://127.0.0.1:" + strconv.Itoa(s.opts.Port), Token: s.opts.Token, ConfigPath: s.opts.ConfigPath, MaxInstances: s.opts.MaxInstances,
-		Daemon: proc.Self(), Services: s.pool.Status(), Sessions: s.sessionInfos(),
+		Daemon: proc.Self(), Services: s.services(), Sessions: s.sessionInfos(),
 	})
 }
 

@@ -369,6 +369,9 @@ func TestFailingUntilRedefinedOrStopped(t *testing.T) {
 	if why, failing := p.Failing("broken"); !failing || why == "" {
 		t.Fatal("a failed warm-up does not count as a failed start")
 	}
+	if st := statusOf(p, "broken"); st.Failures != 1 {
+		t.Fatalf("status reports %d failed starts, want 1", st.Failures)
+	}
 	p.Stop("broken", "手动停止")
 	if _, failing := p.Failing("broken"); failing {
 		t.Fatal("still failing after a manual stop")
@@ -383,7 +386,19 @@ func TestFailingUntilRedefinedOrStopped(t *testing.T) {
 	if _, failing := p.Failing("broken"); failing {
 		t.Fatal("still failing after the definition changed")
 	}
+	if st := statusOf(p, "broken"); st.Failures != 0 {
+		t.Fatalf("status still reports %d failed starts after the definition changed", st.Failures)
+	}
 	if _, failing := p.Failing("fake"); failing {
 		t.Fatal("a working service is failing")
 	}
+}
+
+func statusOf(p *Pool, name string) ServiceStatus {
+	for _, st := range p.Status() {
+		if st.Name == name {
+			return st
+		}
+	}
+	return ServiceStatus{}
 }

@@ -804,7 +804,7 @@ func TestPerSessionOverHTTP(t *testing.T) {
 	if got := call(b, "client"); got != "sdk-b" {
 		t.Fatalf("the instance should introduce itself as its client, got %q", got)
 	}
-	var solo pool.ServiceStatus
+	var solo serviceStatus
 	for _, s := range h.status(t).Services {
 		if s.Name == "solo" {
 			solo = s
