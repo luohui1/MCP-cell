@@ -4,8 +4,9 @@
 
 ## 布局
 
-- `cmd/mcpcell/` — 同一份代码构建两个二进制：`mcpcell.exe`（命令行）和 `mcpcelld.exe`（`-H windowsgui`，无窗口：开机自启的守护进程、桌面窗口进程，双击即打开窗口）。命令：`open`、`ui`、`start`、`stop`、`daemon`、`mode`、`ps`、`clients`、`takeover`、`restore`、`skills`、`autostart`、`shortcut`、`install`、`update`，以及守护进程内部用的 `window`。界面方式（config.json 的 `interface`：`gui` 默认带托盘图标，`cli` 不带）只决定托盘图标，守护进程启动时读取，`mcpcell mode` 经 `/api/interface` 即时切换；`takeover` 调用和管理页「一键托管」相同的 `/api/mcp` 与 `/api/clients/{client}/attach`，不另写改配置的逻辑。`rsrc_windows_amd64.syso` 是图标、清单（PerMonitorV2、通用控件 v6）和版本信息，由 `winres/winres.json` 生成
-- `internal/jsonrpc` 原始报文 · `registry` 配置/token · `proc` 进程、Job Object、内存上限 · `instance` 单个上游的多会话路由（独占实例还转发服务端请求） · `pool` 实例生命周期、预算、扁平化；共享服务一个槽、按会话服务每个会话一个槽 · `catalog` 能力目录缓存 · `npmcache` npx 包缓存与版本锁定 · `clients` 客户端配置读取、接管与还原 · `skills` 各 Agent 的 Skill 目录：内容哈希比较、同步到来源目录（Windows junction，自己用 `FSCTL_SET_REPARSE_POINT` 建）、备份与还原，命令行直接读写文件不经守护进程（设计见 `docs/skills.md`） · `autostart` 开机自启 · `desktop` 托盘图标（在守护进程里）、WebView2 窗口（独立进程，直接调 COM，不带 WebView2Loader.dll）、快捷方式 · `httpd` HTTP 入口、管理 API、内嵌状态页（`httpd/ui/`）
+- `cmd/mcpcell/` — 同一份代码构建两个二进制：`mcpcell.exe`（命令行）和 `mcpcelld.exe`（`-H windowsgui`，无窗口：开机自启的守护进程、WebView2 窗口进程，双击即打开窗口）。守护进程**没有任何界面**；每个命令先校验参数，`-h/--help` 只打印用法（`dispatch` 返回退出码，2 表示用法错误、什么也没做）。命令：`open`、`ui`、`start`、`stop`、`daemon`、`mode`、`ps`、`clients`、`takeover`、`restore`、`skills`、`autostart`、`shortcut`、`install`、`update`，以及守护进程内部用的 `window`。界面方式（config.json 的 `interface`：`gui` 默认带托盘图标，`cli` 不带）只决定托盘进程启不启动（含开机自启的 `MCPcellTray` 一项），`mcpcell mode` 经 `/api/interface`（守护进程没运行时直接）启停它；`takeover` 调用和管理页「一键托管」相同的 `/api/mcp` 与 `/api/clients/{client}/attach`，不另写改配置的逻辑。`rsrc_windows_amd64.syso` 是图标、清单（PerMonitorV2、通用控件 v6）和版本信息，由 `winres/winres.json` 生成
+- `cmd/mcpcell-tray/` — 托盘图标 `mcpcell-tray.exe`（`-H windowsgui`）：单独的小进程，看守护进程状态（自己用原始 TCP 发 HTTP/1.0）、打开窗口（启动 `mcpcelld open`），「退出」只关托盘和窗口。**不能链接 `net/http`、`crypto/rand`、`internal/registry`**（否则多 32 MB，架构 §13），找目录和端口用 `internal/home`；实测约 14 MB 私有提交。按 MCPcell home 区分实例（窗口属性 `MCPcellHome` + 命名互斥量），试验用的托盘和正式的互不干扰
+- `internal/jsonrpc` 原始报文 · `home` 数据目录、daemon.json、token（不链接 crypto/rand） · `registry` 配置/token · `proc` 进程、Job Object、内存上限 · `instance` 单个上游的多会话路由（独占实例还转发服务端请求） · `pool` 实例生命周期、预算、扁平化；共享服务一个槽、按会话服务每个会话一个槽 · `catalog` 能力目录缓存 · `npmcache` npx 包缓存与版本锁定 · `clients` 客户端配置读取、接管与还原 · `skills` 各 Agent 的 Skill 目录：内容哈希比较、同步到来源目录（Windows junction，自己用 `FSCTL_SET_REPARSE_POINT` 建）、备份与还原，命令行直接读写文件不经守护进程（设计见 `docs/skills.md`） · `autostart` 开机自启 · `desktop` 托盘进程（`RunTray`）、WebView2 窗口（独立进程，直接调 COM，不带 WebView2Loader.dll，每个 home 一个）、启停与查找它们、快捷方式 · `httpd` HTTP 入口、管理 API、内嵌状态页（`httpd/ui/`）
 - `web/` — 管理页源码（React + Vite + Tailwind + lucide，风格参照 CC Switch，只做桌面）。首页是「我的 MCP」（`pages/Home.tsx`：一句话说明 + 一条提示 + MCP | 哪些应用在用 | 状态 三列），详情 `pages/Mcp.tsx`（`#/mcp/<名>`，技术设置在「高级」）。**主界面用大白话**：不出现托管（「一键托管」按钮除外）、会话（说"对话"）、回收、调用时启动、能力目录、按会话、实例等词；状态只有「待命 / 运行中 · 内存 / 打不开：原因」，原因由 `model.ts` 的 `plainReason` 从错误和 stderr 翻译，用途取 `purposes.ts`（常见包的中文说明）或 MCP 自带的 description / instructions，再不行列工具名。数据在 `data.tsx`（`/api/status` 2 秒、`/api/mcp` 4 秒轮询）。Skill 页暂时隐藏：`features.ts` 的开关（localStorage，设置 › 诊断里切换）默认关，关着时不扫描 `/api/skills`，代码和接口保留。原始连接和 `run-` 变体在设置的「诊断」。`cd web && npm run build` 输出到 `internal/httpd/ui/dist`，由 Go embed 打进二进制；构建产物要一起提交，这样构建 Go 不需要 Node。客户端品牌图标来自 lobe-icons（MIT，见 `docs/icon-notices.md`）
 - `internal/testutil/fakemcp` — 基于官方 Go SDK 的测试上游；测试二进制通过 `MaybeRun()` 自我 re-exec 成为它
 - `tools/mcpprobe` — 并发 SDK 客户端，用于对真实服务做验收
@@ -13,7 +14,7 @@
 - `shim/` — `mcpcell-run`（Rust，只用标准库）：接管时包在 Agent 条目原命令前面的转发程序，每个会话、每个 MCP 一个，必须保持约 1 MB 私有提交（Go 运行时在 Windows 上的下限约 11 MB，所以不用 Go）；协议见 `internal/httpd/run.go`。守护进程按命令和参数把包装连接对到已配置的服务上
 - 接管写的是包装格式（`clients/wrap.go`：Claude Code、Cursor 保留 JSON 键顺序，Codex 只替换 command、args 两行）；没有安装 `mcpcell-run` 时退回 HTTP 端点格式
 - `legacy/python-0.5/` — 0.5.0a1 Python 原型，只读参考。M3 移植配置发现/改写时以它为准（`discovery.py`、`patching.py`、`management.py`）
-- `scripts/measure-mcp.ps1` — 内存基线测量（MCPcell 管理窗口单独一行，不算作 MCP）；`scripts/mcpbench.py`（内存与速度）、`scripts/mcpcompat.py`（真实 MCP 原生 vs 经 MCPcell 的差分测试）、`scripts/mcpconformance.py`（官方一致性套件，原生 / 共享 / 按会话对照）、`scripts/mcpreconnect.py`（守护进程重启、崩溃、退出时包装会话不断；先探测再握手的客户端；起不来的服务交回原生且不反复重试；端到端）；`bench/` 存本机结果，已 git-ignore（仓库公开，结果会暴露本机装了哪些 MCP）
+- `scripts/measure-mcp.ps1` — 内存基线测量（MCPcell 管理窗口单独一行，不算作 MCP）；`scripts/mcpbench.py`（内存与速度）、`scripts/mcpcompat.py`（真实 MCP 原生 vs 经 MCPcell 的差分测试）、`scripts/mcpconformance.py`（官方一致性套件，原生 / 共享 / 按会话对照）、`scripts/mcpreconnect.py`（守护进程重启、崩溃、退出时包装会话不断；先探测再握手的客户端；起不来的服务交回原生且不反复重试；端到端）、`scripts/mcptray.py`（托盘出现/退出、退出后包装会话仍走守护进程、mode 启停托盘、`stop --help` 不停服务、托盘私有提交；`--window` 还会短暂打开窗口）；`bench/` 存本机结果，已 git-ignore（仓库公开，结果会暴露本机装了哪些 MCP）
 
 ## 命令
 
@@ -23,6 +24,7 @@ GOOS=linux go vet ./...                       # Unix 分支只能这样检查
 cd web && npm install && npm run build && cd ..   # 改了管理页才需要
 go build -ldflags "-s -w" -o bin/mcpcell.exe ./cmd/mcpcell
 go build -ldflags "-s -w -H windowsgui" -o bin/mcpcelld.exe ./cmd/mcpcell
+go build -ldflags "-s -w -H windowsgui" -o bin/mcpcell-tray.exe ./cmd/mcpcell-tray   # 托盘；rsrc_windows_amd64.syso 是 cmd/mcpcell 的那份拷贝
 MCPCELL_REAL_CLAUDE=1 go test ./internal/clients/ -run RealClaude   # 用真实 claude CLI，临时目录
 cd shim && cargo test --release && cargo build --release && cd .. && cp shim/target/release/mcpcell-run.exe bin/
 bin/mcpcell.exe install    # 装到 ~/.mcpcell/bin 并从那里重启守护进程；用户的 Agent 配置指向那里，改完代码要重新 install（--cli/--gui 同时选界面方式，不写不变）
@@ -48,5 +50,5 @@ cd cmd/mcpcell && go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64 &&
 - **测试绝不能碰真实客户端配置**：适配器会读 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`，`internal/clients` 的 TestMain 会清掉它们，新测试要用临时目录并调用 `inTemp`。测试失败信息不要打印 Entry 的环境变量值。
 - **Skill 也一样**：`skills.Locations(home)` 由传入的用户目录加 `CLAUDE_CONFIG_DIR`、`CODEX_HOME` 决定，`internal/skills` 的 TestMain 清掉这两个变量，测试用 `skills.New(临时 MCPcell 目录, 临时用户目录)` 并对每个位置调用 `inTemp`；其他包（httpd、cmd）的测试用 `t.Setenv` 清空。试验时 `USERPROFILE`、`HOME` 也要指向沙箱，否则 `mcpcell skills sync` 改的是真实目录。删除链接只能用 `os.Remove`（Go 把 junction 报成 Irregular，不是目录）；PowerShell 的 `Remove-Item` 删 junction 会弹确认并卡住，用 `[IO.Directory]::Delete(path, $false)`。
 - 代码注释用英文，文档和面向用户的提示用中文（与 legacy 一致）。
-- `~/.mcpcell/` 下：`bin/`（安装的 mcpcell、mcpcelld、mcpcell-run；Agent 配置引用这里的 mcpcell-run）、`config.json`（服务、端口、界面方式）、`token`、`daemon.json`、`daemon.log`、`catalog/`（能力目录；文件里的 `failure` 是最近一次启动失败，重启后仍显示"打不开"，配置改了或启动成功就清掉）、`pkgs/`（npm 包与 `pins.json`）、`takeover.json`（接管记录，含原始条目）、`backups/`（客户端配置整文件备份）、`skills/`（Skill 来源目录）、`skills.json`（Skill 同步记录）、`skill-backups/`（同步时移走的原目录）、`skills.lock`、`webview/`（窗口的 WebView2 配置目录）、`window.json`（窗口位置）。
+- `~/.mcpcell/` 下：`bin/`（安装的 mcpcell、mcpcelld、mcpcell-run、mcpcell-tray；Agent 配置引用这里的 mcpcell-run）、`config.json`（服务、端口、界面方式）、`token`、`daemon.json`、`daemon.log`、`catalog/`（能力目录；文件里的 `failure` 是最近一次启动失败，重启后仍显示"打不开"，配置改了或启动成功就清掉）、`pkgs/`（npm 包与 `pins.json`）、`takeover.json`（接管记录，含原始条目）、`backups/`（客户端配置整文件备份）、`skills/`（Skill 来源目录）、`skills.json`（Skill 同步记录）、`skill-backups/`（同步时移走的原目录）、`skills.lock`、`webview/`（窗口的 WebView2 配置目录）、`window.json`（窗口位置）。
 - 结论以测量为准：用 `scripts/measure-mcp.ps1` 或 `mcpcell ps` 对比基线，不写未测过的节省比例。

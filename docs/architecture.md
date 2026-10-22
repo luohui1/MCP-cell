@@ -51,7 +51,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 一个二进制 `mcpcell.exe`，三种角色：
 - `mcpcell daemon`：常驻，空闲时预计十几 MB（M1 实测）
 - `mcpcell shim <service>`：给只支持 stdio 的客户端用，在 stdio 和守护进程之间转发，也能在守护进程不在时把它拉起来
-- CLI：`ps`、`clients`、`takeover`、`restore`、`mode`、`skills` 等（`doctor` 待做）。命令行和图形界面（托盘 + 管理页窗口）是同一个守护进程的两种操作入口，见 §9.4
+- CLI：`ps`、`clients`、`takeover`、`restore`、`mode`、`skills` 等（`doctor` 待做）。命令行和图形界面（托盘 + 管理页窗口，都是独立进程）是同一个守护进程的两种操作入口，见 §9.4
 
 ## 4. 组件
 
@@ -211,11 +211,15 @@ cold ──acquire──► starting ──握手+能力校验──► ready �
 
 ### 9.3 守护进程自启动
 
-HTTP 客户端无法拉起守护进程，所以自启动是必需项：Windows 用当前用户的登录计划任务，失败时自动重启。守护进程不在时客户端会显示连接失败，`mcpcell restore --all` 一条命令回退到原始配置。
+HTTP 客户端无法拉起守护进程，所以自启动是必需项：Windows 用当前用户的 Run 键（守护进程一项，图形界面方式下再加托盘图标一项）。守护进程不在时客户端会显示连接失败，`mcpcell restore --all` 一条命令回退到原始配置。
 
 ### 9.4 界面方式
 
-`config.json` 的 `interface` 是 `gui`（默认）或 `cli`，只决定守护进程显不显示托盘图标。守护进程启动时读取它，所以开机自启（`daemon --log`）、包装程序拉起、`mcpcell start` 三条启动路径不用改参数；`--no-tray` 仍然优先。运行中切换走 `POST /api/interface`：守护进程写回配置，并在 UI 线程上即时添加或移除托盘图标，不重启，包装程序的会话不受影响。命令行方式下守护进程仍然创建隐藏的消息窗口，`mcpcell open` 照样能打开管理页窗口。两种方式的接管、按需启动、能力目录、重连完全相同。
+守护进程没有任何界面（2026-10-21 起）。界面是两个独立进程：托盘图标 `mcpcell-tray.exe` 和 WebView2 窗口（`mcpcelld window`）。托盘只看守护进程的状态、打开窗口；它的「退出」关掉托盘和窗口，守护进程和所有包装会话照常（以前托盘在守护进程里，「退出」会停掉守护进程，所有会话退回直接运行、内存大涨）。再次打开 MCPcell（快捷方式、双击 mcpcelld.exe、`mcpcell open`）时界面回来，守护进程没在跑就先拉起它。停止后台服务只在设置页和 `mcpcell stop`，并写明后果。
+
+托盘进程不能链接 `net/http` / `crypto/rand`（§13 的 32 MB），所以是单独的二进制：用原始 TCP 发 HTTP/1.0 读 `/api/status`，打开窗口交给短暂的 `mcpcelld open`。实测约 14 MB 私有提交，做成 `mcpcelld` 的子命令则约 45 MB。托盘和窗口按 MCPcell home 区分（窗口属性加命名互斥量），同一个 home 只有一个托盘、一个窗口。
+
+`config.json` 的 `interface` 是 `gui`（默认）或 `cli`，只决定托盘进程启不启动：开机自启在 Run 键里有守护进程（`MCPcell`）和托盘（`MCPcellTray`，仅 gui）两项；`mcpcell start`、`open` 在 gui 下也拉起托盘。运行中切换走 `POST /api/interface`（守护进程没运行时 `mcpcell mode` 直接做）：写回配置、启停托盘进程、调整托盘的自启项，守护进程和包装会话不受影响。两种方式的接管、按需启动、能力目录、重连完全相同。
 
 ### 9.5 Skill
 

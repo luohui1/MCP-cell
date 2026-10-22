@@ -22,9 +22,9 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 - **npx 扁平化**：npm 包装进 MCPcell 的缓存并锁定版本，直接用 node 启动。context7 从 4 个进程、约 235 MB 降到 2 个进程、约 84 MB，冷启动开销从 10 秒以上降到约 2.5 秒
 - 上游放在 Windows Job Object 里：守护进程无论怎么退出，整棵进程树都会被清理；可设内存上限，超限立即终止
 - **一键托管，配置照样清楚**：读取 Claude Code、Codex、Cursor 的 MCP 配置，在原命令前加上 `mcpcell-run`（`"command": "…\mcpcell-run.exe", "args": ["--", "npx", "-y", "@upstash/context7-mcp"]`），原命令、环境变量和其他设置原样保留。转发程序约 1 MB，带着 Agent 的工作目录和环境变量把会话交给 MCPcell；MCPcell 没运行就拉起它，拉不起来就直接运行原命令。托管前先试启动一次，原生就起不来的条目（程序不存在、缺参数）保持原样并说明原因。改前整文件备份，随时一键还原（逐字节恢复，被你改过的条目不覆盖）
-- **会话不因 MCPcell 中断**：升级或重启时转发程序等新守护进程起来后自动重连，守护进程崩溃就把它拉起来再连，退出 MCPcell 则改为直接运行原命令；Agent 不用重新握手，只有断开那一刻正在进行的调用报告"结果未知"
-- **桌面应用**：托盘图标常驻，窗口用系统自带的 WebView2 显示管理页，关窗后 WebView2 进程全部退出；支持开机自启、桌面和开始菜单快捷方式
-- **命令行或图形界面任选**：`mcpcell mode cli` 去掉托盘图标，查看、托管、还原都用命令完成（`mcpcell takeover` 等同于管理页的「一键托管」）；`mcpcell mode gui` 换回来。运行中切换立即生效，两种方式的内核完全一样，命令行模式下仍可用 `mcpcell open` 临时打开窗口
+- **会话不因 MCPcell 中断**：升级或重启时转发程序等新守护进程起来后自动重连，守护进程崩溃就把它拉起来再连；关掉窗口或托盘不影响会话，只有停止后台服务才改为直接运行原命令（共享的 MCP 在 MCPcell 恢复后自动回来）；Agent 不用重新握手，只有断开那一刻正在进行的调用报告"结果未知"
+- **桌面应用只是用来看和管理的**：托盘图标是单独的小程序（约 14 MB 私有提交），窗口用系统自带的 WebView2 显示管理页；从托盘「退出」或关窗口只关掉界面，后台服务和正在用的 MCP 照常运行。支持开机自启、桌面和开始菜单快捷方式；真要停掉后台服务在设置页或 `mcpcell stop`
+- **命令行或图形界面任选**：`mcpcell mode cli` 关掉托盘图标（开机也不再启动它），查看、托管、还原都用命令完成（`mcpcell takeover` 等同于管理页的「一键托管」）；`mcpcell mode gui` 换回来。切换立即生效，只影响托盘图标，后台服务和 MCP 不受影响；命令行模式下仍可用 `mcpcell open` 临时打开窗口。每个命令都可以加 `-h` 只看用法
 - 管理页和 `mcpcell ps` 显示每个服务的实例、会话、私有提交和缓存的工具数
 - **Skill 一处维护**：同一个 Skill 不用再在 Claude Code、Codex、Gemini 等各自的目录里各放一份。`mcpcell skills` 列出每个 Skill 在哪些 Agent 里、各处内容是否一致、哪份较新、哪些文件不同；`mcpcell skills sync <名称>` 把它放进 `~/.mcpcell/skills`，各 Agent 的目录换成指向它的目录链接（Windows 用 junction，不需要管理员权限），之后改一处处处生效。内容不同的副本不覆盖，由你选以哪一份为准；替换前整目录备份，`mcpcell skills restore` 逐字节还原。见 [Skill 统一管理](docs/skills.md)
 
@@ -37,6 +37,7 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 ```sh
 go build -ldflags "-s -w" -o bin/mcpcell.exe ./cmd/mcpcell
 go build -ldflags "-s -w -H windowsgui" -o bin/mcpcelld.exe ./cmd/mcpcell
+go build -ldflags "-s -w -H windowsgui" -o bin/mcpcell-tray.exe ./cmd/mcpcell-tray
 cd shim && cargo build --release && cd .. && cp shim/target/release/mcpcell-run.exe bin/
 bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自启、快捷方式都指向那里
 ~/.mcpcell/bin/mcpcell.exe open
@@ -45,7 +46,7 @@ bin/mcpcell.exe install       # 装到 ~/.mcpcell/bin：Agent 配置、开机自
 
 打开后点右上角的「一键托管」，勾选要交给 MCPcell 的 MCP 即可；已经打开的 Agent 会话重启后生效。
 
-更习惯命令行的话，安装时加 `--cli`（守护进程不显示托盘图标，之后也可以随时 `mcpcell mode gui|cli` 切换），然后：
+更习惯命令行的话，安装时加 `--cli`（不显示托盘图标，之后也可以随时 `mcpcell mode gui|cli` 切换），然后：
 
 ```sh
 ~/.mcpcell/bin/mcpcell.exe clients     # 各 Agent 的 MCP 条目、能否托管、托管后怎么运行
@@ -84,11 +85,11 @@ Skill 也一样：
 
 | 命令 | 作用 |
 |---|---|
-| `mcpcell install [--cli\|--gui]` | 把程序装到 `~/.mcpcell/bin`（运行中的转发程序会被移到一边再替换），原本指向旧位置的开机自启和快捷方式一并改过去；`--cli`/`--gui` 同时选择界面方式，不写则不变 |
-| `mcpcell mode [cli\|gui]` | 界面方式：`gui` 图形界面（托盘图标，默认），`cli` 命令行（无托盘图标）；不带参数显示当前方式，运行中切换立即生效 |
-| `mcpcell open` | 打开 MCPcell 窗口，需要时先启动守护进程；命令行模式下也可用 |
-| `mcpcell start` / `stop` | 在后台启动 / 停止守护进程（图形界面方式下带托盘图标） |
-| `mcpcell daemon [--port N] [--no-tray]` | 前台运行守护进程，Ctrl+C 退出 |
+| `mcpcell install [--cli\|--gui]` | 把程序装到 `~/.mcpcell/bin`（运行中的转发程序会被移到一边再替换），开机自启和快捷方式一并改过去（图形界面方式下开机自启也包括托盘图标），升级时会话不断；`--cli`/`--gui` 同时选择界面方式，不写则不变 |
+| `mcpcell mode [cli\|gui]` | 界面方式：`gui` 图形界面（托盘图标，默认），`cli` 命令行（无托盘图标）；不带参数显示当前方式，切换立即启停托盘图标，后台服务不受影响 |
+| `mcpcell open` | 打开 MCPcell 窗口，需要时先启动守护进程（图形界面方式下也显示托盘图标）；命令行模式下也可用 |
+| `mcpcell start` / `stop` | 在后台启动守护进程（图形界面方式下同时显示托盘图标）/ 停止守护进程：正在用的 MCP 会各自改为直接运行，共享的在 MCPcell 恢复后自动回来 |
+| `mcpcell daemon [--port N] [--log] [--open]` | 前台运行守护进程，Ctrl+C 退出；守护进程本身没有界面 |
 | `mcpcell clients` | 各客户端的 MCP 条目、分类、托管状态与运行方式 |
 | `mcpcell takeover [条目...] [--client 客户端] [--shared\|--per-session] [-y]` | 托管 Agent 的 MCP，同管理页「一键托管」：先列出计划，确认后执行 |
 | `mcpcell restore --all` | 还原所有被托管的客户端配置，不需要守护进程；`restore <客户端> [条目...]` 只还原部分 |
@@ -117,7 +118,7 @@ Skill 也一样：
 }
 ```
 
-- `interface`：`"gui"`（默认，托盘图标）或 `"cli"`（命令行，无托盘图标），用 `mcpcell mode` 改可以立即生效
+- `interface`：`"gui"`（默认，托盘图标，开机随之启动）或 `"cli"`（命令行，无托盘图标），用 `mcpcell mode` 改可以立即生效
 - `idleTimeout`：空闲多久回收，`"0"` 表示不回收
 - `memoryLimit`：整棵进程树的内存上限（目前仅 Windows）
 - `flatten`：默认开启；设为 `false` 时保留 npx 启动
