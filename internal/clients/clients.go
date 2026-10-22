@@ -53,6 +53,10 @@ type Record struct {
 	// Added marks an entry MCPcell created in a client that did not have it;
 	// undoing it removes the entry.
 	Added bool `json:"added,omitempty"`
+	// Auto: taken over by automatic takeover. Reattached counts the times it
+	// took the entry over again after the agent put the original back.
+	Auto       bool `json:"auto,omitempty"`
+	Reattached int  `json:"reattached,omitempty"`
 }
 
 // Client is one AI client's configuration.

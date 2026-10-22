@@ -45,13 +45,20 @@ type Config struct {
 	Port int `json:"port,omitempty"`
 	// Interface is how the user runs MCPcell, InterfaceGUI (the default) or
 	// InterfaceCLI. Only the tray icon differs; the runtime is the same.
-	Interface string              `json:"interface,omitempty"`
-	Limits    Limits              `json:"limits,omitzero"`
-	Services  map[string]*Service `json:"services"`
+	Interface string `json:"interface,omitempty"`
+	// AutoTakeover takes over MCPs that newly appear in an agent's
+	// configuration, the way 一键托管 would. Default true.
+	AutoTakeover *bool               `json:"autoTakeover,omitempty"`
+	Limits       Limits              `json:"limits,omitzero"`
+	Services     map[string]*Service `json:"services"`
 }
 
 // CLI reports whether the user chose the command line over the tray icon.
 func (c *Config) CLI() bool { return c.Interface == InterfaceCLI }
+
+// AutoTakeoverEnabled reports whether new agent MCPs are taken over
+// without asking.
+func (c *Config) AutoTakeoverEnabled() bool { return c.AutoTakeover == nil || *c.AutoTakeover }
 
 // ParseInterface accepts "gui" or "cli".
 func ParseInterface(s string) (string, error) {
@@ -294,6 +301,20 @@ func Save(home string, cfg *Config) error {
 
 // SetInterface records the interface choice in config.json. The daemon
 // edits the file itself while it runs; this is for when it does not.
+// SetAutoTakeover records whether new agent MCPs are taken over by
+// themselves.
+func SetAutoTakeover(home string, on bool) error {
+	cfg, err := Load(home)
+	if err != nil {
+		return err
+	}
+	if cfg.AutoTakeoverEnabled() == on && cfg.AutoTakeover != nil {
+		return nil
+	}
+	cfg.AutoTakeover = &on
+	return Save(home, cfg)
+}
+
 func SetInterface(home, mode string) error {
 	if _, err := ParseInterface(mode); err != nil {
 		return err
