@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/luohui1/MCP-cell/internal/autostart"
@@ -14,18 +15,20 @@ import (
 	"github.com/luohui1/MCP-cell/internal/registry"
 )
 
-// runStart launches the windowless daemon in the background.
+// runStart launches the windowless daemon in the background, and with the
+// graphical interface the tray icon.
 func runStart() error {
 	st, started, err := ensureDaemon()
-	switch {
-	case err != nil:
+	if err != nil {
 		return err
-	case started:
-		home, _ := registry.Home()
+	}
+	home, _ := registry.Home()
+	if started {
 		fmt.Printf("MCPcell 已启动（PID %d，端口 %d），日志在 %s\n", st.PID, st.Port, filepath.Join(home, "daemon.log"))
-	default:
+	} else {
 		fmt.Printf("MCPcell 已在运行（PID %d，端口 %d）\n", st.PID, st.Port)
 	}
+	ensureTray(home)
 	return nil
 }
 
@@ -64,7 +67,8 @@ func runStop() error {
 	if err := daemonCall("POST", "/api/shutdown", &out); err != nil {
 		return err
 	}
-	fmt.Println("MCPcell 正在退出，所有 MCP 服务进程会一起结束；正在运行的 Agent 会话改为直接运行原命令。")
+	fmt.Println("后台服务正在停止，它开着的 MCP 会一起关掉。正在用的 MCP 会各自改为直接运行，占用变大；")
+	fmt.Println("共享的 MCP 在 MCPcell 恢复后会自动回来，按会话的要等会话结束。想完全不用 MCPcell，请用 mcpcell restore --all。")
 	return nil
 }
 
@@ -95,8 +99,16 @@ func runRestore(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(args) == 0 {
-		return errors.New("用法: mcpcell restore --all | mcpcell restore <客户端> [条目...]")
+	switch {
+	case len(args) == 0:
+		return badUsage("要说明还原什么：--all，或客户端和条目")
+	case args[0] == "--all" && len(args) > 1:
+		return badUsage("--all 后面不能再写条目")
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") && a != "--all" {
+			return badUsage("未知参数 %q", a)
+		}
 	}
 	all := args[0] == "--all"
 	var client string
@@ -202,7 +214,7 @@ func runAutostart(args []string) error {
 	switch {
 	case len(args) == 1 && args[0] == "on":
 		exe, _ := os.Executable()
-		if err := autostart.Enable(exe); err != nil {
+		if err := autostart.Enable(exe, guiMode()); err != nil {
 			return err
 		}
 	case len(args) == 1 && args[0] == "off":
@@ -210,7 +222,7 @@ func runAutostart(args []string) error {
 			return err
 		}
 	case len(args) > 0:
-		return errors.New("用法: mcpcell autostart [on|off]")
+		return badUsage("参数只能是 on 或 off")
 	}
 	st := autostart.Get()
 	switch {
@@ -218,6 +230,9 @@ func runAutostart(args []string) error {
 		fmt.Println(st.Error)
 	case st.Enabled:
 		fmt.Println("开机自启：已开启\n  " + st.Command)
+		if st.Tray {
+			fmt.Println("  " + st.TrayCommand + "（托盘图标）")
+		}
 	default:
 		fmt.Println("开机自启：未开启（mcpcell autostart on）")
 	}

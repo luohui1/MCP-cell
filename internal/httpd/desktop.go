@@ -5,8 +5,9 @@ import (
 	"net/http"
 )
 
-// Desktop is the daemon's desktop shell (tray icon and app window); nil
-// where there is none.
+// Desktop opens the window and starts or stops the tray icon, which are
+// processes of their own (the daemon has no user interface); nil where
+// there is no desktop.
 type Desktop interface {
 	// Show opens the window or brings it to the front.
 	Show() error
@@ -16,8 +17,11 @@ type Desktop interface {
 	// SetShortcuts creates (true) or removes (false) each shortcut; nil
 	// leaves it unchanged.
 	SetShortcuts(desktop, startMenu *bool) error
-	// SetTray shows or hides the tray icon.
-	SetTray(on bool)
+	// TrayShown reports whether the tray icon process runs.
+	TrayShown() bool
+	// SetTray starts or stops the tray icon process (and with it the
+	// window); the daemon is not affected.
+	SetTray(on bool) error
 }
 
 type desktopStatus struct {

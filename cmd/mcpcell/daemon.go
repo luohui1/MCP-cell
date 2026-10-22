@@ -28,9 +28,9 @@ func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	port := fs.Int("port", 0, "监听端口（默认取 config.json 的 port，未设置时为 47621）")
 	logToFile := fs.Bool("log", false, "日志写到 ~/.mcpcell/daemon.log（无窗口运行时使用）")
-	noTray := fs.Bool("no-tray", false, "不显示托盘图标（不论界面方式）")
+	_ = fs.Bool("no-tray", false, "（已不需要：守护进程不再显示托盘图标，托盘是单独的 mcpcell-tray.exe）")
 	openWindow := fs.Bool("open", false, "启动后打开 MCPcell 窗口")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	home, err := registry.Home()
@@ -78,28 +78,18 @@ func runDaemon(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The tray icon and window (Windows only). The command-line interface
-	// has no tray icon, but `mcpcell open` can still show the window.
-	// LoginURL is only called when the window opens, after srv exists.
+	// The daemon has no user interface: the tray icon and the window are
+	// processes of their own that it can start (Windows only). LoginURL is
+	// only called when the window opens, after srv exists.
 	var srv *httpd.Server
 	var shell httpd.Desktop
-	tray := !*noTray && !cfg.CLI()
-	app, err := desktop.Start(desktop.Options{Home: home, Exe: exe, Tray: tray, Log: log,
-		LoginURL: func() string { return srv.LoginURL() }, Status: trayStatus(p), Quit: stop})
-	switch {
-	case err == nil:
-		defer app.Close()
-		shell = app
-	case !errors.Is(err, desktop.ErrUnsupported):
-		log.Warn("desktop shell unavailable", "err", err)
-	}
-	if shell == nil {
-		tray = false
+	if desktop.Available() != desktop.ErrUnsupported {
+		shell = &desktopShell{home: home, exe: exe, loginURL: func() string { return srv.LoginURL() }}
 	}
 	srv = httpd.New(p, httpd.Options{Port: cfg.Port, Token: token, Version: version,
 		ConfigPath: registry.ConfigPath(home), Home: home, MaxInstances: cfg.Limits.MaxInstances, Log: log,
 		Clients: clients.All(userHome, filepath.Join(home, "backups")), Takeovers: takeovers, Exe: exe, Shutdown: stop,
-		Desktop: shell, Tray: tray, NoTray: *noTray, Wrapper: wrapperNextTo(exe), Skills: skills.New(home, userHome)})
+		Desktop: shell, Wrapper: wrapperNextTo(exe), Skills: skills.New(home, userHome)})
 
 	started := time.Now()
 	if err := registry.WriteDaemonInfo(home, registry.DaemonInfo{PID: os.Getpid(), Port: cfg.Port,
@@ -126,7 +116,7 @@ func runDaemon(args []string) error {
 		}
 	}()
 
-	log.Info("daemon started", "port", cfg.Port, "pid", os.Getpid(), "services", len(cfg.Names()), "tray", tray)
+	log.Info("daemon started", "port", cfg.Port, "pid", os.Getpid(), "services", len(cfg.Names()))
 	names := cfg.Names()
 	fmt.Fprintf(os.Stderr, "MCPcell %s 已启动：http://127.0.0.1:%d\n", version, cfg.Port)
 	fmt.Fprintf(os.Stderr, "配置：%s（%d 个服务）\n", registry.ConfigPath(home), len(names))

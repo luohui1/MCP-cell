@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -34,6 +35,15 @@ var theHost *host
 func RunWindow(opts WindowOptions) error {
 	if opts.Log == nil {
 		opts.Log = slog.Default()
+	}
+	if !singleInstance("MCPcellWindow", opts.Home) {
+		// Opened twice in a row: bring the first one to the front instead.
+		var h windows.HWND
+		waitFor(5*time.Second, func() bool { h = findWindow(windowClass, opts.Home); return h != 0 })
+		if h != 0 {
+			focusWindow(h)
+		}
+		return nil
 	}
 	lockThread()
 	if err := windows.CoInitializeEx(0, coinitApartmentThreaded); err != nil && err != windows.Errno(1) {
@@ -66,6 +76,7 @@ func (h *host) open() error {
 		return fmt.Errorf("CreateWindowEx: %w", err)
 	}
 	h.hwnd = windows.HWND(r)
+	markHome(h.hwnd, h.opts.Home)
 	h.applyTheme()
 	if !h.restorePlacement() {
 		procShowWindow.Call(uintptr(h.hwnd), swShowNormal)

@@ -4,35 +4,35 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/luohui1/MCP-cell/internal/autostart"
 	"github.com/luohui1/MCP-cell/internal/registry"
 )
 
-// The interface choice, GUI or command line, only decides whether the
-// daemon shows a tray icon. Switching saves the choice and shows or hides the
-// icon at once; nothing else about the daemon changes.
+// The interface choice, GUI or command line, only decides whether the tray
+// icon (mcpcell-tray.exe, a process of its own) runs and starts at logon.
+// Switching saves the choice and starts or stops the tray at once; the
+// daemon and the MCPs it runs are not affected either way.
 
 type interfaceStatus struct {
 	Interface string `json:"interface"` // gui | cli
-	// Tray: this daemon shows its tray icon now.
+	// Tray: the tray icon process runs now.
 	Tray bool `json:"tray"`
-	// TraySupported: this daemon can show one (Windows, not --no-tray).
+	// TraySupported: there is a desktop to show one on (Windows).
 	TraySupported bool `json:"traySupported"`
+	// Error is why the tray did not start or stop, if it did not.
+	Error string `json:"error,omitempty"`
 }
-
-func (s *Server) traySupported() bool { return s.opts.Desktop != nil && !s.opts.NoTray }
 
 func (s *Server) interfaceStatus() (interfaceStatus, error) {
 	cfg, err := registry.Load(s.opts.Home)
 	if err != nil {
 		return interfaceStatus{}, err
 	}
-	st := interfaceStatus{Interface: registry.InterfaceGUI, TraySupported: s.traySupported()}
+	st := interfaceStatus{Interface: registry.InterfaceGUI, TraySupported: s.opts.Desktop != nil}
 	if cfg.CLI() {
 		st.Interface = registry.InterfaceCLI
 	}
-	s.mu.Lock()
-	st.Tray = s.tray
-	s.mu.Unlock()
+	st.Tray = st.TraySupported && s.opts.Desktop.TrayShown()
 	return st, nil
 }
 
@@ -52,14 +52,27 @@ func (s *Server) handleInterface(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if s.traySupported() {
-			on := mode == registry.InterfaceGUI
-			s.opts.Desktop.SetTray(on)
-			s.mu.Lock()
-			s.tray = on
-			s.mu.Unlock()
+		var trayErr error
+		if s.opts.Desktop != nil {
+			gui := mode == registry.InterfaceGUI
+			trayErr = s.opts.Desktop.SetTray(gui)
+			if a := autostart.Get(); a.Ours(s.opts.Exe) && a.Tray != gui {
+				if err := autostart.SetTray(s.opts.Exe, gui); err != nil && trayErr == nil {
+					trayErr = err
+				}
+			}
 		}
 		s.opts.Log.Info("interface changed", "interface", mode)
+		st, err := s.interfaceStatus()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if trayErr != nil {
+			st.Error = trayErr.Error()
+		}
+		writeJSON(w, http.StatusOK, st)
+		return
 	}
 	st, err := s.interfaceStatus()
 	if err != nil {

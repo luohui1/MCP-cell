@@ -6,13 +6,17 @@ import (
 	"github.com/luohui1/MCP-cell/internal/registry"
 )
 
-type modeDesktop struct{ calls []bool }
+type modeDesktop struct {
+	calls []bool
+	on    bool
+}
 
 func (*modeDesktop) Show() error                   { return nil }
 func (*modeDesktop) Available() error              { return nil }
 func (*modeDesktop) Shortcuts() (bool, bool)       { return false, false }
 func (*modeDesktop) SetShortcuts(_, _ *bool) error { return nil }
-func (d *modeDesktop) SetTray(on bool)             { d.calls = append(d.calls, on) }
+func (d *modeDesktop) TrayShown() bool             { return d.on }
+func (d *modeDesktop) SetTray(on bool) error       { d.calls = append(d.calls, on); d.on = on; return nil }
 
 func TestModeCommand(t *testing.T) {
 	// No daemon: the choice goes into config.json for its next start.
@@ -31,7 +35,7 @@ func TestModeCommand(t *testing.T) {
 		t.Fatal("bad arguments accepted")
 	}
 
-	// A running daemon switches its tray icon at once.
+	// A running daemon starts or stops the tray icon process at once.
 	d := &modeDesktop{}
 	home, _ = testDaemon(t, d)
 	if err := runMode([]string{"cli"}); err != nil {

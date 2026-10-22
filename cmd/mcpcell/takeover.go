@@ -142,9 +142,10 @@ func parseTakeover(args []string) (o takeoverOptions, yes bool, err error) {
 		fmt.Fprintln(fs.Output(), "用法: mcpcell takeover [条目...] [--client 客户端] [--shared|--per-session] [-y]")
 		fs.PrintDefaults()
 	}
+	fs.SetOutput(io.Discard)
 	for {
 		if err := fs.Parse(args); err != nil {
-			return o, false, err
+			return o, false, badUsage("%v", err)
 		}
 		if fs.NArg() == 0 {
 			break

@@ -24,6 +24,7 @@ import (
 	"github.com/luohui1/MCP-cell/internal/clients"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/proc"
+	"github.com/luohui1/MCP-cell/internal/registry"
 	"github.com/luohui1/MCP-cell/internal/skills"
 )
 
@@ -49,11 +50,8 @@ type Options struct {
 	Exe string
 	// Shutdown stops the daemon (mcpcell stop).
 	Shutdown func()
-	// Desktop is the tray icon and app window, if this daemon has them.
+	// Desktop opens the window and starts or stops the tray icon process.
 	Desktop Desktop
-	// Tray: the daemon started with its tray icon shown. NoTray keeps the
-	// icon hidden whatever the interface choice (daemon --no-tray).
-	Tray, NoTray bool
 	// Skills manages agent skills for the Skill page.
 	Skills *skills.Manager
 	// Wrapper is the installed mcpcell-run. Takeovers keep the entry's
@@ -74,7 +72,6 @@ type Server struct {
 	// leaving is set once the daemon is going away: runRestart when a new
 	// daemon takes over (install), runStop otherwise. Wrappers are told which.
 	leaving string
-	tray    bool // the tray icon is shown
 	// variantOf maps an in-memory run- service to the configured service it
 	// is a variant of (variantService), so the page shows it under that one.
 	variantOf sync.Map
@@ -87,7 +84,7 @@ func New(p *pool.Pool, opts Options) *Server {
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
-	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32), tray: opts.Tray,
+	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
 		sessions: map[string]*session{}, codes: map[string]time.Time{}, runs: map[net.Conn]*runWriter{}}
 	p.OnListChange(s.notifyListChanged)
 	return s
@@ -364,7 +361,9 @@ func (s *Server) handleAutostart(w http.ResponseWriter, r *http.Request) {
 		}
 		var err error
 		if req.Enabled {
-			err = autostart.Enable(s.opts.Exe)
+			// The tray starts at logon too with the graphical interface.
+			cfg, _ := registry.Load(s.opts.Home)
+			err = autostart.Enable(s.opts.Exe, s.opts.Desktop != nil && cfg != nil && !cfg.CLI())
 		} else {
 			err = autostart.Disable()
 		}

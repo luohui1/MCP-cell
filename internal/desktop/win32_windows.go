@@ -55,6 +55,9 @@ var (
 	procEnumWindows                  = user32.NewProc("EnumWindows")
 	procGetWindowThreadProcessId     = user32.NewProc("GetWindowThreadProcessId")
 	procGetClassNameW                = user32.NewProc("GetClassNameW")
+	procSetPropW                     = user32.NewProc("SetPropW")
+	procGetPropW                     = user32.NewProc("GetPropW")
+	procRemovePropW                  = user32.NewProc("RemovePropW")
 	procShellNotifyIconW             = shell32.NewProc("Shell_NotifyIconW")
 	procGetDpiForMonitor             = shcore.NewProc("GetDpiForMonitor")
 	procCreateSolidBrush             = gdi32.NewProc("CreateSolidBrush")
@@ -82,10 +85,10 @@ const (
 	wmUser          = 0x0400
 	wmApp           = 0x8000
 
-	wmTray         = wmApp + 1 // notification-area icon callback
-	wmWindowClosed = wmApp + 2 // the window process exited
-	wmStop         = wmApp + 3 // remove the tray icon and leave the loop
-	wmSetTray      = wmApp + 4 // show (wParam 1) or hide (0) the tray icon
+	wmEndSession = 0x0016
+
+	wmTray     = wmApp + 1 // notification-area icon callback
+	wmTrayQuit = wmApp + 2 // close the window and the tray (StopTray)
 
 	ninSelect    = wmUser + 0
 	ninKeySelect = wmUser + 1
@@ -128,6 +131,7 @@ const (
 	notifyIconV4  = 4
 
 	mfString    = 0x0000
+	mfGrayed    = 0x0001
 	mfChecked   = 0x0008
 	mfSeparator = 0x0800
 

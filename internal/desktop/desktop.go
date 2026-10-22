@@ -1,15 +1,17 @@
-// Package desktop is MCPcell's desktop shell on Windows: a notification-area
-// icon owned by the daemon (Start), and a native window that shows the
-// management page in WebView2 (RunWindow).
+// Package desktop is MCPcell's desktop shell on Windows: the tray icon
+// (RunTray, the body of mcpcell-tray.exe) and a native window that shows the
+// management page in WebView2 (RunWindow, the body of `mcpcelld window`).
 //
-// The window runs in a process of its own that the daemon starts on demand
-// and that exits when the window closes. The WebView2 runtime therefore never
-// loads into the daemon: a closed window costs it nothing, and a browser
-// crash cannot take the shared MCP servers down. WebView2 is driven through
-// its COM interfaces directly, without WebView2Loader.dll.
+// Both run in processes of their own; the daemon has no user interface. The
+// tray only looks at the daemon and opens the window, so quitting it (or
+// closing the window) leaves the daemon and every MCP it runs alone. Neither
+// the daemon nor the tray ever loads WebView2: a closed window costs them
+// nothing, and a browser crash cannot take the shared MCP servers down.
+// WebView2 is driven through its COM interfaces directly, without
+// WebView2Loader.dll. The tray must not link net/http or crypto/rand, which
+// cost a Go process 32 MB on Windows (docs/architecture.md §13).
 //
-// Win32 work runs on locked OS threads; App's methods may be called from any
-// goroutine.
+// Win32 work runs on locked OS threads.
 package desktop
 
 import (
@@ -19,21 +21,16 @@ import (
 
 var ErrUnsupported = errors.New("桌面应用目前只支持 Windows")
 
-// Options configures the tray icon and the window.
-type Options struct {
+// TrayOptions configures RunTray.
+type TrayOptions struct {
+	// Home is the MCPcell home the tray belongs to.
 	Home string
-	// Exe is the running binary; the window process, autostart and
-	// shortcuts use mcpcelld.exe next to it.
+	// Exe is mcpcell-tray.exe; mcpcelld.exe next to it opens the window.
 	Exe string
-	// Tray shows the notification-area icon.
-	Tray bool
-	// LoginURL returns a fresh one-time login link for every window open.
-	LoginURL func() string
-	// Status is the second tooltip line, e.g. "2 个实例 · 180 MB".
-	Status func() string
-	// Quit is called after the user confirms 退出 in the tray menu.
-	Quit func()
-	Log  *slog.Logger
+	// Status returns a few lines about the daemon for the menu; the first
+	// is also the tooltip's second line. Called on hover and menu open.
+	Status func() []string
+	Log    *slog.Logger
 }
 
 // WindowOptions configures RunWindow.

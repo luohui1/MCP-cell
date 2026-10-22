@@ -75,7 +75,7 @@ func testDaemon(t *testing.T, desk httpd.Desktop) (home, userHome string) {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	srv := httpd.New(p, httpd.Options{Port: port, Token: token, Version: "test", Home: home, ConfigPath: registry.ConfigPath(home),
-		Clients: cs, Takeovers: store, Desktop: desk, Tray: desk != nil, Wrapper: filepath.Join(home, "bin", "mcpcell-run.exe")})
+		Clients: cs, Takeovers: store, Desktop: desk, Wrapper: filepath.Join(home, "bin", "mcpcell-run.exe")})
 	hs := &http.Server{Handler: srv.Handler()}
 	go hs.Serve(l)
 	ctx, cancel := context.WithCancel(context.Background())

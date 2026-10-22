@@ -19,10 +19,10 @@ import (
 )
 
 // programs are what an installation consists of: the CLI, the windowless
-// daemon and the wrapper agent entries launch.
+// daemon, the wrapper agent entries launch and (Windows) the tray icon.
 func programs() []string {
 	if runtime.GOOS == "windows" {
-		return []string{"mcpcell.exe", "mcpcelld.exe", "mcpcell-run.exe"}
+		return []string{"mcpcell.exe", "mcpcelld.exe", "mcpcell-run.exe", "mcpcell-tray.exe"}
 	}
 	return []string{"mcpcell", "mcpcell-run"}
 }
@@ -49,11 +49,11 @@ func runInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	cli := fs.Bool("cli", false, "使用命令行：守护进程不显示托盘图标")
 	gui := fs.Bool("gui", false, "使用图形界面：托盘图标常驻（默认）")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	if *cli && *gui || fs.NArg() > 0 {
-		return errors.New("用法: mcpcell install [--cli|--gui]")
+	if *cli && *gui {
+		return badUsage("--cli 和 --gui 只能选一个")
 	}
 	home, err := registry.Home()
 	if err != nil {
@@ -83,10 +83,16 @@ func runInstall(args []string) error {
 		if *cli {
 			mode = registry.InterfaceCLI
 		}
-		if _, _, err := setInterface(mode); err != nil {
+		if err := registry.SetInterface(home, mode); err != nil {
 			return err
 		}
 		fmt.Println("界面方式：" + interfaceName[mode])
+	}
+	// The tray icon is a program of the installation too: it quits and comes
+	// back from the new one. The daemon and its MCPs are not affected by it.
+	wasTray := desktop.TrayRunning(home)
+	if wasTray {
+		desktop.StopTray(home)
 	}
 	var st psStatus
 	wasRunning := daemonCall("GET", "/api/status", &st) == nil
@@ -109,11 +115,18 @@ func runInstall(args []string) error {
 	// Autostart and shortcuts move along only when they start the programs
 	// being replaced: they are per user, not per MCPcell home.
 	installed := filepath.Join(dest, programs()[0])
-	if a := autostart.Get(); a.Enabled && strings.Contains(strings.ToLower(a.Command), strings.ToLower(src+string(filepath.Separator))) {
-		if err := autostart.Enable(installed); err != nil {
+	if a := autostart.Get(); a.Enabled && (under(a.Command, src) || under(a.Command, dest)) {
+		// Also brings an older install's single entry (a daemon that had its
+		// own tray icon) to a daemon entry plus a tray entry.
+		gui := guiMode()
+		if err := autostart.Enable(installed, gui); err != nil {
 			return fmt.Errorf("已复制，但开机自启没有改到新位置：%w", err)
 		}
-		fmt.Println("开机自启已改为", dest)
+		if gui {
+			fmt.Println("开机自启：后台服务和托盘图标，都在", dest)
+		} else {
+			fmt.Println("开机自启：后台服务，在", dest)
+		}
 	}
 	if d, s := desktop.ShortcutsInto(src); d || s {
 		yes := true
@@ -130,11 +143,20 @@ func runInstall(args []string) error {
 	}
 	fmt.Println("已安装到", dest)
 	if wasRunning {
+		// start brings the tray icon back too with the graphical interface.
 		cmd := exec.Command(installed, "start")
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		return cmd.Run()
 	}
+	if wasTray && guiMode() {
+		return desktop.StartTray(installed, home)
+	}
 	return nil
+}
+
+// under reports whether a registered command line runs a program in dir.
+func under(command, dir string) bool {
+	return strings.Contains(strings.ToLower(command), strings.ToLower(filepath.Clean(dir)+string(filepath.Separator)))
 }
 
 // installFile copies src over dst. Windows will not overwrite a running
