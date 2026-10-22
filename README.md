@@ -21,6 +21,7 @@ Claude Code、Codex、Cursor 等客户端的每个会话都会把配置里的 st
 - **连接不启动进程**：握手和工具列表由缓存的能力目录回答，第一次调用工具时才启动，空闲后回收（默认 3 分钟）
 - **npx 扁平化**：npm 包装进 MCPcell 的缓存并锁定版本，直接用 node 启动。context7 从 4 个进程、约 235 MB 降到 2 个进程、约 84 MB，冷启动开销从 10 秒以上降到约 2.5 秒
 - 上游放在 Windows Job Object 里：守护进程无论怎么退出，整棵进程树都会被清理；可设内存上限，超限立即终止
+- **新加的 MCP 自动托管**：在 Claude Code、Codex、Cursor 里新加的 MCP 会自动交给 MCPcell（先试着打开，打不开的保持原样并说明原因），首页会提示"新发现 N 个 MCP，已自动托管"；你改回原样的不会再自动托管，Agent 自己把配置改回去时最多跟一次。设置页或 `mcpcell takeover --auto off` 可以关掉
 - **一键托管，配置照样清楚**：读取 Claude Code、Codex、Cursor 的 MCP 配置，在原命令前加上 `mcpcell-run`（`"command": "…\mcpcell-run.exe", "args": ["--", "npx", "-y", "@upstash/context7-mcp"]`），原命令、环境变量和其他设置原样保留。转发程序约 1 MB，带着 Agent 的工作目录和环境变量把会话交给 MCPcell；MCPcell 没运行就拉起它，拉不起来就直接运行原命令。托管前先试启动一次，原生就起不来的条目（程序不存在、缺参数）保持原样并说明原因。改前整文件备份，随时一键还原（逐字节恢复，被你改过的条目不覆盖）
 - **会话不因 MCPcell 中断**：升级或重启时转发程序等新守护进程起来后自动重连，守护进程崩溃就把它拉起来再连；关掉窗口或托盘不影响会话，只有停止后台服务才改为直接运行原命令（共享的 MCP 在 MCPcell 恢复后自动回来）；Agent 不用重新握手，只有断开那一刻正在进行的调用报告"结果未知"
 - **桌面应用只是用来看和管理的**：托盘图标是单独的小程序（约 14 MB 私有提交），窗口用系统自带的 WebView2 显示管理页；从托盘「退出」或关窗口只关掉界面，后台服务和正在用的 MCP 照常运行。支持开机自启、桌面和开始菜单快捷方式；真要停掉后台服务在设置页或 `mcpcell stop`
@@ -92,6 +93,7 @@ Skill 也一样：
 | `mcpcell daemon [--port N] [--log] [--open]` | 前台运行守护进程，Ctrl+C 退出；守护进程本身没有界面 |
 | `mcpcell clients` | 各客户端的 MCP 条目、分类、托管状态与运行方式 |
 | `mcpcell takeover [条目...] [--client 客户端] [--shared\|--per-session] [-y]` | 托管 Agent 的 MCP，同管理页「一键托管」：先列出计划，确认后执行 |
+| `mcpcell takeover --auto on\|off` | 自动托管 Agent 里新加的 MCP（默认开） |
 | `mcpcell restore --all` | 还原所有被托管的客户端配置，不需要守护进程；`restore <客户端> [条目...]` 只还原部分 |
 | `mcpcell skills [名称...]` | 各 Agent 的 Skill 在哪些目录、各处是否一致；给出名称时逐处列出差异；`skills dirs` 列出各目录对应的 Agent |
 | `mcpcell skills sync <名称...>\|--all [--to 位置,...] [--from 位置] [--copy] [-y]` | 把 Skill 放进 `~/.mcpcell/skills`，各位置换成指向它的链接；内容不同的副本不覆盖，`--from` 选版本 |
