@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppWindow, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
-import { desktop, instancesOf, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
+import { daemonApi, desktop, instancesOf, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
 import { clients as manualClients, masked } from '../clients';
 import { useStatus } from '../data';
 import { bytes, clock, since } from '../format';
@@ -9,7 +9,7 @@ import { showSkills, useSkillsShown } from '../features';
 import { Body } from '../layout';
 import { agentOrder } from '../model';
 import { useRoute } from '../router';
-import { Badge, Button, CodeBlock, CopyButton, cx, Dot, GroupHeader, PageHeader, Segmented, Switch, TableCard, useToast } from '../ui';
+import { Badge, Button, CodeBlock, CopyButton, cx, Dot, GroupHeader, Modal, PageHeader, Segmented, Switch, TableCard, useToast } from '../ui';
 
 const commands = [
   'mcpcell open            # 打开 MCPcell 窗口（需要时先启动守护进程）',
@@ -32,6 +32,8 @@ export function SettingsPage({ diag }: { diag: boolean }) {
   const [auto, setAuto] = useState<AutostartStatus | null>(null);
   const [desk, setDesk] = useState<DesktopStatus | null>(null);
   const [mode, setMode] = useState<InterfaceStatus | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopBusy, setStopBusy] = useState(false);
   useEffect(() => {
     takeover.autostartStatus().then(setAuto).catch(() => setAuto(null));
     desktop.status().then(setDesk).catch(() => setDesk(null));
@@ -57,7 +59,7 @@ export function SettingsPage({ diag }: { diag: boolean }) {
             {mode && <InterfaceRow status={mode} onChange={(m) => attempt(() => uiMode.set(m), m === 'cli' ? '已改为命令行' : '已改为图形界面', setMode)} />}
             <SettingRow
               title="开机自启"
-              desc={auto?.supported === false ? auto.error : '登录 Windows 时在后台打开 MCPcell；图形界面方式下托盘里显示图标。应用在用 MCPcell 的 MCP 时建议开启，否则 MCPcell 没开着时这些 MCP 用不了。'}
+              desc={auto?.supported === false ? auto.error : '登录 Windows 时在后台打开 MCPcell；图形界面方式下托盘图标也一起打开。应用在用 MCPcell 的 MCP 时建议开启，否则 MCPcell 没开着时这些 MCP 用不了。'}
             >
               {auto?.supported && (
                 <Switch
@@ -126,9 +128,44 @@ export function SettingsPage({ diag }: { diag: boolean }) {
                 <CopyButton text={status.configPath} label="复制路径" />
               </span>
             </InfoRow>
+            <SettingRow title="停止后台服务" desc="一般不需要：关掉这个窗口或从托盘退出都不会停止它。">
+              <Button size="sm" variant="ghost" className="text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950" onClick={() => setStopping(true)}>
+                停止后台服务
+              </Button>
+            </SettingRow>
           </TableCard>
           <p className="mt-2.5 px-1 text-xs leading-5 text-zinc-400">在管理页增删改服务会直接写入配置文件并立即生效；手动改文件后需要重启守护进程。</p>
         </section>
+        <Modal open={stopping} onClose={() => !stopBusy && setStopping(false)} width={480}>
+          <h2 className="text-base font-semibold">停止后台服务？</h2>
+          <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+            它开着的 MCP 会一起关掉。正在用的 MCP 会各自改为直接运行，占用变大；共享的 MCP 在 MCPcell 恢复后会自动回来，按会话的要等会话结束。
+          </p>
+          <p className="mt-2 text-sm leading-6 text-zinc-500">想完全不用 MCPcell，请用首页菜单里的「全部改回原样」。之后要再打开，双击桌面上的 MCPcell 或运行 mcpcell start。</p>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button disabled={stopBusy} onClick={() => setStopping(false)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              busy={stopBusy}
+              onClick={async () => {
+                setStopBusy(true);
+                try {
+                  await daemonApi.shutdown();
+                  toast('后台服务正在停止');
+                } catch (e) {
+                  toast((e as Error).message, 'error');
+                } finally {
+                  setStopBusy(false);
+                  setStopping(false);
+                }
+              }}
+            >
+              停止
+            </Button>
+          </div>
+        </Modal>
 
         <ManualAgents open={manual} />
 
@@ -298,7 +335,7 @@ function InterfaceRow({ status, onChange }: { status: InterfaceStatus; onChange:
       title="界面方式"
       desc={
         <>
-          两种方式的内核完全一样：接管、用到时才打开、记住工具列表、断线重连都相同，只是操作入口不同，切换立即生效。
+          只决定托盘图标：后台服务和正在用的 MCP 两种方式下完全一样，切换立即生效。
           {cli ? (
             <>
               现在是命令行：不显示托盘图标，用 <code className="font-mono text-[12px]">mcpcell ps</code>、<code className="font-mono text-[12px]">clients</code>、
@@ -306,9 +343,9 @@ function InterfaceRow({ status, onChange }: { status: InterfaceStatus; onChange:
               <code className="font-mono text-[12px]">mcpcell open</code> 打开这个窗口。
             </>
           ) : (
-            ' 现在是图形界面：托盘图标常驻，点它打开这个窗口。'
+            ' 现在是图形界面：托盘图标常驻，点它打开这个窗口；从托盘退出只关掉托盘和窗口，MCP 照常可用。'
           )}
-          {!status.traySupported && ' 这个守护进程不显示托盘图标（以 --no-tray 运行）。'}
+          {status.error && <span className="text-amber-700 dark:text-amber-300"> 托盘图标：{status.error}</span>}
         </>
       }
     >

@@ -234,9 +234,15 @@ export type InterfaceMode = 'gui' | 'cli';
 /** GUI (tray icon) or command line; the runtime is the same either way. */
 export interface InterfaceStatus {
   interface: InterfaceMode;
-  tray: boolean; // the daemon shows its tray icon now
-  traySupported: boolean; // false on --no-tray or without a desktop shell
+  tray: boolean; // the tray icon process runs now
+  traySupported: boolean; // false without a desktop (another OS)
+  error?: string; // why the tray did not start or stop
 }
+
+/** Stopping the daemon itself; the tray and window are separate. */
+export const daemonApi = {
+  shutdown: () => call<{ stopping: boolean }>('POST', '/api/shutdown'),
+};
 
 export const uiMode = {
   status: () => call<InterfaceStatus>('GET', '/api/interface'),
