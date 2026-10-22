@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -23,6 +24,16 @@ import (
 	"github.com/luohui1/MCP-cell/internal/registry"
 	"github.com/luohui1/MCP-cell/internal/skills"
 )
+
+// autoTakeoverEvery is how often the daemon looks for MCPs newly added to
+// an agent (only files that changed are read). MCPCELL_AUTO_TAKEOVER_SECS
+// shortens it for end-to-end tests.
+func autoTakeoverEvery() time.Duration {
+	if n, err := strconv.Atoi(os.Getenv("MCPCELL_AUTO_TAKEOVER_SECS")); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	return 45 * time.Second
+}
 
 func runDaemon(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
@@ -89,7 +100,7 @@ func runDaemon(args []string) error {
 	srv = httpd.New(p, httpd.Options{Port: cfg.Port, Token: token, Version: version,
 		ConfigPath: registry.ConfigPath(home), Home: home, MaxInstances: cfg.Limits.MaxInstances, Log: log,
 		Clients: clients.All(userHome, filepath.Join(home, "backups")), Takeovers: takeovers, Exe: exe, Shutdown: stop,
-		Desktop: shell, Wrapper: wrapperNextTo(exe), Skills: skills.New(home, userHome)})
+		Desktop: shell, Wrapper: wrapperNextTo(exe), Skills: skills.New(home, userHome), AutoTakeoverEvery: autoTakeoverEvery()})
 
 	started := time.Now()
 	if err := registry.WriteDaemonInfo(home, registry.DaemonInfo{PID: os.Getpid(), Port: cfg.Port,

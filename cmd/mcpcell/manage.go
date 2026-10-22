@@ -135,6 +135,7 @@ func runRestore(args []string) error {
 			continue
 		}
 		_ = store.Delete(rec.Client, rec.Name)
+		_ = store.Exclude(rec.Client, rec.Name, "restored") // not taken over by itself again
 		done++
 		fmt.Printf("  ✓ %s / %s 已还原\n", c.Name(), rec.Name)
 	}

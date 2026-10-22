@@ -45,6 +45,7 @@ type takeoverOptions struct {
 	clients []string        // client IDs or names; none means all
 	entries map[string]bool // entry or service names; none means all
 	mode    string          // "", registry.ModeShared or registry.ModePerSession
+	auto    string          // --auto on|off: the automatic takeover setting instead
 }
 
 type takeStep struct {
@@ -89,6 +90,9 @@ func takeoverWith(w io.Writer, in io.Reader, args []string) error {
 	o, yes, err := parseTakeover(args)
 	if err != nil {
 		return err
+	}
+	if o.auto != "" {
+		return setAutoTakeover(w, o.auto == "on")
 	}
 	if _, _, err := ensureDaemon(); err != nil {
 		return err
@@ -136,6 +140,7 @@ func parseTakeover(args []string) (o takeoverOptions, yes bool, err error) {
 	fs.BoolVar(&yes, "yes", false, "同 -y")
 	shared := fs.Bool("shared", false, "未验证的 MCP 也共享（需要会话隔离的仍按会话）")
 	perSession := fs.Bool("per-session", false, "新建的服务一律每个会话一个实例")
+	auto := fs.String("auto", "", "on|off：自动托管新加的 MCP（默认开）")
 	var clientList, names listFlag
 	fs.Var(&clientList, "client", "只处理这些客户端：claude-code、codex、cursor（可重复或用逗号分隔）")
 	fs.Usage = func() {
@@ -153,9 +158,16 @@ func parseTakeover(args []string) (o takeoverOptions, yes bool, err error) {
 		_ = names.Set(fs.Arg(0))
 		args = fs.Args()[1:]
 	}
+	if *auto != "" {
+		if *auto != "on" && *auto != "off" || len(names) > 0 || len(clientList) > 0 || *shared || *perSession || yes {
+			return o, false, badUsage("--auto 只能单独使用：mcpcell takeover --auto on|off")
+		}
+		o.auto = *auto
+		return o, false, nil
+	}
 	switch {
 	case *shared && *perSession:
-		return o, false, errors.New("--shared 和 --per-session 只能选一个")
+		return o, false, badUsage("--shared 和 --per-session 只能选一个")
 	case *shared:
 		o.mode = registry.ModeShared
 	case *perSession:
@@ -435,6 +447,31 @@ func applyPlan(w io.Writer, p takeoverPlan, mode string, offerAutostart bool) er
 	}
 	if failed > 0 {
 		return errors.New("部分条目没有托管")
+	}
+	return nil
+}
+
+// setAutoTakeover turns automatic takeover of newly added MCPs on or off,
+// through the daemon when it runs.
+func setAutoTakeover(w io.Writer, on bool) error {
+	var st struct{ Enabled bool }
+	if daemonCall("GET", "/api/auto", &st) == nil {
+		if err := daemonSend("POST", "/api/auto", map[string]bool{"enabled": on}, &st); err != nil {
+			return err
+		}
+	} else {
+		home, err := registry.Home()
+		if err != nil {
+			return err
+		}
+		if err := registry.SetAutoTakeover(home, on); err != nil {
+			return err
+		}
+	}
+	if on {
+		fmt.Fprintln(w, "自动托管：开。之后在 Agent 里新加的 MCP 会自动交给 MCPcell（先试启动，起不来的保持原样）；你还原过的不会再自动托管。")
+	} else {
+		fmt.Fprintln(w, "自动托管：关。新加的 MCP 要用 mcpcell takeover 或管理页的「一键托管」。")
 	}
 	return nil
 }

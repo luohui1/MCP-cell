@@ -103,6 +103,9 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 	for _, name := range req.Names {
 		res := takeoverResult{Name: name}
 		res.Service, res.Created, res.OK = s.attachOne(c, name, req, tried, &res.Error)
+		if res.OK {
+			_ = s.opts.Takeovers.Unexclude(c.ID(), name) // wanted after all
+		}
 		results = append(results, res)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
@@ -266,8 +269,9 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 			res.Error = "没有接管记录"
 		case forget:
 			// The user changed the entry after takeover; keep their edit and
-			// just drop the record.
+			// just drop the record, and leave the entry alone from now on.
 			res.OK = s.opts.Takeovers.Delete(c.ID(), name) == nil
+			_ = s.opts.Takeovers.Exclude(c.ID(), name, "declined")
 		default:
 			if err := c.Restore(rec); err != nil {
 				res.Error = err.Error()
@@ -276,6 +280,8 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				res.OK = s.opts.Takeovers.Delete(c.ID(), name) == nil
+				// Restored by the user: never taken over by itself again.
+				_ = s.opts.Takeovers.Exclude(c.ID(), name, "restored")
 				s.opts.Log.Info("restored", "client", c.ID(), "entry", name)
 			}
 		}

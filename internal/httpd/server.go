@@ -57,6 +57,9 @@ type Options struct {
 	// Wrapper is the installed mcpcell-run. Takeovers keep the entry's
 	// command and wrap it; without it they point entries at /s/<name>.
 	Wrapper string
+	// AutoTakeoverEvery is how often new agent MCPs are looked for (see
+	// autotakeover.go); 0 turns the watcher off (tests).
+	AutoTakeoverEvery time.Duration
 }
 
 type Server struct {
@@ -75,6 +78,8 @@ type Server struct {
 	// variantOf maps an in-memory run- service to the configured service it
 	// is a variant of (variantService), so the page shows it under that one.
 	variantOf sync.Map
+	// autoStamps: the agents' configuration files as last looked at.
+	autoStamps map[string]fileStamp
 
 	cfgMu  sync.Mutex // serializes config.json edits
 	takeMu sync.Mutex // serializes client config takeovers
@@ -85,7 +90,8 @@ func New(p *pool.Pool, opts Options) *Server {
 		opts.Log = slog.Default()
 	}
 	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
-		sessions: map[string]*session{}, codes: map[string]time.Time{}, runs: map[net.Conn]*runWriter{}}
+		sessions: map[string]*session{}, codes: map[string]time.Time{}, runs: map[net.Conn]*runWriter{},
+		autoStamps: map[string]fileStamp{}}
 	p.OnListChange(s.notifyListChanged)
 	return s
 }
@@ -119,6 +125,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/shutdown", s.api(s.handleShutdown))
+	mux.HandleFunc("/api/auto", s.api(s.handleAuto))
+	mux.HandleFunc("POST /api/auto/ack", s.api(s.handleAutoAck))
 	mux.HandleFunc("GET /api/desktop", s.api(s.handleDesktop))
 	mux.HandleFunc("POST /api/desktop", s.api(s.handleDesktop))
 	mux.HandleFunc("POST /api/window", s.api(s.handleWindow))
@@ -136,6 +144,9 @@ func (s *Server) Handler() http.Handler {
 
 // Run expires idle sessions until ctx ends, then closes the rest.
 func (s *Server) Run(ctx context.Context) {
+	if s.opts.AutoTakeoverEvery > 0 {
+		go s.runAutoTakeover(ctx, s.opts.AutoTakeoverEvery)
+	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {

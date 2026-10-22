@@ -33,7 +33,7 @@ var commands = []command{
 	{"mode", "mode [cli|gui]       界面方式：gui 图形界面（托盘图标，默认），cli 命令行（不显示托盘图标）；\n                       不带参数显示当前方式。只决定托盘图标，后台服务和 MCP 不受影响", runMode},
 	{"ps", "ps                   查看服务、实例、会话与内存（私有提交）", noArgs(func([]string) error { return runPS() })},
 	{"clients", "clients              列出各客户端的 MCP 条目、托管状态与运行方式", noArgs(func([]string) error { return runClients() })},
-	{"takeover", "takeover [条目...] [--client 客户端] [--shared|--per-session] [-y]\n                       托管 Agent 的 MCP（同管理页「一键托管」）：先列出计划，确认后执行", runTakeover},
+	{"takeover", "takeover [条目...] [--client 客户端] [--shared|--per-session] [-y]\n                       托管 Agent 的 MCP（同管理页「一键托管」）：先列出计划，确认后执行\n  takeover --auto on|off\n                       自动托管 Agent 里新加的 MCP（默认开）", runTakeover},
 	{"restore", "restore --all        还原所有被托管的客户端配置（不需要守护进程）\n  restore <客户端> [条目...]", runRestore},
 	{"skills", "skills [名称...]     各 Agent 的 Skill 在哪些目录、各处是否一致（不需要守护进程）\n  skills sync <名称...>|--all [--to 位置,...] [--from 位置] [--copy] [-y]\n                       把 Skill 放进 MCPcell 的来源目录，各 Agent 的目录链接到它\n  skills restore <名称...>|--all\n                       逐字节还原同步时替换的内容", runSkills},
 	{"autostart", "autostart [on|off]   开机自启（图形界面方式下托盘图标也随之启动）", runAutostart},
