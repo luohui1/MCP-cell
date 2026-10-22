@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/luohui1/MCP-cell/internal/home"
 )
 
 const (
@@ -184,16 +186,7 @@ func (d Duration) Text() string {
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // Home is $MCPCELL_HOME or ~/.mcpcell.
-func Home() (string, error) {
-	if h := os.Getenv("MCPCELL_HOME"); h != "" {
-		return filepath.Abs(h)
-	}
-	u, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(u, ".mcpcell"), nil
-}
+func Home() (string, error) { return home.Dir() }
 
 func ConfigPath(home string) string { return filepath.Join(home, "config.json") }
 
@@ -348,27 +341,13 @@ func Token(home string) (string, error) {
 }
 
 // DaemonInfo is written by a running daemon so the CLI can find it.
-type DaemonInfo struct {
-	PID       int       `json:"pid"`
-	Port      int       `json:"port"`
-	Version   string    `json:"version"`
-	StartedAt time.Time `json:"startedAt"`
-}
+type DaemonInfo = home.Daemon
 
-func daemonPath(home string) string { return filepath.Join(home, "daemon.json") }
-
-func WriteDaemonInfo(home string, info DaemonInfo) error {
+func WriteDaemonInfo(dir string, info DaemonInfo) error {
 	b, _ := json.MarshalIndent(info, "", "  ")
-	return os.WriteFile(daemonPath(home), b, 0o600)
+	return os.WriteFile(home.DaemonPath(dir), b, 0o600)
 }
 
-func ReadDaemonInfo(home string) (DaemonInfo, error) {
-	var info DaemonInfo
-	b, err := os.ReadFile(daemonPath(home))
-	if err != nil {
-		return info, err
-	}
-	return info, json.Unmarshal(b, &info)
-}
+func ReadDaemonInfo(dir string) (DaemonInfo, error) { return home.ReadDaemon(dir) }
 
-func RemoveDaemonInfo(home string) { _ = os.Remove(daemonPath(home)) }
+func RemoveDaemonInfo(dir string) { _ = os.Remove(home.DaemonPath(dir)) }
