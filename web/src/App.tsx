@@ -112,7 +112,7 @@ function Sidebar() {
   const { status } = useStatus();
   const { data } = useUnified();
   const [page = ''] = useRoute().parts;
-  const broken = data?.rows.filter((r) => mcpView(r, status).kind === 'broken').length ?? 0;
+  const broken = data?.rows.filter((r) => mcpView(r, status, data?.auto).kind === 'broken').length ?? 0;
   const skills = useSkillsShown();
   return (
     <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/60">

@@ -20,7 +20,7 @@ export function McpPage({ id }: { id: string }) {
   const { status } = useStatus();
   const { data, error } = useUnified();
   const edit = useRoute().query.get('edit') === '1';
-  const views = data && id !== 'new' ? data.rows.map((r) => mcpView(r, status)) : [];
+  const views = data && id !== 'new' ? data.rows.map((r) => mcpView(r, status, data.auto)) : [];
   const view = views.find((v) => v.id === id) ?? views.find((v) => v.row.name === id); // a name works too
   const crumbs = [
     { label: '我的 MCP', href: href([]) },
@@ -104,7 +104,7 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
         status={<StatusLine tone={view.tone}>{view.text}</StatusLine>}
         actions={
           <>
-            {view.kind === 'native' && take.length > 0 && (
+            {!row.service && take.length > 0 && back.length === 0 && (
               <Button variant="primary" icon={<Layers className="size-4" />} onClick={() => acts.takeover(take)}>
                 改为共用
               </Button>
@@ -120,6 +120,7 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
       />
       {view.purpose && <p className="-mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{view.purpose}</p>}
 
+      {!view.broken && view.autoError && <Broken error={view.autoError} wrapped={false} retry="改为共用" />}
       {view.broken && (
         <Broken error={view.broken.lastError} at={view.broken.lastErrorAt} retryAt={view.broken.retryAt} stderr={view.broken.stderrTail} wrapped={back.length > 0} />
       )}
@@ -158,13 +159,13 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
   );
 }
 
-function Broken({ error, at, retryAt, stderr, wrapped }: { error?: string; at?: string; retryAt?: string; stderr?: string; wrapped: boolean }) {
+function Broken({ error, at, retryAt, stderr, wrapped, retry = '再试一次' }: { error?: string; at?: string; retryAt?: string; stderr?: string; wrapped: boolean; retry?: string }) {
   const reason = plainReason(error);
   return (
     <Card className="border-red-200 bg-red-50/50 p-5 dark:border-red-900 dark:bg-red-950/20">
       <div className="text-[15px] font-semibold text-red-700 dark:text-red-400">打不开：{reason}</div>
       <p className="mt-1.5 text-sm leading-6 text-red-700/90 dark:text-red-300">
-        {advice(reason)}
+        {advice(reason).replace('「再试一次」', `「${retry}」`)}
         {wrapped && ' 打不开的这段时间，应用会像原来一样自己开它，不影响使用。'}
       </p>
       <details className="mt-2">
@@ -191,7 +192,7 @@ function Now({ view }: { view: McpView }) {
   if (view.kind === 'other') {
     return p(row.kind === 'http' ? '这是远程服务，应用直接连网使用，本机不用开，不需要处理。' : '这是应用自带的 MCP，由应用自己管，不需要处理。');
   }
-  if (view.kind === 'native') {
+  if (view.kind === 'native' || (!row.service && view.autoError)) {
     return p(
       <>
         现在由各个应用自己开：每开一个对话，就多开一份。
@@ -224,6 +225,7 @@ function Now({ view }: { view: McpView }) {
 
 /** Each app's use of this MCP, its open conversations, and what can be done. */
 function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[]; acts: ReturnType<typeof useAgentActions> }) {
+  const { data } = useUnified();
   const { row } = view;
   const [open, setOpen] = useState<string | null>(null);
   const instances = view.services.flatMap((s) => s.instances ?? []);
@@ -255,7 +257,8 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
           </Button>
         );
       } else if (c && canTake(c)) {
-        state = '自己开着一份，每个对话多开一份';
+        const excluded = (data?.auto?.excluded ?? []).some((e) => e.client === a.id && e.name === c.entry);
+        state = excluded ? '自己开着一份（你改回过，不会再自动托管）' : '自己开着一份，每个对话多开一份';
         action = (
           <Button size="sm" icon={<Layers className="size-3.5" />} onClick={() => acts.takeover(takeSteps(row, [a]))}>
             改为共用

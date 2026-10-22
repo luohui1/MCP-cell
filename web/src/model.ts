@@ -1,4 +1,4 @@
-import { instancesOf, SOURCE, type McpRow, type Service, type SessionInfo, type SkillCopy, type SkillInfo, type SkillStatus, type Status } from './api';
+import { instancesOf, SOURCE, type AutoEvent, type AutoStatus, type McpRow, type Service, type SessionInfo, type SkillCopy, type SkillInfo, type SkillStatus, type Status } from './api';
 import { bytes, firstLine } from './format';
 import { purposes } from './purposes';
 
@@ -41,13 +41,24 @@ export interface McpView {
   managed: boolean; // some app uses MCPcell's copy
   takeable: boolean; // some app runs it itself and could use MCPcell's copy
   broken?: Service; // the service that cannot start
+  autoError?: string; // why automatic takeover of this new MCP did not work
 }
 
 export const mcpId = (r: McpRow) => r.service ?? r.key;
 
 export const kindRank: Record<McpKind, number> = { broken: 0, running: 1, standby: 2, native: 3, other: 4 };
 
-export function mcpView(row: McpRow, status: Status): McpView {
+/** The latest automatic takeover attempt for one of the row's entries, if it failed. */
+function failedAuto(row: McpRow, auto?: AutoStatus): AutoEvent | undefined {
+  if (!auto) return undefined;
+  for (const [client, cell] of Object.entries(row.agents)) {
+    const last = (auto.events ?? []).filter((e) => e.client === client && e.name === cell.entry).at(-1);
+    if (last && !last.ok && cell.state === 'native') return last;
+  }
+  return undefined;
+}
+
+export function mcpView(row: McpRow, status: Status, auto?: AutoStatus): McpView {
   const services = row.service ? status.services.filter((s) => s.name === row.service || s.of === row.service) : [];
   const names = new Set(services.map((s) => s.name));
   const sessions = status.sessions.filter((x) => names.has(x.service));
@@ -63,6 +74,10 @@ export function mcpView(row: McpRow, status: Status): McpView {
     if (row.kind === 'http') return { ...base, kind: 'other', tone: 'gray', text: '远程服务，不用管' };
     if (row.class === 'internal') return { ...base, kind: 'other', tone: 'gray', text: '应用自带' };
     if (cells.every((c) => c.state === 'remote' || c.state === 'internal')) return { ...base, kind: 'other', tone: 'gray', text: '不用管' };
+    const failed = failedAuto(row, auto);
+    if (failed?.error && !failed.error.includes('停止自动托管')) {
+      return { ...base, kind: 'broken', tone: 'red', text: `打不开：${plainReason(failed.error)}`, autoError: failed.error };
+    }
     return { ...base, kind: 'native', tone: 'gray', text: '各个应用自己开着' };
   }
   const runs = services.flatMap(instancesOf);
@@ -85,7 +100,8 @@ function purposeOf(row: McpRow, services: Service[]): string {
 /** Why a service cannot start, in words a user can act on. */
 export function plainReason(err?: string): string {
   const e = err ?? '';
-  const [head, stderr = ''] = e.split('\nstderr：');
+  // A takeover's start check reports "…条目保持原样：<error>；它的输出：<last line>".
+  const [head, stderr = ''] = e.replace(/^MCPcell 试着启动它失败，没有接管，条目保持原样：/, '').split(/\nstderr：|；它的输出：/);
   let m: RegExpMatchArray | null;
   if ((m = head.match(/在 PATH 中找不到启动程序 "?([^"]+)"?/))) return `电脑上没有装 ${m[1]}`;
   if (/找不到启动程序|指向的脚本不存在/.test(head)) return '程序不在了';

@@ -50,7 +50,7 @@ export function OneClickDialog({
   const offerAuto = data.autostart.supported && !data.autostart.enabled;
 
   // One that cannot open now would fail the start check; leave it unpicked.
-  const broken = new Map(list.map((c) => [c.row.key, mcpView(c.row, status)] as const).filter(([, v]) => v.kind === 'broken').map(([k, v]) => [k, v.text]));
+  const broken = new Map(list.map((c) => [c.row.key, mcpView(c.row, status, data.auto)] as const).filter(([, v]) => v.kind === 'broken').map(([k, v]) => [k, v.text]));
   useEffect(() => {
     if (open) {
       setPicked(new Set(list.filter((c) => !broken.has(c.row.key)).map((c) => c.row.key)));

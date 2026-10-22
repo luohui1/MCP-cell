@@ -249,6 +249,29 @@ export const uiMode = {
   set: (mode: InterfaceMode) => call<InterfaceStatus>('POST', '/api/interface', { interface: mode }),
 };
 
+/** Automatic takeover of MCPs newly added to an agent (internal/httpd/autotakeover.go). */
+export interface AutoEvent {
+  client: string;
+  name: string;
+  service?: string;
+  ok: boolean;
+  error?: string;
+  at: string;
+  seen?: boolean;
+}
+
+export interface AutoStatus {
+  enabled: boolean;
+  events: AutoEvent[];
+  excluded: { client: string; name: string; reason: string; at: string }[];
+}
+
+export const autoApi = {
+  status: () => call<AutoStatus>('GET', '/api/auto'),
+  set: (enabled: boolean) => call<AutoStatus>('POST', '/api/auto', { enabled }),
+  ack: () => call<{ ok: boolean }>('POST', '/api/auto/ack'),
+};
+
 export const unified = {
   load: () => call<{ agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus }>('GET', '/api/mcp'),
   add: (client: string, row: string) => call<{ service: string }>('POST', `/api/agents/${encodeURIComponent(client)}/add`, { row }),

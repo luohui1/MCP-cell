@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { skillsShown } from './features';
-import { skillsApi, unified, type AgentSummary, type AutostartStatus, type McpRow, type SkillStatus, type Status } from './api';
+import { autoApi, skillsApi, unified, type AgentSummary, type AutoStatus, type AutostartStatus, type McpRow, type SkillStatus, type Status } from './api';
 
 // What every page reads: the daemon's status (polled by App), the MCP rows
 // merged across agents (polled here) and the skill scan (loaded on demand:
@@ -21,7 +21,7 @@ export function useStatus(): StatusCtx {
   return ctx;
 }
 
-export type Unified = { agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus };
+export type Unified = { agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus; auto?: AutoStatus };
 
 interface Loaded<T> {
   data: T | null;
@@ -48,7 +48,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [mcpError, setMcpError] = useState('');
   const reloadMcp = useCallback(async () => {
     try {
-      setMcp(await unified.load());
+      const [data, auto] = await Promise.all([unified.load(), autoApi.status().catch(() => undefined)]);
+      setMcp({ ...data, auto });
       setMcpError('');
     } catch (e) {
       setMcpError((e as Error).message);

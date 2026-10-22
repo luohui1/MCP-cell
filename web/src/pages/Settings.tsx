@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppWindow, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
-import { daemonApi, desktop, instancesOf, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
+import { autoApi, daemonApi, desktop, instancesOf, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
 import { clients as manualClients, masked } from '../clients';
 import { useStatus } from '../data';
 import { bytes, clock, since } from '../format';
@@ -33,11 +33,13 @@ export function SettingsPage({ diag }: { diag: boolean }) {
   const [desk, setDesk] = useState<DesktopStatus | null>(null);
   const [mode, setMode] = useState<InterfaceStatus | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [autoOn, setAutoOn] = useState<boolean | null>(null);
   const [stopBusy, setStopBusy] = useState(false);
   useEffect(() => {
     takeover.autostartStatus().then(setAuto).catch(() => setAuto(null));
     desktop.status().then(setDesk).catch(() => setDesk(null));
     uiMode.status().then(setMode).catch(() => setMode(null));
+    autoApi.status().then((s) => setAutoOn(s.enabled)).catch(() => setAutoOn(null));
   }, []);
 
   async function attempt<T>(task: () => Promise<T>, done: string, set: (v: T) => void) {
@@ -57,6 +59,18 @@ export function SettingsPage({ diag }: { diag: boolean }) {
           <GroupHeader title="常规" />
           <TableCard>
             {mode && <InterfaceRow status={mode} onChange={(m) => attempt(() => uiMode.set(m), m === 'cli' ? '已改为命令行' : '已改为图形界面', setMode)} />}
+            {autoOn !== null && (
+              <SettingRow
+                title="自动托管新 MCP"
+                desc="在 Claude Code、Codex、Cursor 里新加的 MCP 会自动交给 MCPcell：先试着打开，打不开的保持原样；你改回原样的不会再自动托管。"
+              >
+                <Switch
+                  checked={autoOn}
+                  label="自动托管新 MCP"
+                  onChange={(on) => attempt(() => autoApi.set(on), on ? '已开启自动托管' : '已关闭自动托管', (s) => setAutoOn(s.enabled))}
+                />
+              </SettingRow>
+            )}
             <SettingRow
               title="开机自启"
               desc={auto?.supported === false ? auto.error : '登录 Windows 时在后台打开 MCPcell；图形界面方式下托盘图标也一起打开。应用在用 MCPcell 的 MCP 时建议开启，否则 MCPcell 没开着时这些 MCP 用不了。'}

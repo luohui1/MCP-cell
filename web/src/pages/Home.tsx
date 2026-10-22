@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { ChevronRight, Copy, Layers, Plus, RefreshCw, Undo2 } from 'lucide-react';
-import { instancesOf, takeover, type AgentSummary, type McpRow } from '../api';
+import { autoApi, instancesOf, takeover, type AgentSummary, type AutoStatus, type McpRow } from '../api';
 import { agentsOf, canTake, restoreSteps, takeSteps, useAgentActions } from '../agents';
 import { useStatus, useUnified } from '../data';
 import { bytes } from '../format';
@@ -25,7 +25,7 @@ export function HomePage() {
   const [showOther, setShowOther] = useState(false);
 
   const agents = data ? agentsOf(data.agents) : [];
-  const views = data ? data.rows.map((r) => mcpView(r, status)).sort((a, b) => kindRank[a.kind] - kindRank[b.kind] || a.row.name.localeCompare(b.row.name)) : [];
+  const views = data ? data.rows.map((r) => mcpView(r, status, data.auto)).sort((a, b) => kindRank[a.kind] - kindRank[b.kind] || a.row.name.localeCompare(b.row.name)) : [];
   const main = views.filter((v) => v.kind !== 'other');
   const other = views.filter((v) => v.kind === 'other');
   const broken = new Set(views.filter((v) => v.kind === 'broken').map((v) => v.row.key));
@@ -68,6 +68,7 @@ export function HomePage() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[1180px] space-y-5 px-8 pt-6 pb-12">
           <Summary views={views} agents={agents} />
+          {data?.auto && <AutoNews auto={data.auto} agents={agents} onAck={async () => (await autoApi.ack().catch(() => undefined), reload())} />}
           {data && <Hints views={main} offers={offers} data={data} onTake={() => setOneClick(true)} onAuto={async () => {
             try {
               await takeover.autostart(true);
@@ -142,6 +143,42 @@ function Summary({ views, agents }: { views: McpView[]; agents: AgentSummary[] }
         </p>
       )}
     </Card>
+  );
+}
+
+/** What automatic takeover did since the user last looked. */
+function AutoNews({ auto, agents, onAck }: { auto: AutoStatus; agents: AgentSummary[]; onAck: () => void }) {
+  const fresh = (auto.events ?? []).filter((e) => !e.seen);
+  if (!fresh.length) return null;
+  const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
+  const taken = [...new Map(fresh.filter((e) => e.ok).map((e) => [e.service ?? e.name, e])).values()];
+  const stopped = fresh.filter((e) => !e.ok && e.error?.includes('停止自动托管'));
+  const failed = fresh.filter((e) => !e.ok && !e.error?.includes('停止自动托管'));
+  const link = (e: { service?: string; name: string }) => (
+    <a key={e.service ?? e.name} href={href(['mcp', e.service ?? e.name])} className="font-medium text-blue-700 hover:underline dark:text-blue-300">
+      {e.service ?? e.name}
+    </a>
+  );
+  const join = (items: ReactNode[]) => items.flatMap((x, i) => (i ? ['、', x] : [x]));
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-blue-200/70 bg-blue-50/60 px-5 py-3 text-[13px] leading-6 text-zinc-700 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-zinc-200">
+      <div className="min-w-0 flex-1 space-y-0.5">
+        {taken.length > 0 && (
+          <div>
+            新发现 {taken.length} 个 MCP，已自动托管：{join(taken.map(link))}。想改回原样，点开它在「哪些应用在用」里改。
+          </div>
+        )}
+        {failed.length > 0 && <div>新发现的 {join(failed.map((e) => e.name))} 打不开，没有托管，原因写在列表里。</div>}
+        {stopped.map((e) => (
+          <div key={e.client + e.name}>
+            {name(e.client)} 一直把 {e.name} 改回原来的设置，已停止自动托管它。
+          </div>
+        ))}
+      </div>
+      <button onClick={onAck} className="shrink-0 font-medium text-blue-600 hover:underline dark:text-blue-400">
+        知道了
+      </button>
+    </div>
   );
 }
 
