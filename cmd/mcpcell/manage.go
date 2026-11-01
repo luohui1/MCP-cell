@@ -130,7 +130,7 @@ func runRestore(args []string) error {
 	}
 	var st psStatus
 	if len(recs) > 0 && daemonCall("GET", "/api/status", &st) == nil {
-		return restoreThroughDaemon(cs, recs)
+		return restoreThroughDaemon(cs, recs, all)
 	}
 	done, failed := 0, 0
 	for _, rec := range recs {
@@ -161,7 +161,11 @@ func runRestore(args []string) error {
 
 // restoreThroughDaemon asks the running daemon to restore recs, one request
 // per client, the way the page's 改回原样 does.
-func restoreThroughDaemon(cs []clients.Client, recs []clients.Record) error {
+func restoreThroughDaemon(cs []clients.Client, recs []clients.Record, all bool) error {
+	query := ""
+	if all {
+		query = "?all=1"
+	}
 	var order []string
 	byClient := map[string][]string{}
 	for _, rec := range recs {
@@ -183,7 +187,7 @@ func restoreThroughDaemon(cs []clients.Client, recs []clients.Record) error {
 				Error string `json:"error"`
 			} `json:"results"`
 		}
-		if err := daemonSend("POST", "/api/clients/"+url.PathEscape(id)+"/restore", map[string]any{"names": byClient[id]}, &out); err != nil {
+		if err := daemonSend("POST", "/api/clients/"+url.PathEscape(id)+"/restore"+query, map[string]any{"names": byClient[id]}, &out); err != nil {
 			failed += len(byClient[id])
 			fmt.Printf("  ✗ %s：%v\n", name, err)
 			continue

@@ -248,8 +248,10 @@ args = ["mcp-server-time"]
 	if err := daemonCall("GET", "/api/auto", &auto); err != nil {
 		t.Fatal(err)
 	}
-	if len(auto.Excluded) != 8 { // 5 taken over, 3 added by the sync
-		t.Fatalf("the daemon lists %d restored entries, want 8", len(auto.Excluded))
+	// The 5 taken over stay out of automatic takeover; the 3 the sync added
+	// may come back with the next full takeover.
+	if len(auto.Excluded) != 5 {
+		t.Fatalf("the daemon lists %d restored entries, want 5", len(auto.Excluded))
 	}
 	store, _ := clients.OpenStore(home)
 	if len(store.All()) != 0 || len(store.Exclusions()) == 0 {

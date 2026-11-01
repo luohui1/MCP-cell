@@ -92,6 +92,43 @@ func TestSyncApps(t *testing.T) {
 	}
 }
 
+// 全部还原 does not keep the sync out: the next 一键托管 brings every app
+// the same set again.
+func TestRestoreAllLetsSyncAddAgain(t *testing.T) {
+	h, home := startWithHome(t)
+	userHome := t.TempDir()
+	codexHome := filepath.Join(userHome, ".codex")
+	t.Setenv("CODEX_HOME", codexHome) // never the real one
+	cursorFile := filepath.Join(userHome, ".cursor", "mcp.json")
+	_ = os.MkdirAll(filepath.Dir(cursorFile), 0o700)
+	_ = os.MkdirAll(codexHome, 0o700)
+	_ = os.WriteFile(cursorFile, []byte(`{"mcpServers": {"ctx": {"command": "fake", "args": ["ctx"]}}}`), 0o600)
+	_ = os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("model = \"x\"\n"), 0o600)
+	store, _ := clients.OpenStore(home)
+	h.srv.opts.Clients = []clients.Client{clients.NewCursor(userHome, ""), clients.NewCodex(userHome, "")}
+	h.srv.opts.Takeovers = store
+	h.srv.opts.Wrapper = filepath.Join(t.TempDir(), "mcpcell-run.exe")
+
+	synced := func() int {
+		t.Helper()
+		_, body := h.apiCall(t, "POST", "/api/sync", "{}")
+		return strings.Count(body, `"ok":true`)
+	}
+	h.apiCall(t, "POST", "/api/clients/cursor/attach", `{"names":["ctx"]}`)
+	if n := synced(); n != 1 {
+		t.Fatalf("first sync added %d", n)
+	}
+	for _, c := range []string{"cursor", "codex"} {
+		if _, body := h.apiCall(t, "POST", "/api/clients/"+c+"/restore?all=1", `{"names":["ctx"]}`); !strings.Contains(body, `"ok":true`) {
+			t.Fatalf("restore %s: %s", c, body)
+		}
+	}
+	h.apiCall(t, "POST", "/api/clients/cursor/attach", `{"names":["ctx"]}`)
+	if n := synced(); n != 1 {
+		t.Fatalf("after 全部还原 and 一键托管, sync added %d", n)
+	}
+}
+
 // What automatic takeover takes over in one app reaches the others.
 func TestAutoTakeoverSyncs(t *testing.T) {
 	a := newAutoAgent(t, oldEntry)

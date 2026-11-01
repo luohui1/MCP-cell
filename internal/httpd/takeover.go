@@ -264,6 +264,9 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	s.takeMu.Lock()
 	defer s.takeMu.Unlock()
 	forget := r.URL.Query().Get("forget") == "1"
+	// all: 全部还原 (or restore --all). What the sync had added may come back
+	// with the next 一键托管; one restored by itself stays out of that app.
+	all := r.URL.Query().Get("all") == "1"
 	results := make([]takeoverResult, 0, len(req.Names))
 	for _, name := range req.Names {
 		res := takeoverResult{Name: name}
@@ -285,7 +288,9 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 			} else {
 				res.OK = s.opts.Takeovers.Delete(c.ID(), name) == nil
 				// Restored by the user: never taken over by itself again.
-				_ = s.opts.Takeovers.Exclude(c.ID(), name, "restored")
+				if !all || !rec.Added {
+					_ = s.opts.Takeovers.Exclude(c.ID(), name, "restored")
+				}
 				s.opts.Log.Info("restored", "client", c.ID(), "entry", name)
 			}
 		}
