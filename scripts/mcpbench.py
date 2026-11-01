@@ -6,7 +6,7 @@ commit of every process involved (each client's whole tree, conhost
 included; for MCPcell also the daemon and its instances). No model is
 involved, so results repeat.
 
-    python scripts/mcpbench.py <servers.json> <out.json> [--quick | --readiness]
+    python scripts/mcpbench.py <servers.json> <out.json> [--quick | --readiness | --concurrent]
 
 servers.json: {"wrapper": "<mcpcell-run.exe>", "home": "<MCPCELL_HOME of a
 test daemon>", "servers": [{"name", "argv", "env", "tool": {"name",
@@ -19,6 +19,10 @@ Experiments:
   latency   per server with a tool: time from start to the first result
             (native; MCPcell with its instance stopped; MCPcell with it
             running) and the round trip of repeated calls
+  concurrent (--concurrent) N sessions, each starting every server with a
+            tool and calling it `calls` times, all at once from a cold
+            start: time until every call is done, each call's round trip,
+            and memory and processes with everything still connected
 """
 import json, os, queue, statistics, subprocess, sys, threading, time, urllib.request
 
@@ -211,6 +215,58 @@ class Bench:
                     time.sleep(2)
         return rows
 
+    def concurrent(self, ns, reps):
+        work_servers = [s for s in self.cfg['servers'] if s.get('tool')]
+        rows = []
+        for n in ns:
+            for rep in range(reps):
+                for mode in (('native', 'mcpcell') if rep % 2 == 0 else ('mcpcell', 'native')):
+                    if mode == 'native' and free_commit_gb() < 8:
+                        print(f'  skip native n={n}: free commit below 8 GB', flush=True)
+                        continue
+                    self.stop_all()
+                    work = [s for _ in range(n) for s in work_servers]
+                    clients = [None] * len(work)
+                    calls = [[] for _ in work]  # seconds per call, first one included
+                    ready = [None] * len(work)
+                    errors = []
+
+                    # Every client on its own thread, as every session of
+                    # every agent would: start, handshake, then call.
+                    def go(i, server):
+                        try:
+                            c = Client(self.argv(server, mode), self.env(server, mode))
+                            clients[i] = c
+                            ready[i] = c.ready()
+                            for _ in range(server.get('calls', 5)):
+                                calls[i].append(c.call(server['tool']))
+                        except Exception as e:
+                            errors.append(f'{server["name"]}: {str(e)[:120]}')
+                    t0 = time.perf_counter()
+                    ts = [threading.Thread(target=go, args=(i, s)) for i, s in enumerate(work)]
+                    [t.start() for t in ts]
+                    [t.join() for t in ts]
+                    makespan = time.perf_counter() - t0
+                    live = [c for c in clients if c]
+                    m = measure(live, self.daemon_pid if mode == 'mcpcell' else None)
+                    [c.close() for c in live]
+                    per_server = {}
+                    for i, server in enumerate(work):
+                        d = per_server.setdefault(server['name'], {'ready': [], 'first': [], 'calls': []})
+                        if ready[i] is not None:
+                            d['ready'].append(ready[i])
+                        if calls[i]:
+                            d['first'].append(calls[i][0])
+                            d['calls'] += calls[i][1:]
+                    done = sum(len(c) for c in calls)
+                    rows.append({'n': n, 'rep': rep, 'mode': mode, 'mb': m['mb'], 'processes': m['processes'], 'names': m['names'],
+                                 'makespan': makespan, 'callsDone': done, 'callsPlanned': sum(s.get('calls', 5) for s in work),
+                                 'servers': per_server, 'errors': errors})
+                    print(f'  concurrent n={n} rep={rep} {mode:8} {m["mb"]:7.0f} MB {m["processes"]:3d} procs '
+                          f'all calls done {makespan:5.1f}s calls {done}/{rows[-1]["callsPlanned"]} errors={len(errors)}', flush=True)
+                    time.sleep(3)
+        return rows
+
     def latency(self, reps):
         rows = []
         for server in self.cfg['servers']:
@@ -273,6 +329,8 @@ def main():
     result = {'started': time.strftime('%Y-%m-%d %H:%M:%S'), 'servers': [s['name'] for s in cfg['servers']]}
     if '--readiness' in sys.argv:  # one session, more repetitions
         result['readiness'] = b.scaling([1], 5)
+    elif '--concurrent' in sys.argv:
+        result['concurrent'] = b.concurrent([1, 2] if quick else [1, 2, 4], 1 if quick else 3)
     else:
         result['scaling'] = b.scaling([1, 2] if quick else [1, 2, 3, 4], 1 if quick else 3)
         result['latency'] = b.latency(2 if quick else 5)
