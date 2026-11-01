@@ -19,9 +19,22 @@ const shortHint: Record<string, string> = {
   cursor: 'Cursor 刷新 MCP 后生效',
 };
 
-/** Agents with a configuration file, in display order. */
+/** The app an agent id belongs to: a Claude Code project
+ * ("claude-code@<dir>") belongs to Claude Code. */
+export const appOf = (id: string) => id.split('@')[0];
+export const isProject = (id: string) => id.includes('@');
+
+/** Agents with a configuration file, in display order: each app, then the
+ * projects that have servers of their own. */
 export const agentsOf = (all: AgentSummary[]) =>
-  agentOrder.map((id) => all.find((a) => a.id === id)).filter((a): a is AgentSummary => !!a && a.found);
+  agentOrder.flatMap((app) =>
+    all.filter((a) => a.found && appOf(a.id) === app).sort((x, y) => Number(isProject(x.id)) - Number(isProject(y.id)) || x.id.localeCompare(y.id)),
+  );
+
+/** The apps among agents, for filtering by app. */
+export const appsOf = (agents: AgentSummary[]) => [...new Set(agents.map((a) => appOf(a.id)))];
+
+export const brandOfAgent = (id: string) => agentBrand[appOf(id)] ?? '';
 
 /** A native entry MCPcell can run: local stdio with an environment it can
  * reproduce (the daemon decides). */
@@ -48,7 +61,7 @@ export interface RestoreStep {
 export function takeSteps(r: McpRow, agents: AgentSummary[], only?: string, share = false): TakeStep[] {
   return agents.flatMap((a) => {
     const c = r.agents[a.id];
-    if ((only && a.id !== only) || !canTake(c)) return [];
+    if ((only && appOf(a.id) !== only) || !canTake(c)) return [];
     const force = c.class === 'unknown' && share;
     const mode: Mode = r.service ? (r.mode as Mode) : c.class === 'shared' || force ? 'shared' : 'per-session';
     return [{ agent: a, entry: c.entry, service: r.service ?? r.proposed ?? c.entry, isNew: !r.service, mode, force }];
@@ -72,7 +85,7 @@ const byAgent = <T extends { agent: AgentSummary }>(steps: T[]) => {
   return [...m.values()];
 };
 
-const hints = (agents: AgentSummary[]) => agents.map((a) => shortHint[a.id] ?? `${a.name} 重启后生效`).join('；');
+const hints = (agents: AgentSummary[]) => [...new Set(agents.map((a) => shortHint[appOf(a.id)] ?? `${a.name} 重启后生效`))].join('；');
 
 /** Applies takeover steps agent by agent; throws with the first failure. */
 export async function applyTakeover(steps: TakeStep[]): Promise<string> {
@@ -145,8 +158,8 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
       setPending({
         title: title ?? (n === 1 ? `${steps[0].service} 改为用 MCPcell 这份` : `${n} 个 MCP 改为用 MCPcell 这份`),
         intro: steps.every((s) => s.mode === 'shared')
-          ? '改由 MCPcell 打开：所有对话共用一份，同一个 MCP 全机只开一份。工具名不变，随时可以改回原样。'
-          : '改由 MCPcell 打开，工具名不变，随时可以改回原样。标着「每个对话一份」的，仍然每个对话单独一份，但用到时才打开、对话结束就关掉。',
+          ? '改用 MCPcell 共用的这份，随时可以改回'
+          : '改由 MCPcell 打开，随时可以改回',
         groups: byAgent(steps).map((g) => ({
           agent: g.agent,
           lines: g.steps.map((s) => (
@@ -160,7 +173,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
           )),
         })),
         warn: steps.some((s) => s.force)
-          ? '你让没确认过的 MCP 共用一份。如果它为不同对话记着各自的东西（浏览器页面、连接、登录），共用后会互相干扰；出问题时改成每个对话一份，或改回原样。'
+          ? '没确认过的 MCP 共用后，不同对话可能互相干扰；有问题就改回'
           : undefined,
         confirm: '确定',
         run: () => applyTakeover(steps),
@@ -170,7 +183,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
       if (!steps.length) return;
       setPending({
         title: title ?? (steps.length === 1 ? (steps[0].added ? `从 ${steps[0].agent.name} 去掉 ${steps[0].entry}` : `${steps[0].entry} 改回原样`) : `${steps.length} 项改回原样`),
-        intro: '恢复成交给 MCPcell 之前的配置（一个字节都不差），之后应用每开一个对话就自己再开一份。之后被你改过的项不会被覆盖。',
+        intro: '恢复成原来的配置，一字不差',
         groups: byAgent(steps).map((g) => ({
           agent: g.agent,
           lines: g.steps.map((s) => (
@@ -180,7 +193,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
             </>
           )),
         })),
-        note: '这一项恢复成原来的样子，其他内容不动，改之前先备份整个文件。',
+        note: '先备份整个文件',
         confirm: '改回原样',
         danger: true,
         run: () => applyRestore(steps),
@@ -189,9 +202,9 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
     forget(agent: AgentSummary, entry: string) {
       setPending({
         title: `不再管 ${entry}`,
-        intro: '这一项后来在应用里被改过。保留你现在的配置，只删掉 MCPcell 的记录。',
+        intro: '保留你现在的配置，只删掉 MCPcell 的记录',
         groups: [{ agent, lines: [entry] }],
-        note: '配置文件不改动。',
+        note: '配置文件不改动',
         confirm: '不再管它',
         run: async () => {
           const { results } = await takeover.restore(agent.id, [entry], true);
@@ -216,9 +229,9 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
             ],
           },
         ],
-        note: '新加一项，其他内容不动，改之前先备份整个文件。',
+        note: '先备份整个文件',
         confirm: '加上',
-        run: async () => (await unified.add(agent.id, row.key), `已把 ${row.name} 加到 ${agent.name}。${shortHint[agent.id] ?? ''}`),
+        run: async () => (await unified.add(agent.id, row.key), `已把 ${row.name} 加到 ${agent.name}。${shortHint[appOf(agent.id)] ?? ''}`),
       });
     },
   };
@@ -268,7 +281,7 @@ export function AgentChangeCard({ agent, lines, note }: { agent: AgentSummary; l
   return (
     <div className="rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-700">
       <div className="flex items-center gap-2">
-        <BrandMark brand={agentBrand[agent.id]} className="size-4" />
+        <BrandMark brand={brandOfAgent(agent.id)} className="size-4" />
         <span className="text-sm font-medium">{agent.name}</span>
         <span className="min-w-0 truncate font-mono text-xs text-zinc-400" title={agent.path}>
           {agent.path}
@@ -282,8 +295,8 @@ export function AgentChangeCard({ agent, lines, note }: { agent: AgentSummary; l
         ))}
       </ul>
       <div className="mt-2 text-xs text-zinc-400">
-        {note ?? '原来的命令保留，前面加上 mcpcell-run；其他内容不动，改之前先备份整个文件。'}
-        {restartHint[agent.id]}
+        {note ?? '原命令前加上 mcpcell-run，先备份整个文件'}
+        {restartHint[appOf(agent.id)]}
       </div>
     </div>
   );

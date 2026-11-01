@@ -694,6 +694,14 @@ type Snapshot struct {
 	Usage           proc.Usage `json:"usage"`
 }
 
+// Counters returns the calls answered and the last activity, without the
+// process queries Snapshot makes (it also works once the instance ended).
+func (i *Instance) Counters() (calls uint64, lastActive time.Time) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.calls, i.lastActive
+}
+
 func (i *Instance) Snapshot() Snapshot {
 	usage, _ := i.p.Usage()
 	i.mu.Lock()

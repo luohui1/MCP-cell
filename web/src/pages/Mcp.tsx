@@ -1,16 +1,18 @@
-import { useState, type ReactNode } from 'react';
-import { ChevronRight, Copy, Layers, Package, Play, RotateCw, Square, Trash2, Undo2 } from 'lucide-react';
-import { instancesOf, type AgentSummary, type InstanceSnapshot, type SessionInfo } from '../api';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { ArrowLeft, ChevronRight, Copy, Layers, Package, Play, RotateCw, Square, Trash2, Undo2 } from 'lucide-react';
+import { instancesOf, metricsApi, type AgentSummary, type InstanceSnapshot, type SessionInfo } from '../api';
 import { useServiceActions } from '../actions';
-import { agentBrand, agentsOf, canTake, restoreSteps, takeSteps, useAgentActions } from '../agents';
+import { agentsOf, brandOfAgent, canTake, isProject, restoreSteps, takeSteps, useAgentActions } from '../agents';
+import { MemoryChart, readBytes } from '../chart';
 import { mainClients, masked } from '../clients';
-import { useStatus, useUnified, type Unified } from '../data';
-import { bytes, clock, firstLine, since, span, until } from '../format';
+import { usePolled, useStatus, useUnified, type Unified } from '../data';
+import { bytes, clock, firstLine, since, until } from '../format';
 import { BrandMark, ServiceAvatar } from '../icons';
-import { Block, Crumbs, Detail, DetailHead, Placeholder, StatusLine } from '../layout';
+import { Block, Detail, DetailHead, Placeholder, StatusLine } from '../layout';
 import { advice, agentOfClient, mcpView, plainReason, type McpView } from '../model';
 import { href, useRoute } from '../router';
-import { Button, Card, CodeBlock, CopyButton, cx, Menu, PageHeader, Segmented, useCopy } from '../ui';
+import { StatGrid } from '../stats';
+import { Button, Card, CodeBlock, CopyButton, cx, Menu, Segmented, useCopy } from '../ui';
 import { NewService, ServiceSettings } from './ServiceForm';
 
 // One MCP: what it is for, which apps use it, how it is doing; the technical
@@ -22,16 +24,11 @@ export function McpPage({ id }: { id: string }) {
   const edit = useRoute().query.get('edit') === '1';
   const views = data && id !== 'new' ? data.rows.map((r) => mcpView(r, status, data.auto)) : [];
   const view = views.find((v) => v.id === id) ?? views.find((v) => v.row.name === id); // a name works too
-  const crumbs = [
-    { label: '我的 MCP', href: href([]) },
-    { label: id === 'new' ? '添加' : (view?.row.name ?? id), href: '' },
-  ];
-
   let body: ReactNode;
   if (id === 'new') {
     body = (
       <Detail>
-        <DetailHead icon={<ServiceAvatar name="" size="md" />} title="添加 MCP" status="先加到 MCPcell，再在「哪些应用在用」里加到各个应用" />
+        <DetailHead icon={<Back />} title="添加 MCP" />
         <NewService />
       </Detail>
     );
@@ -40,20 +37,22 @@ export function McpPage({ id }: { id: string }) {
   } else if (data) {
     body = (
       <Placeholder icon={<Layers className="size-6" />} title={`找不到 ${id}`}>
-        它可能已被删除或改回原样。
         <a className="text-blue-600 hover:underline" href={href([])}>
-          回到我的 MCP
+          返回
         </a>
       </Placeholder>
     );
   } else {
-    body = <p className="py-16 text-center text-sm text-zinc-400">{error || '正在读取…'}</p>;
+    body = <p className="py-12 text-center text-[13px] text-zinc-400">{error || '正在读取…'}</p>;
   }
+  return <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>;
+}
+
+function Back() {
   return (
-    <>
-      <PageHeader title={<Crumbs items={crumbs} />} />
-      <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
-    </>
+    <a href={href([])} title="返回" aria-label="返回" className="-ml-1.5 grid size-8 shrink-0 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+      <ArrowLeft className="size-4" />
+    </a>
   );
 }
 
@@ -77,40 +76,44 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
         running
           ? {
               label: '现在关掉',
-              hint: '用到时会自动再打开',
               icon: <Square className="size-4" />,
               onSelect: () => view.services.forEach((s) => instancesOf(s).length && svcActs.stop(s.name)),
             }
-          : { label: '先打开一次', hint: '试试能不能正常打开', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) },
+          : { label: '打开一次试试', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) },
         ...(svc.package
-          ? [{ label: '更新到最新版本', hint: `现在是 ${svc.package.version}`, icon: <Package className="size-4" />, onSelect: () => svcActs.update(svc.name) }]
+          ? [{ label: `更新（现在 ${svc.package.version}）`, icon: <Package className="size-4" />, onSelect: () => svcActs.update(svc.name) }]
           : []),
         { label: '复制接入地址', icon: <Copy className="size-4" />, onSelect: () => copy(`${status.baseUrl}/s/${svc.name}`, '已复制接入地址') },
         'sep' as const,
         ...(back.length
-          ? [{ label: '全部改回原样', hint: '各个应用恢复成自己开', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back, `${row.name} 改回原样`) }]
+          ? [{ label: '改回原样', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back, `${row.name} 改回原样`) }]
           : []),
         { label: '从 MCPcell 删除', icon: <Trash2 className="size-4" />, danger: true, onSelect: () => svcActs.askDelete(svc.name) },
       ]
     : back.length
-      ? [{ label: '全部改回原样', hint: '各个应用恢复成自己开', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back) }]
+      ? [{ label: '改回原样', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back) }]
       : [];
 
   return (
     <Detail>
       <DetailHead
-        icon={<ServiceAvatar name={row.name} size="md" />}
+        icon={
+          <>
+            <Back />
+            <ServiceAvatar name={row.name} size="sm" />
+          </>
+        }
         title={row.name}
         status={<StatusLine tone={view.tone}>{view.text}</StatusLine>}
         actions={
           <>
             {!row.service && take.length > 0 && back.length === 0 && (
-              <Button variant="primary" icon={<Layers className="size-4" />} onClick={() => acts.takeover(take)}>
+              <Button size="sm" variant="primary" icon={<Layers className="size-3.5" />} onClick={() => acts.takeover(take)}>
                 改为共用
               </Button>
             )}
             {view.broken && (
-              <Button icon={<RotateCw className="size-4" />} busy={busy} onClick={() => svcActs.start(view.broken!.name)}>
+              <Button size="sm" icon={<RotateCw className="size-3.5" />} busy={busy} onClick={() => svcActs.start(view.broken!.name)}>
                 再试一次
               </Button>
             )}
@@ -118,34 +121,31 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
           </>
         }
       />
-      {view.purpose && <p className="-mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{view.purpose}</p>}
+      {view.purpose && <p className="-mt-1 text-[13px] text-zinc-500">{view.purpose}</p>}
 
       {!view.broken && view.autoError && <Broken error={view.autoError} wrapped={false} retry="改为共用" />}
       {view.broken && (
         <Broken error={view.broken.lastError} at={view.broken.lastErrorAt} retryAt={view.broken.retryAt} stderr={view.broken.stderrTail} wrapped={back.length > 0} />
       )}
 
+      {svc && view.kind !== 'native' && <Numbers view={view} />}
+
       <Block title="哪些应用在用">
         <UsedBy view={view} agents={agents} acts={acts} />
-      </Block>
-
-      <Block title="现在">
-        <Now view={view} />
       </Block>
 
       {row.service && (
         <section>
           <button
             onClick={() => setAdvanced(!advanced)}
-            className="mb-2.5 flex items-center gap-1.5 px-1 text-[13px] font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+            className="mb-1.5 flex items-center gap-1.5 px-1 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
             aria-expanded={advanced}
           >
             <ChevronRight className={cx('size-3.5 transition-transform', advanced && 'rotate-90')} />
             高级
-            <span className="font-normal text-zinc-400">运行方式、多久关掉、内存上限、版本、启动命令</span>
           </button>
           {advanced && (
-            <div className="space-y-5">
+            <div className="space-y-4">
               <ServiceSettings name={row.service} svc={svc} openAdvanced={edit} />
               <Technical view={view} />
               <ManualConnect name={row.service} />
@@ -184,43 +184,51 @@ function Broken({ error, at, retryAt, stderr, wrapped, retry = '再试一次' }:
   );
 }
 
-/** How it is doing right now, in a sentence or two. */
-function Now({ view }: { view: McpView }) {
+/** This MCP in numbers, and its memory over the last hour. */
+function Numbers({ view }: { view: McpView }) {
   const { status } = useStatus();
-  const { row } = view;
-  const p = (children: ReactNode) => <p className="text-sm leading-7 text-zinc-600 dark:text-zinc-300">{children}</p>;
-  if (view.kind === 'other') {
-    return p(row.kind === 'http' ? '这是远程服务，应用直接连网使用，本机不用开，不需要处理。' : '这是应用自带的 MCP，由应用自己管，不需要处理。');
-  }
-  if (view.kind === 'native' || (!row.service && view.autoError)) {
-    return p(
-      <>
-        现在由各个应用自己开：每开一个对话，就多开一份。
-        {view.takeable
-          ? row.mode === 'shared'
-            ? '改为共用后，同一个 MCP 全机只开一份，没人用时自动关掉。'
-            : '改为用 MCPcell 这份后，每个对话仍单独一份，但用到时才打开、对话结束就关掉。'
-          : ` 现在还不能交给 MCPcell：${row.reason}`}
-      </>,
-    );
-  }
-  const svc = status.services.find((s) => s.name === row.service);
-  if (!svc) return p('MCPcell 里已经没有它的设置了，但还有应用指向它。可以把这些应用改回原样，或者重新添加同名的 MCP。');
-  const perSession = svc.mode === 'per-session';
-  const idle = svc.idleTimeoutSec ? `没人用 ${span(svc.idleTimeoutSec * 1000)}后自动关掉` : '开着就不自动关';
+  const svc = status.services.find((s) => s.name === view.row.service)!;
+  const metrics = usePolled(useCallback(() => metricsApi.load('1h', svc.name), [svc.name]), 10_000);
+  const [nowT, setNowT] = useState(() => Date.now() / 1000);
+  useEffect(() => setNowT(Date.now() / 1000), [metrics]);
   const runs = view.services.flatMap(instancesOf);
-  const how = perSession ? '每个对话单独一份' : '所有对话共用一份';
-  if (runs.length) {
-    const oldest = runs.reduce((a, b) => (a.startedAt < b.startedAt ? a : b));
-    return p(
-      <>
-        运行中，占 <b className="font-semibold tabular-nums">{bytes(runs.reduce((n, i) => n + i.usage.privateBytes, 0))}</b> 内存，已经开了 {since(oldest.startedAt)}。{how}
-        {perSession && runs.length > 1 ? `，现在开着 ${runs.length} 份` : ''}；{idle}。
-      </>,
-    );
-  }
-  if (view.kind === 'broken') return p(`现在没有开着。${how}；能打开以后，${idle}。`);
-  return p(`待命：现在没人在用，不占内存。应用用到它时自动打开（${how}），${idle}。`);
+  const used = runs.reduce((n, i) => n + i.usage.privateBytes, 0);
+  const oldest = runs.reduce<string | undefined>((a, i) => (!a || i.startedAt < a ? i.startedAt : a), undefined);
+  const conv = new Set(view.sessions.map((x) => (x.agentPid ? `p${x.agentPid}` : `s${x.id}`))).size;
+  const calls = view.services.reduce((n, s) => n + (s.calls ?? 0), 0);
+  const last = view.services.map((s) => s.lastUsedAt).filter((t): t is string => !!t).sort().at(-1);
+  return (
+    <section className="space-y-3">
+      <StatGrid
+        cells={[
+          {
+            label: '现在占用',
+            value: used ? readBytes(used) : '待命',
+            sub: runs.length > 1 ? `开着 ${runs.length} 份，每个对话一份` : oldest ? `已经开了 ${since(oldest)}` : '没人用时不占内存',
+          },
+          {
+            label: '平时开一份',
+            value: svc.typicalBytes ? readBytes(svc.typicalBytes) : '—',
+            sub: svc.typicalRuns ? `最近 ${svc.typicalRuns} 次运行的中位数` : '打开过一次后才知道',
+          },
+          { label: '在用的对话', value: conv, sub: svc.mode === 'per-session' ? '每个对话单独一份' : '所有对话共用一份' },
+          { label: '调用', value: calls, sub: last ? `${since(last)}前用过` : 'MCPcell 这次启动后还没用过' },
+        ]}
+      />
+      <Card className="px-4 pt-3 pb-1.5">
+        <h3 className="mb-1 text-xs text-zinc-500">最近 1 小时</h3>
+        <MemoryChart
+          points={metrics?.points ?? []}
+          step={metrics?.step ?? 10}
+          from={nowT - 3600}
+          to={nowT}
+          height={130}
+          series={[{ key: 'total', label: '占用' }]}
+          empty={metrics ? '最近 1 小时没打开过' : '正在读取…'}
+        />
+      </Card>
+    </section>
+  );
 }
 
 /** Each app's use of this MCP, its open conversations, and what can be done. */
@@ -239,9 +247,9 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
       let why: string | undefined;
       let action: ReactNode = null;
       if (c?.state === 'managed') {
-        state = c.added ? '在用 MCPcell 这份（是 MCPcell 加的）' : '在用 MCPcell 这份';
+        state = '共用';
         if (c.drift) {
-          state += '；它在这里的设置改过，所以单独开了一份';
+          state += '（设置改过，单独一份）';
           why = c.drift;
         }
         action = (
@@ -250,7 +258,7 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
           </Button>
         );
       } else if (c?.state === 'changed') {
-        state = '这一项后来被改过，现在不用 MCPcell 这份';
+        state = '被改过';
         action = (
           <Button size="sm" onClick={() => acts.forget(a, c.entry)}>
             不再管它
@@ -258,25 +266,25 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
         );
       } else if (c && canTake(c)) {
         const excluded = (data?.auto?.excluded ?? []).some((e) => e.client === a.id && e.name === c.entry);
-        state = excluded ? '自己开着一份（你改回过，不会再自动托管）' : '自己开着一份，每个对话多开一份';
+        state = excluded ? '各开各的（你改回过）' : '各开各的';
         action = (
           <Button size="sm" icon={<Layers className="size-3.5" />} onClick={() => acts.takeover(takeSteps(row, [a]))}>
             改为共用
           </Button>
         );
       } else if (c) {
-        state = c.state === 'remote' ? '直接连这个远程服务' : c.state === 'internal' ? '应用自带' : '自己开着';
+        state = c.state === 'remote' ? '远程' : c.state === 'internal' ? '自带' : '各开各的';
         why = c.reason;
-      } else if (row.canAdd && row.service && view.kind !== 'broken') {
-        state = '没有加';
+      } else if (row.canAdd && row.service && view.kind !== 'broken' && !isProject(a.id)) {
+        state = '没有';
         action = (
           <Button size="sm" variant="ghost" onClick={() => acts.add(a, row)}>
             加到 {a.name}
           </Button>
         );
       } else return null;
-      if (c && !c.enabled) state += `（${a.name} 里关掉了）`;
-      return { id: a.id, brand: agentBrand[a.id], name: a.name, state, why, action, sessions };
+      if (c && !c.enabled) state += '（已关）';
+      return { id: a.id, brand: brandOfAgent(a.id), name: a.name, state, why, action, sessions };
     })
     .filter((l) => !!l);
   if (others.length) lines.push({ id: 'other', brand: '', name: '其他程序', state: '用接入地址连着', why: undefined, action: null, sessions: others });
@@ -297,10 +305,10 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
               >
                 <ChevronRight className={cx('size-3.5 shrink-0 text-zinc-400 transition-transform', expanded && 'rotate-90', !l.sessions.length && 'invisible')} />
                 <BrandMark brand={l.brand} className="size-4 shrink-0" />
-                <span className="w-28 shrink-0 text-sm font-medium">{l.name}</span>
+                <span className="w-40 shrink-0 truncate text-[13px] font-medium" title={l.name}>{l.name}</span>
                 <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-500" title={l.why ? `${l.state}\n${l.why}` : l.state}>
                   {l.state}
-                  {l.sessions.length > 0 && <span className="text-zinc-700 dark:text-zinc-300"> · 正连着 {l.sessions.length} 个对话</span>}
+                  {l.sessions.length > 0 && <span className="text-zinc-700 dark:text-zinc-300"> · {l.sessions.length} 个对话</span>}
                 </span>
               </button>
               {l.action}
@@ -384,17 +392,15 @@ function ManualConnect({ name }: { name: string }) {
   return (
     <Card className="p-5">
       <div className="mb-1 text-sm font-medium">手动接入</div>
-      <p className="mb-3 text-[13px] text-zinc-500">不经 mcpcell-run，直接用接入地址连。其他应用见「设置 › 手动接入」。</p>
       <div className="mb-4 flex items-center gap-2">
         <code className="rounded-lg bg-zinc-100 px-3 py-2 font-mono text-[13px] dark:bg-zinc-800">{url}</code>
         <CopyButton text={url} label="复制接入地址" />
       </div>
       <Segmented value={client} onChange={setClient} options={mainClients.map((c) => ({ value: c.id, label: c.name }))} />
-      <p className="mt-4 mb-2 text-sm text-zinc-500">
-        替换 <span className="text-zinc-800 dark:text-zinc-200">{spec.file}</span> 里同名的一项，然后重开应用。工具名保持不变。
+      <p className="mt-3 mb-2 text-xs text-zinc-500">
+        替换 <span className="text-zinc-800 dark:text-zinc-200">{spec.file}</span> 里同名的一项
       </p>
       <CodeBlock shown={spec.snippet!([{ name, url }], masked(status.token))} copy={spec.snippet!([{ name, url }], status.token)} />
-      <p className="mt-2 text-xs text-zinc-400">复制的内容带完整访问令牌。</p>
     </Card>
   );
 }

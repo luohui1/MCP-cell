@@ -78,6 +78,7 @@ function hash(s: string) {
 
 const avatarSize = {
   xs: 'size-6 rounded-md text-[11px]',
+  row: 'size-8 rounded-lg text-[13px]',
   sm: 'size-9 rounded-[10px] text-sm',
   md: 'size-10 rounded-xl text-base',
   lg: 'size-14 rounded-2xl text-2xl',

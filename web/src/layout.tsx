@@ -3,35 +3,24 @@ import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
 import { Card, cx, Dot, Menu } from './ui';
 import type { Tone } from './model';
 
-// The three levels share these pieces: a breadcrumb header, a list on the
-// left grouped by state, and the selected item's detail on the right.
+// Page pieces: a scrolling body, a toolbar row, a detail column and its
+// blocks, and list parts.
 
-export function Crumbs({ items }: { items: { label: ReactNode; href?: string }[] }) {
+/** A scrolling page body: one column sized for a small window. */
+export function Body({ children }: { children: ReactNode }) {
   return (
-    <nav className="flex min-w-0 items-center gap-1.5 text-lg font-semibold tracking-tight">
-      {items.map((it, i) => (
-        <span key={i} className="flex min-w-0 items-center gap-1.5">
-          {i > 0 && <ChevronRight className="size-4 shrink-0 text-zinc-300 dark:text-zinc-600" />}
-          {it.href && i < items.length - 1 ? (
-            <a href={it.href} className="shrink-0 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white">
-              {it.label}
-            </a>
-          ) : (
-            <span className="truncate">{it.label}</span>
-          )}
-        </span>
-      ))}
-    </nav>
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-[880px] space-y-4 px-5 pt-4 pb-8">{children}</div>
+    </div>
   );
 }
 
-/** A scrolling page body for pages without a list. */
-export function Body({ children, width = 960 }: { children: ReactNode; width?: number }) {
+/** The row at the top of a page: what it shows on the left, actions on the right. */
+export function Toolbar({ children, actions }: { children?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full space-y-7 px-8 pt-6 pb-12" style={{ maxWidth: width }}>
-        {children}
-      </div>
+    <div className="flex min-h-8 items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">{children}</div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">{actions}</div>
     </div>
   );
 }
@@ -48,16 +37,16 @@ export function Split({ list, detail }: { list: ReactNode; detail: ReactNode }) 
 
 /** The detail pane's content column. */
 export function Detail({ children }: { children: ReactNode }) {
-  return <div className="mx-auto w-full max-w-[880px] space-y-6 px-8 pt-6 pb-12">{children}</div>;
+  return <div className="mx-auto w-full max-w-[880px] space-y-4 px-5 pt-4 pb-8">{children}</div>;
 }
 
 export function DetailHead({ icon, title, status, actions }: { icon?: ReactNode; title: ReactNode; status?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex items-center gap-3">
       {icon}
       <div className="min-w-0 flex-1">
-        <h2 className="truncate text-xl font-semibold tracking-tight">{title}</h2>
-        {status && <div className="mt-1 flex min-w-0 items-center gap-2 text-sm text-zinc-500">{status}</div>}
+        <h2 className="truncate text-base font-semibold tracking-tight">{title}</h2>
+        {status && <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[13px] text-zinc-500">{status}</div>}
       </div>
       <div className="flex shrink-0 items-center gap-2">{actions}</div>
     </div>
@@ -78,11 +67,11 @@ export function StatusLine({ tone, children, title }: { tone: Tone; children: Re
 export function Block({ title, extra, children, className, bare }: { title: ReactNode; extra?: ReactNode; children: ReactNode; className?: string; bare?: boolean }) {
   return (
     <section>
-      <div className="mb-2.5 flex min-h-6 items-center justify-between gap-4 px-1">
-        <h3 className="text-[13px] font-medium text-zinc-500">{title}</h3>
+      <div className="mb-1.5 flex min-h-6 items-center justify-between gap-4 px-1">
+        <h3 className="text-xs font-medium text-zinc-500">{title}</h3>
         {extra}
       </div>
-      {bare ? children : <Card className={cx('p-5', className)}>{children}</Card>}
+      {bare ? children : <Card className={cx('px-4 py-3', className)}>{children}</Card>}
     </section>
   );
 }

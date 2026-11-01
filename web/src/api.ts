@@ -32,6 +32,10 @@ export interface Service {
   memoryLimit?: number;
   starts: number;
   failures?: number; // consecutive failed starts; 0 once one succeeds
+  calls: number; // since the daemon started, ended instances included
+  lastUsedAt?: string;
+  typicalBytes?: number; // median memory peak of the last runs
+  typicalRuns?: number;
   direct: boolean;
   lean: boolean;
   package?: { name: string; version: string; installedAt: string };
@@ -58,6 +62,7 @@ export interface SessionInfo {
   lastSeenAt: string;
   inflight: number;
   streaming: boolean;
+  agentPid?: number; // the agent process behind it: one conversation
 }
 
 export interface Status {
@@ -272,92 +277,59 @@ export const autoApi = {
   ack: () => call<{ ok: boolean }>('POST', '/api/auto/ack'),
 };
 
+/** The dashboard's samples (internal/httpd/metrics.go). Memory in bytes. */
+export interface MetricPoint {
+  t: number; // Unix seconds
+  total: number;
+  estimate: number;
+  running: number;
+  conversations: number;
+}
+
+export interface MetricsNow {
+  at: string;
+  totalBytes: number;
+  daemonBytes: number;
+  instanceBytes: number;
+  wrapperBytes: number;
+  wrappers: number;
+  estimateBytes: number;
+  unmeasured: string[];
+  instances: number;
+  runningServices: number;
+  services: number;
+  conversations: { agent: string; conversations: number }[];
+}
+
+export type MetricsRange = '1h' | '24h';
+
+export interface Metrics {
+  range: MetricsRange;
+  step: number; // seconds per point
+  points: MetricPoint[];
+  now?: MetricsNow;
+  service?: string;
+}
+
+/** One happening on the timeline (internal/events). */
+export interface AppEvent {
+  at: string;
+  kind: string;
+  service?: string;
+  client?: string;
+  entry?: string;
+  detail?: string;
+}
+
+export const metricsApi = {
+  /** Only the latest sample: what the home page's sentence needs. */
+  now: () => call<Metrics>('GET', '/api/metrics?range=now').then((m) => m.now ?? null),
+  load: (range: MetricsRange, service?: string) =>
+    call<Metrics>('GET', `/api/metrics?range=${range}${service ? `&service=${encodeURIComponent(service)}` : ''}`),
+  events: () => call<{ events: AppEvent[] }>('GET', '/api/events'),
+};
+
 export const unified = {
   load: () => call<{ agents: AgentSummary[]; rows: McpRow[]; autostart: AutostartStatus }>('GET', '/api/mcp'),
   add: (client: string, row: string) => call<{ service: string }>('POST', `/api/agents/${encodeURIComponent(client)}/add`, { row }),
-};
-
-// Agent skills (internal/skills): one copy in MCPcell's source directory,
-// linked into each agent's skill directory.
-
-export interface SkillLocation {
-  id: string;
-  name: string;
-  path: string;
-  agents: string[];
-  note?: string;
-  exists: boolean;
-  installed: boolean;
-}
-
-export interface SkillDiff {
-  added?: string[];
-  removed?: string[];
-  changed?: string[];
-}
-
-export type SkillMatch = 'same' | 'newer' | 'older' | 'differs';
-
-export interface SkillCopy {
-  location: string; // a location ID, or "mcpcell" for the source
-  path: string;
-  kind: 'dir' | 'linked' | 'link' | 'broken';
-  target?: string;
-  match?: SkillMatch;
-  variant?: string;
-  files: number;
-  newest: string;
-  managed?: boolean;
-  changed?: boolean;
-  diff?: SkillDiff;
-  error?: string;
-}
-
-export type SkillState = 'synced' | 'same' | 'differs' | 'single' | 'external' | 'source';
-
-export interface SkillInfo {
-  name: string;
-  description?: string;
-  state: SkillState;
-  variants: number;
-  reference?: string;
-  from?: string;
-  copies: SkillCopy[];
-}
-
-export interface SkillStatus {
-  source: string;
-  locations: SkillLocation[];
-  skills: SkillInfo[];
-}
-
-export interface SkillAction {
-  skill: string;
-  location: string;
-  path?: string;
-  do: 'import' | 'update-source' | 'link' | 'replace' | 'update' | 'restore' | 'ok' | 'skip' | 'conflict';
-  copy?: boolean;
-  from?: string;
-  reason?: string;
-  variant?: string;
-  match?: SkillMatch;
-  diff?: SkillDiff;
-  done?: boolean;
-  error?: string;
-  backup?: string;
-}
-
-export interface SkillResult {
-  actions: SkillAction[];
-  dryRun?: boolean;
-}
-
-export const SOURCE = 'mcpcell';
-
-export const skillsApi = {
-  load: () => call<SkillStatus>('GET', '/api/skills'),
-  sync: (req: { names?: string[]; all?: boolean; to?: string[]; from?: string; copy?: boolean; dryRun?: boolean }) =>
-    call<SkillResult>('POST', '/api/skills/sync', req),
-  restore: (req: { names?: string[]; all?: boolean; locations?: string[]; dryRun?: boolean }) =>
-    call<SkillResult>('POST', '/api/skills/restore', req),
 };

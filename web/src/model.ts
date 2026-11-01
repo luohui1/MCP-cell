@@ -1,8 +1,8 @@
-import { instancesOf, SOURCE, type AutoEvent, type AutoStatus, type McpRow, type Service, type SessionInfo, type SkillCopy, type SkillInfo, type SkillStatus, type Status } from './api';
+import { instancesOf, type AutoEvent, type AutoStatus, type McpRow, type Service, type SessionInfo, type Status } from './api';
 import { bytes, firstLine } from './format';
 import { purposes } from './purposes';
 
-// What the lists show: each MCP and skill reduced to a group and one line of
+// What the lists show: each MCP reduced to a group and one line of
 // status, and what the overview lists as needing attention.
 
 export type Tone = 'green' | 'blue' | 'amber' | 'red' | 'gray';
@@ -132,52 +132,4 @@ export function advice(reason: string): string {
   if (/网络|连不上/.test(reason)) return '检查网络，或者它要连的服务是否开着，然后点「再试一次」。';
   if (/内存/.test(reason)) return '可以在下面「高级」里调高内存上限。';
   return '看看下面的具体出错信息，处理好后点「再试一次」。';
-}
-
-// ---- Skill -----------------------------------------------------------------
-
-export type SkillGroup = 'attention' | 'synced' | 'single' | 'external';
-
-export interface SkillView {
-  skill: SkillInfo;
-  group: SkillGroup;
-  tone: Tone;
-  text: string;
-}
-
-const brokenCopy = (c: SkillCopy) => c.changed || !!c.error || c.kind === 'broken';
-
-export function skillView(k: SkillInfo, data: SkillStatus): SkillView {
-  const copies = k.copies.filter((c) => c.location !== SOURCE);
-  const bad = copies.find(brokenCopy);
-  if (bad) {
-    const where = locationName(data, bad.location);
-    const what = bad.changed ? '同步后被改过' : bad.kind === 'broken' ? '链接失效' : '读取失败';
-    return { skill: k, group: 'attention', tone: 'red', text: `${where} ${what}` };
-  }
-  switch (k.state) {
-    case 'differs':
-      return { skill: k, group: 'attention', tone: 'amber', text: `内容不一致 · ${k.variants} 个版本` };
-    case 'same':
-      return { skill: k, group: 'attention', tone: 'blue', text: `可以合并 · ${copies.length} 处相同` };
-    case 'synced':
-      return { skill: k, group: 'synced', tone: 'green', text: `已统一 · ${copies.length} 处用同一份` };
-    case 'source':
-      return { skill: k, group: 'synced', tone: 'gray', text: '只在 MCPcell 的来源目录' };
-    case 'external':
-      return { skill: k, group: 'external', tone: 'gray', text: `链接到其他工具的目录 · ${copies.length} 处` };
-  }
-  return { skill: k, group: 'single', tone: 'gray', text: `只在 ${locationName(data, copies[0]?.location ?? '')}` };
-}
-
-export function locationName(data: SkillStatus, id: string): string {
-  if (id === SOURCE) return 'MCPcell 来源目录';
-  return data.locations.find((l) => l.id === id)?.name ?? id;
-}
-
-/** The agents that read a skill: those of every location holding a copy. */
-export function skillAgents(k: SkillInfo, data: SkillStatus): Set<string> {
-  const out = new Set<string>();
-  for (const c of k.copies) for (const a of data.locations.find((l) => l.id === c.location)?.agents ?? []) out.add(a);
-  return out;
 }

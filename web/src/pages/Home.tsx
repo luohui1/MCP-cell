@@ -1,323 +1,378 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronRight, Copy, Layers, Plus, RefreshCw, Undo2 } from 'lucide-react';
-import { autoApi, instancesOf, takeover, type AgentSummary, type AutoStatus, type McpRow } from '../api';
-import { agentsOf, canTake, restoreSteps, takeSteps, useAgentActions } from '../agents';
+import { ChevronDown, Info, Layers, Package, Play, Plus, RefreshCw, RotateCw, Square, Undo2 } from 'lucide-react';
+import { autoApi, instancesOf, type AgentSummary, type AutoStatus, type McpRow } from '../api';
+import { useServiceActions } from '../actions';
+import { agentBrand, agentsOf, appOf, appsOf, canTake, isProject, restoreSteps, takeSteps, useAgentActions } from '../agents';
 import { useStatus, useUnified } from '../data';
-import { bytes } from '../format';
-import { ServiceAvatar } from '../icons';
+import { bytes, since } from '../format';
+import { BrandMark, ServiceAvatar } from '../icons';
+import { Body, Toolbar } from '../layout';
 import { kindRank, mcpView, type McpView } from '../model';
 import { candidates, OneClickDialog } from '../one-click';
-import { go, href } from '../router';
-import { Button, Card, cx, Dot, Menu, PageHeader, useCopy, useToast } from '../ui';
+import { go, href, useRoute } from '../router';
+import { StatStrip, useNow } from '../stats';
+import { agentName } from '../timeline';
+import { Button, Card, cx, Dot, IconButton, Menu, Segmented, Switch } from '../ui';
 
-// The home page: every MCP, what it is for, which apps use MCPcell's copy,
-// and whether it is 待命, 运行中 or 打不开. Problems come first.
+// The MCP page: the app filter, four numbers, then every MCP in one card.
+// A row says what the MCP is for, which apps have it, how it is doing, and
+// has a switch that hands it to MCPcell or gives it back. Explanations live
+// in tooltips, not on the page. An app here is Claude Code with its
+// projects' servers too (agents "claude-code@<dir>"), shown as one app.
 
-const grid = 'grid grid-cols-[minmax(0,1fr)_minmax(0,280px)_minmax(0,230px)] items-center gap-6';
+type Acts = ReturnType<typeof useAgentActions>;
 
 export function HomePage() {
   const { status } = useStatus();
   const { data, error, reload } = useUnified();
   const acts = useAgentActions(reload, data?.autostart ?? null);
-  const copy = useCopy();
-  const toast = useToast();
+  const svcActs = useServiceActions();
+  const now = useNow();
+  const only = useRoute().query.get('agent') ?? '';
   const [oneClick, setOneClick] = useState(false);
   const [showOther, setShowOther] = useState(false);
 
   const agents = data ? agentsOf(data.agents) : [];
-  const views = data ? data.rows.map((r) => mcpView(r, status, data.auto)).sort((a, b) => kindRank[a.kind] - kindRank[b.kind] || a.row.name.localeCompare(b.row.name)) : [];
+  const apps = appsOf(agents);
+  const app = apps.includes(only) ? only : '';
+  const scope = app ? agents.filter((a) => appOf(a.id) === app) : agents;
+  const rows = data ? data.rows.filter((r) => !app || scope.some((a) => r.agents[a.id])) : [];
+  const views = data ? rows.map((r) => mcpView(r, status, data.auto)).sort((a, b) => kindRank[a.kind] - kindRank[b.kind] || a.row.name.localeCompare(b.row.name)) : [];
   const main = views.filter((v) => v.kind !== 'other');
   const other = views.filter((v) => v.kind === 'other');
   const broken = new Set(views.filter((v) => v.kind === 'broken').map((v) => v.row.key));
-  const offers = data ? candidates(data).filter((c) => !broken.has(c.row.key)).length : 0;
-  const allRestore = data ? data.rows.flatMap((r) => restoreSteps(r, agents)) : [];
+  const offered = data ? candidates(data, app || undefined).filter((c) => !broken.has(c.row.key)) : [];
+  const allRestore = rows.flatMap((r) => restoreSteps(r, scope));
 
   return (
     <>
-      <PageHeader
-        icon={<Layers className="size-5 text-zinc-500" />}
-        title="我的 MCP"
-        actions={
-          <>
-            {offers > 0 && (
-              <Button variant="primary" icon={<Layers className="size-4" />} onClick={() => setOneClick(true)}>
-                一键托管
-              </Button>
-            )}
-            <Button icon={<Plus className="size-4" />} onClick={() => go(['mcp', 'new'])}>
-              添加
-            </Button>
-            <Menu
-              items={[
-                { label: '刷新', icon: <RefreshCw className="size-4" />, onSelect: reload },
-                { label: '复制访问令牌', hint: '手动接入其他应用时要用', icon: <Copy className="size-4" />, onSelect: () => copy(status.token, '已复制访问令牌') },
-                'sep',
-                {
-                  label: '全部改回原样',
-                  hint: '各个应用恢复成自己开 MCP',
-                  icon: <Undo2 className="size-4" />,
-                  danger: true,
-                  disabled: allRestore.length === 0,
-                  onSelect: () => acts.restore(allRestore, `全部 ${allRestore.length} 项改回原样`),
-                },
+      <Body>
+        <Toolbar
+          actions={
+            <>
+              {offered.length > 0 && (
+                <Button size="sm" variant="primary" icon={<Layers className="size-3.5" />} onClick={() => setOneClick(true)}>
+                  一键托管
+                </Button>
+              )}
+              <IconButton label="添加 MCP" onClick={() => go(['mcp', 'new'])}>
+                <Plus className="size-4" />
+              </IconButton>
+              <Menu
+                items={[
+                  { label: '刷新', icon: <RefreshCw className="size-4" />, onSelect: reload },
+                  'sep',
+                  {
+                    label: app ? `${agentName(app)} 全部改回原样` : '全部改回原样',
+                    icon: <Undo2 className="size-4" />,
+                    danger: true,
+                    disabled: allRestore.length === 0,
+                    onSelect: () => acts.restore(allRestore, `${app ? agentName(app) + ' 的' : '全部'} ${allRestore.length} 项改回原样`),
+                  },
+                ]}
+              />
+            </>
+          }
+        >
+          {apps.length > 1 && (
+            <Segmented
+              value={app}
+              onChange={(id) => go([], { agent: id || undefined })}
+              options={[
+                { value: '', label: '全部' },
+                ...apps.map((id) => ({
+                  value: id,
+                  label: (
+                    <>
+                      <BrandMark brand={agentBrand[id]} className="size-3.5" />
+                      {agentName(id)}
+                    </>
+                  ),
+                })),
               ]}
             />
-          </>
-        }
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[1180px] space-y-5 px-8 pt-6 pb-12">
-          <Summary views={views} agents={agents} />
-          {data?.auto && <AutoNews auto={data.auto} agents={agents} onAck={async () => (await autoApi.ack().catch(() => undefined), reload())} />}
-          {data && <Hints views={main} offers={offers} data={data} onTake={() => setOneClick(true)} onAuto={async () => {
-            try {
-              await takeover.autostart(true);
-              toast('已开启开机自启');
-              reload();
-            } catch (e) {
-              toast((e as Error).message, 'error');
-            }
-          }} />}
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          {!data && !error && <p className="py-16 text-center text-sm text-zinc-400">正在读取各个应用的 MCP…</p>}
-          {data && (
-            <section>
-              <div className={cx(grid, 'px-5 pb-2 text-xs text-zinc-400')}>
-                <span>MCP</span>
-                <span>哪些应用在用</span>
-                <span>状态</span>
-              </div>
-              <Card className="divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800">
-                {main.map((v) => (
-                  <Row key={v.id} view={v} agents={agents} acts={acts} />
-                ))}
-                {main.length === 0 && <p className="px-5 py-8 text-center text-sm text-zinc-400">各个应用里还没有配置 MCP。点「添加」在 MCPcell 里加一个。</p>}
-                {other.length > 0 && (
-                  <button
-                    onClick={() => setShowOther(!showOther)}
-                    className="flex w-full items-center gap-2 bg-zinc-50/60 px-5 py-2.5 text-left text-[13px] text-zinc-500 hover:text-zinc-800 dark:bg-zinc-900/60 dark:hover:text-zinc-200"
-                  >
-                    <ChevronRight className={cx('size-3.5 transition-transform', showOther && 'rotate-90')} />
-                    另外 {other.length} 个不用管：{other.map((v) => v.row.name).join('、')}
-                    <span className="text-zinc-400">（远程服务或应用自带，本机不用开）</span>
-                  </button>
-                )}
-                {showOther && other.map((v) => <Row key={v.id} view={v} agents={agents} acts={acts} />)}
-              </Card>
-              <p className="mt-3 px-1 text-xs leading-5 text-zinc-400">
-                <Dot tone="gray" /> <span className="ml-1">待命：现在没人在用，不占内存；应用用到它时会自动打开，一段时间没人用就自动关掉。</span>
-              </p>
-            </section>
           )}
-        </div>
-      </div>
-      {data && <OneClickDialog open={oneClick} onClose={() => setOneClick(false)} data={data} reload={reload} />}
+        </Toolbar>
+        <StatStrip now={now} />
+        {data?.auto && <AutoNews auto={data.auto} onAck={async () => (await autoApi.ack().catch(() => undefined), reload())} />}
+        {data && <Hints views={main} offered={offered.map((c) => c.row.name)} onTake={() => setOneClick(true)} />}
+        {error && <p className="text-[13px] text-red-600">{error}</p>}
+        {!data && !error && <p className="py-12 text-center text-[13px] text-zinc-400">正在读取…</p>}
+        {data && (
+          <Card className="divide-y divide-zinc-100 overflow-hidden dark:divide-zinc-800">
+            {main.map((v) => (
+              <McpRowView key={v.id} view={v} agents={agents} scope={scope} acts={acts} svcActs={svcActs} />
+            ))}
+            {main.length === 0 && <p className="px-4 py-8 text-center text-[13px] text-zinc-400">还没有 MCP</p>}
+            {showOther && other.map((v) => <McpRowView key={v.id} view={v} agents={agents} scope={scope} acts={acts} svcActs={svcActs} />)}
+            <div className="flex items-center gap-3 px-4 py-2 text-[13px]">
+              <a href={href(['mcp', 'new'])} className="flex items-center gap-1 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
+                <Plus className="size-3.5" />
+                添加 MCP
+              </a>
+              {other.length > 0 && (
+                <button
+                  onClick={() => setShowOther(!showOther)}
+                  title="远程服务和应用自带的 MCP 不在本机开，不用管"
+                  className="ml-auto flex items-center gap-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                >
+                  {showOther ? '收起' : `另外 ${other.length} 个远程或自带`}
+                  <ChevronDown className={cx('size-3.5 transition-transform', showOther && 'rotate-180')} />
+                </button>
+              )}
+            </div>
+          </Card>
+        )}
+      </Body>
+      {data && <OneClickDialog open={oneClick} onClose={() => setOneClick(false)} data={data} only={app || undefined} reload={reload} />}
       {acts.dialog}
+      {svcActs.deleteDialog}
     </>
   );
 }
 
-/** One sentence on what MCPcell is doing for the apps, and what it costs. */
-function Summary({ views, agents }: { views: McpView[]; agents: AgentSummary[] }) {
-  const { status, offline } = useStatus();
-  const users = agents.filter((a) => a.managed > 0).map((a) => a.name);
-  const mcpBytes = status.services.flatMap(instancesOf).reduce((n, i) => n + i.usage.privateBytes, 0);
-  const total = bytes(status.daemon.privateBytes + mcpBytes);
-  const running = views.filter((v) => v.kind === 'running').length;
-  const apps = users.length <= 2 ? users.join(' 和 ') : `${users.slice(0, -1).join('、')} 和 ${users[users.length - 1]}`;
-  return (
-    <Card className="px-6 py-5">
-      {offline ? (
-        <p className="text-[15px] font-medium text-red-600">MCPcell 没有响应，下面是最后一次看到的情况。</p>
-      ) : users.length ? (
-        <p className="text-[15px] leading-7">
-          <span className="font-semibold">{apps}</span> 共用这些 MCP：同一个 MCP 全机只开一份，现在一共占{' '}
-          <span className="font-semibold tabular-nums" title={`MCPcell 自己 ${bytes(status.daemon.privateBytes)}，正在运行的 MCP ${mcpBytes ? bytes(mcpBytes) : '0 MB'}`}>
-            {total}
-          </span>{' '}
-          内存{running ? `，${running} 个正在运行，其余待命` : '，都在待命'}。
-        </p>
-      ) : (
-        <p className="text-[15px] leading-7">
-          还没有应用在用 MCPcell。点「一键托管」，各个应用就共用同一份 MCP：同一个 MCP 全机只开一份，不用的时候不占内存。
-        </p>
-      )}
-    </Card>
-  );
+/** A row's status in a word or two, and the details for its tooltip. */
+function statusOf(v: McpView): { tone: McpView['tone']; text: string; tip: string } {
+  const conv = new Set(v.sessions.map((s) => (s.agentPid ? `p${s.agentPid}` : `s${s.id}`))).size;
+  const calls = v.services.reduce((n, s) => n + (s.calls ?? 0), 0);
+  const last = v.services.map((s) => s.lastUsedAt).filter((t): t is string => !!t).sort().at(-1);
+  const facts = [conv ? `${conv} 个对话在用` : '', calls ? `调用 ${calls} 次` : '', last && !conv ? `${since(last)}前用过` : ''].filter(Boolean).join('，');
+  switch (v.kind) {
+    case 'running': {
+      const used = v.services.flatMap(instancesOf).reduce((n, i) => n + i.usage.privateBytes, 0);
+      return v.tone === 'amber' ? { tone: 'amber', text: '打开中', tip: '' } : { tone: 'green', text: bytes(used), tip: `运行中${facts ? `，${facts}` : ''}` };
+    }
+    case 'standby':
+      return { tone: 'gray', text: '待命', tip: `没人用，不占内存；用到时自动打开${facts ? `。${facts}` : ''}` };
+    case 'broken':
+      return { tone: v.tone, text: v.tone === 'red' ? '打不开' : '设置被删', tip: v.text };
+    case 'native':
+      return { tone: 'gray', text: '各开各的', tip: '各个应用自己开，每开一个对话就多开一份' };
+  }
+  return { tone: 'gray', text: v.row.kind === 'http' ? '远程' : '自带', tip: v.text };
 }
 
-/** What automatic takeover did since the user last looked. */
-function AutoNews({ auto, agents, onAck }: { auto: AutoStatus; agents: AgentSummary[]; onAck: () => void }) {
-  const fresh = (auto.events ?? []).filter((e) => !e.seen);
-  if (!fresh.length) return null;
-  const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
-  const taken = [...new Map(fresh.filter((e) => e.ok).map((e) => [e.service ?? e.name, e])).values()];
-  const stopped = fresh.filter((e) => !e.ok && e.error?.includes('停止自动托管'));
-  const failed = fresh.filter((e) => !e.ok && !e.error?.includes('停止自动托管'));
-  const link = (e: { service?: string; name: string }) => (
-    <a key={e.service ?? e.name} href={href(['mcp', e.service ?? e.name])} className="font-medium text-blue-700 hover:underline dark:text-blue-300">
-      {e.service ?? e.name}
-    </a>
-  );
-  const join = (items: ReactNode[]) => items.flatMap((x, i) => (i ? ['、', x] : [x]));
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-blue-200/70 bg-blue-50/60 px-5 py-3 text-[13px] leading-6 text-zinc-700 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-zinc-200">
-      <div className="min-w-0 flex-1 space-y-0.5">
-        {taken.length > 0 && (
-          <div>
-            新发现 {taken.length} 个 MCP，已自动托管：{join(taken.map(link))}。想改回原样，点开它在「哪些应用在用」里改。
-          </div>
-        )}
-        {failed.length > 0 && <div>新发现的 {join(failed.map((e) => e.name))} 打不开，没有托管，原因写在列表里。</div>}
-        {stopped.map((e) => (
-          <div key={e.client + e.name}>
-            {name(e.client)} 一直把 {e.name} 改回原来的设置，已停止自动托管它。
-          </div>
-        ))}
-      </div>
-      <button onClick={onAck} className="shrink-0 font-medium text-blue-600 hover:underline dark:text-blue-400">
-        知道了
-      </button>
-    </div>
-  );
-}
+function McpRowView({
+  view: v,
+  agents,
+  scope,
+  acts,
+  svcActs,
+}: {
+  view: McpView;
+  agents: AgentSummary[];
+  scope: AgentSummary[]; // the agents of the app shown, or all of them
+  acts: Acts;
+  svcActs: ReturnType<typeof useServiceActions>;
+}) {
+  const { status } = useStatus();
+  const { row } = v;
+  const take = takeSteps(row, scope);
+  const back = restoreSteps(row, scope);
+  const on = scope.some((a) => row.agents[a.id]?.state === 'managed');
+  const svc = status.services.find((s) => s.name === row.service);
+  const running = v.services.some((s) => instancesOf(s).length > 0);
+  const busy = !!svc && (svcActs.busy[svc.name] || svc.state === 'starting');
+  const missing = row.service && row.canAdd && v.kind !== 'broken' ? agents.filter((a) => !isProject(a.id) && !row.agents[a.id]) : [];
+  const st = statusOf(v);
+  const reason = v.kind === 'broken' ? v.text.replace(/^打不开：/, '') : '';
+  const stop = () => v.services.forEach((s) => instancesOf(s).length && svcActs.stop(s.name));
 
-/** The few things worth doing now, in one strip. */
-function Hints({ views, offers, data, onTake, onAuto }: { views: McpView[]; offers: number; data: { autostart: { supported: boolean; enabled: boolean } }; onTake: () => void; onAuto: () => void }) {
-  const broken = views.filter((v) => v.kind === 'broken');
-  const native = views.filter((v) => v.kind === 'native' && v.takeable);
-  const changed = views.filter((v) => Object.values(v.row.agents).some((c) => c.state === 'changed'));
-  const managed = views.some((v) => v.managed);
-  const lines: { tone: 'red' | 'amber' | 'blue'; text: ReactNode; action?: ReactNode }[] = [];
-  if (broken.length) lines.push({ tone: 'red', text: `${broken.map((v) => v.row.name).join('、')} 打不开，原因写在状态里，点开看怎么处理。` });
-  if (offers)
-    lines.push({
-      tone: 'blue',
-      text: native.length
-        ? `${native.map((v) => v.row.name).join('、')} 还是各个应用自己开着，每开一个对话就多开一份。`
-        : '有的应用还自己开着已有的 MCP，每开一个对话就多开一份。',
-      action: (
-        <button onClick={onTake} className="shrink-0 font-medium text-blue-600 hover:underline dark:text-blue-400">
-          一键托管
-        </button>
-      ),
-    });
-  if (changed.length) lines.push({ tone: 'amber', text: `${changed.map((v) => v.row.name).join('、')} 在应用里被改过，MCPcell 不再管这几项，点开看看。` });
-  if (managed && data.autostart.supported && !data.autostart.enabled)
-    lines.push({
-      tone: 'amber',
-      text: '开机自启没开：电脑重启后要先打开 MCPcell，这些 MCP 才能用。',
-      action: (
-        <button onClick={onAuto} className="shrink-0 font-medium text-blue-600 hover:underline dark:text-blue-400">
-          开启
-        </button>
-      ),
-    });
-  if (!lines.length) return null;
-  return (
-    <div className="space-y-1.5 rounded-xl border border-amber-200/70 bg-amber-50/60 px-5 py-3 dark:border-amber-900/60 dark:bg-amber-950/20">
-      {lines.map((l, i) => (
-        <div key={i} className="flex items-start gap-3 text-[13px] leading-6 text-zinc-700 dark:text-zinc-200">
-          <span className="pt-2">
-            <Dot tone={l.tone} />
-          </span>
-          <span className="min-w-0 flex-1">{l.text}</span>
-          {l.action}
-        </div>
-      ))}
-    </div>
-  );
-}
+  const menu = [
+    { label: '详情', icon: <Info className="size-4" />, onSelect: () => go(['mcp', v.id]) },
+    ...(svc && running ? [{ label: '现在关掉', icon: <Square className="size-4" />, onSelect: stop }] : []),
+    ...(svc?.package ? [{ label: `更新（现在 ${svc.package.version}）`, icon: <Package className="size-4" />, onSelect: () => svcActs.update(svc.name) }] : []),
+    ...missing.map((a) => ({ label: `加到 ${a.name}`, icon: <Plus className="size-4" />, onSelect: () => acts.add(a, row) })),
+    ...(back.length ? ['sep' as const, { label: '改回原样', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back, `${row.name} 改回原样`) }] : []),
+  ];
 
-function Row({ view: v, agents, acts }: { view: McpView; agents: AgentSummary[]; acts: ReturnType<typeof useAgentActions> }) {
   return (
     <div
       role="link"
       tabIndex={0}
       onClick={() => go(['mcp', v.id])}
-      onKeyDown={(e) => e.key === 'Enter' && go(['mcp', v.id])}
-      className={cx(grid, 'group cursor-pointer px-5 py-3.5 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40')}
+      onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && go(['mcp', v.id])}
+      className="group grid cursor-pointer grid-cols-[minmax(0,1fr)_auto_76px_auto] items-center gap-4 px-4 py-2.5 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40"
     >
-      <div className="flex min-w-0 items-center gap-3.5">
-        <ServiceAvatar name={v.row.name} size="sm" />
+      <div className="flex min-w-0 items-center gap-3">
+        <ServiceAvatar name={row.name} size="row" />
         <div className="min-w-0">
-          <a href={href(['mcp', v.id])} onClick={(e) => e.stopPropagation()} className="block truncate text-[15px] font-medium hover:text-blue-600">
-            {v.row.name}
-          </a>
-          <div className="mt-0.5 truncate text-[13px] text-zinc-500" title={v.purpose}>
-            {v.purpose || <span className="font-mono text-xs text-zinc-400">{v.row.launch}</span>}
+          <div className="truncate text-[13.5px] font-medium">{row.name}</div>
+          <div className={cx('truncate text-xs', reason ? 'text-red-600 dark:text-red-400' : 'text-zinc-500')} title={v.broken?.lastError ?? v.purpose}>
+            {reason || v.purpose || <span className="font-mono text-[11px] text-zinc-400">{row.launch}</span>}
           </div>
         </div>
       </div>
-      <Apps row={v.row} agents={agents} acts={acts} offerAdd={v.kind !== 'broken'} />
-      <div className={cx('flex min-w-0 items-center gap-2 text-[13px]', v.tone === 'red' ? 'text-red-600 dark:text-red-400' : 'text-zinc-600 dark:text-zinc-300')} title={v.broken?.lastError ?? v.text}>
-        <Dot tone={v.tone} pulse={v.kind === 'running' && v.tone === 'green' && v.sessions.some((x) => x.inflight > 0)} />
-        <span className="truncate">{v.text}</span>
+
+      <AppMarks row={row} agents={scope} acts={acts} />
+
+      <div className={cx('flex items-center justify-end gap-1.5 text-xs tabular-nums', st.tone === 'red' ? 'text-red-600 dark:text-red-400' : 'text-zinc-600 dark:text-zinc-300')} title={st.tip}>
+        <Dot tone={st.tone} pulse={v.kind === 'running' && v.sessions.some((x) => x.inflight > 0)} />
+        <span className="truncate">{st.text}</span>
+      </div>
+
+      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className={cx('flex items-center transition-opacity', v.kind !== 'broken' && 'opacity-0 group-hover:opacity-100 focus-within:opacity-100')}>
+          {v.kind === 'broken' && v.broken ? (
+            <IconButton label="再试一次" busy={busy} onClick={() => svcActs.start(v.broken!.name)}>
+              <RotateCw className="size-3.5" />
+            </IconButton>
+          ) : svc && running ? (
+            <IconButton label="现在关掉" busy={svcActs.busy[svc.name]} onClick={stop}>
+              <Square className="size-3" />
+            </IconButton>
+          ) : svc ? (
+            <IconButton label="打开一次试试" busy={busy} onClick={() => svcActs.start(svc.name)}>
+              <Play className="size-3.5" />
+            </IconButton>
+          ) : (
+            <span className="size-8" />
+          )}
+          <Menu items={menu} />
+        </div>
+        <div className="flex w-[38px] justify-end">
+          {v.kind !== 'other' && (on || take.length > 0) && (
+            <Switch
+              checked={on}
+              label={`${row.name} 用 MCPcell 共用的这份`}
+              title={on ? '开：用 MCPcell 共用的这份；关掉改回各开各的' : '关：各开各的；打开改用 MCPcell 共用的这份'}
+              onChange={(next) => (next ? acts.takeover(take) : acts.restore(back, `${row.name} 改回原样`))}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-const shape = 'h-6 shrink-0 items-center rounded-md px-2 text-xs whitespace-nowrap';
-const tag = `inline-flex ${shape}`;
+/** A cell's state for a tooltip line. */
+function cellText(c: McpRow['agents'][string]): string {
+  switch (c.state) {
+    case 'managed':
+      return !c.enabled ? '关着' : c.drift ? '共用（设置改过，单独一份）' : '共用';
+    case 'changed':
+      return '被改过，不用 MCPcell 这份';
+    case 'remote':
+      return '远程';
+    case 'internal':
+      return '自带';
+  }
+  return canTake(c) ? '各开各的' : `各开各的${c.reason ? `：${c.reason}` : ''}`;
+}
 
-/** Which apps use MCPcell's copy (green), and which could (dashed +). */
-export function Apps({ row, agents, acts, offerAdd }: { row: McpRow; agents: AgentSummary[]; acts: ReturnType<typeof useAgentActions>; offerAdd: boolean }) {
-  // Apps that lack it only offer "+ app" on hover, after the others.
-  const missing = offerAdd && row.service && row.canAdd ? agents.filter((a) => !row.agents[a.id]) : [];
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-      {agents.map((a) => {
-        const c = row.agents[a.id];
-        if (!c) return null;
-        if (c.state === 'managed') {
-          const off = !c.enabled;
-          return (
-            <span
-              key={a.id}
-              title={off ? `${a.name} 里关掉了它` : c.drift ? `${a.name} 在用 MCPcell 这份；它在 ${a.name} 里的设置改过，所以单独开了一份` : `${a.name} 在用 MCPcell 共用的这份`}
-              className={cx(tag, off ? 'bg-zinc-100 text-zinc-400 line-through dark:bg-zinc-800' : 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 ring-inset dark:bg-emerald-950/50 dark:text-emerald-300 dark:ring-emerald-900')}
-            >
-              {a.name}
-              {c.drift && !off && <span className="ml-1 size-1.5 rounded-full bg-amber-500" />}
-            </span>
-          );
-        }
-        if (c.state === 'changed') {
-          return (
-            <span key={a.id} title={`${a.name} 里的这一项被改过，现在不用 MCPcell 这份`} className={cx(tag, 'bg-amber-50 text-amber-700 ring-1 ring-amber-200 ring-inset dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900')}>
-              {a.name} · 改过
-            </span>
-          );
-        }
-        if (canTake(c)) {
-          return (
-            <button
-              key={a.id}
-              title={`${a.name} 现在自己开一份；点一下改为用 MCPcell 共用的这份`}
-              onClick={() => acts.takeover(takeSteps(row, [a]))}
-              className={cx(tag, 'border border-dashed border-zinc-300 text-zinc-600 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-blue-950/40')}
-            >
-              + {a.name}
-            </button>
-          );
-        }
-        return (
-          <span key={a.id} title={c.state === 'remote' ? `${a.name} 直接连这个远程服务` : `${a.name} 自己开着：${c.reason ?? ''}`} className={cx(tag, 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400', !c.enabled && 'line-through')}>
-            {a.name}
-          </span>
-        );
-      })}
-      {missing.map((a) => (
+/** Which apps have this MCP, one mark per app (Claude Code with its
+ * projects): in color when they use MCPcell's copy, faded and dashed when
+ * some run their own (a click hands those over). */
+function AppMarks({ row, agents, acts }: { row: McpRow; agents: AgentSummary[]; acts: Acts }) {
+  const marks: ReactNode[] = [];
+  for (const app of appsOf(agents)) {
+    const cells = agents.filter((a) => appOf(a.id) === app && row.agents[a.id]).map((a) => ({ a, c: row.agents[a.id] }));
+    if (!cells.length) continue;
+    const takeable = cells.filter(({ c }) => canTake(c)).map(({ a }) => a);
+    const managed = cells.filter(({ c }) => c.state === 'managed');
+    const tip = cells.map(({ a, c }) => `${a.name}：${cellText(c)}`).join('\n');
+    const brand = <BrandMark brand={agentBrand[app]} className="size-3.5" />;
+    const base = 'relative grid size-6 place-items-center rounded-full border';
+    const count = cells.length > 1 && (
+      <span className="absolute -top-1 -right-1.5 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-zinc-700 px-0.5 text-[9px] leading-none text-white dark:bg-zinc-300 dark:text-zinc-900">
+        {cells.length}
+      </span>
+    );
+    if (takeable.length) {
+      marks.push(
         <button
-          key={a.id}
-          title={`把 ${row.name} 加到 ${a.name}`}
-          onClick={() => acts.add(a, row)}
-          className={cx(shape, 'hidden border border-dashed border-zinc-300 text-zinc-500 group-hover:inline-flex hover:border-blue-400 hover:text-blue-600 dark:border-zinc-600')}
+          key={app}
+          title={`${tip}\n点一下改用 MCPcell 共用的这份`}
+          onClick={(e) => {
+            e.stopPropagation();
+            acts.takeover(takeSteps(row, takeable));
+          }}
+          className={cx(base, 'border-dashed border-zinc-300 opacity-60 grayscale transition hover:border-blue-400 hover:opacity-100 hover:grayscale-0 dark:border-zinc-600')}
         >
-          + {a.name}
-        </button>
-      ))}
+          {brand}
+          {count}
+        </button>,
+      );
+    } else if (managed.length) {
+      const off = managed.every(({ c }) => !c.enabled);
+      const drift = managed.some(({ c }) => c.drift);
+      marks.push(
+        <span key={app} title={tip} className={cx(base, 'border-emerald-300 bg-white dark:border-emerald-700 dark:bg-zinc-900', off && 'opacity-40')}>
+          {brand}
+          {count}
+          <span className={cx('absolute -right-px -bottom-px size-2 rounded-full ring-2 ring-white dark:ring-zinc-900', drift ? 'bg-amber-500' : 'bg-emerald-500')} />
+        </span>,
+      );
+    } else {
+      const changed = cells.some(({ c }) => c.state === 'changed');
+      marks.push(
+        <span key={app} title={tip} className={cx(base, 'border-zinc-200 opacity-50 grayscale dark:border-zinc-700', changed && 'border-amber-300 opacity-90 grayscale-0')}>
+          {brand}
+          {count}
+        </span>,
+      );
+    }
+  }
+  return (
+    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      {marks}
     </div>
+  );
+}
+
+const join = (items: ReactNode[]) => items.flatMap((x, i) => (i ? ['、', x] : [x]));
+
+/** What automatic takeover did since the user last looked, in a line. */
+function AutoNews({ auto, onAck }: { auto: AutoStatus; onAck: () => void }) {
+  const fresh = (auto.events ?? []).filter((e) => !e.seen);
+  if (!fresh.length) return null;
+  const taken = [...new Map(fresh.filter((e) => e.ok).map((e) => [e.service ?? e.name, e])).values()];
+  const failed = fresh.filter((e) => !e.ok);
+  const link = (e: { service?: string; name: string }) => (
+    <a key={e.service ?? e.name} href={href(['mcp', e.service ?? e.name])} className="font-medium text-blue-700 hover:underline dark:text-blue-300">
+      {e.service ?? e.name}
+    </a>
+  );
+  return (
+    <Strip tone="blue" action={<StripButton onClick={onAck}>知道了</StripButton>}>
+      {taken.length > 0 && <>新加的 {join(taken.map(link))} 已改用 MCPcell 共用的这份</>}
+      {taken.length > 0 && failed.length > 0 && '；'}
+      {failed.length > 0 && <>{join(failed.map((e) => e.name))} 没能接上</>}
+    </Strip>
+  );
+}
+
+/** The few things worth doing now, a line each. */
+function Hints({ views, offered, onTake }: { views: McpView[]; offered: string[]; onTake: () => void }) {
+  const broken = views.filter((v) => v.kind === 'broken');
+  const changed = views.filter((v) => Object.values(v.row.agents).some((c) => c.state === 'changed'));
+  return (
+    <>
+      {broken.length > 0 && <Strip tone="red">{broken.map((v) => v.row.name).join('、')} 打不开</Strip>}
+      {offered.length > 0 && (
+        <Strip tone="blue" action={<StripButton onClick={onTake}>一键托管</StripButton>}>
+          {offered.join('、')} 还是各开各的
+        </Strip>
+      )}
+      {changed.length > 0 && <Strip tone="amber">{changed.map((v) => v.row.name).join('、')} 在应用里被改过</Strip>}
+    </>
+  );
+}
+
+function Strip({ tone, action, children }: { tone: 'red' | 'amber' | 'blue'; action?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg border border-zinc-200/80 bg-white px-3.5 py-2 text-[13px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
+      <Dot tone={tone} />
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      {action}
+    </div>
+  );
+}
+
+function StripButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button onClick={onClick} className="shrink-0 font-medium text-blue-600 hover:underline dark:text-blue-400">
+      {children}
+    </button>
   );
 }

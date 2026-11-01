@@ -68,6 +68,9 @@ type session struct {
 	// directory.
 	spawnEnv []string
 	spawnDir string
+	// The mcpcell-run process and the agent process (one per conversation)
+	// behind the session, when known.
+	wrapper, agent int
 }
 
 func (ss *session) SpawnEnv() []string { return ss.spawnEnv }
@@ -612,6 +615,8 @@ type sessionInfo struct {
 	LastSeenAt      time.Time `json:"lastSeenAt"`
 	Inflight        int       `json:"inflight"`
 	Streaming       bool      `json:"streaming"`
+	// AgentPID is the agent process behind the session (one conversation).
+	AgentPID int `json:"agentPid,omitempty"`
 }
 
 func (s *Server) sessionInfos() []sessionInfo {
@@ -622,7 +627,7 @@ func (s *Server) sessionInfos() []sessionInfo {
 		ss.mu.Lock()
 		out = append(out, sessionInfo{ID: ss.id[:8], Service: ss.service, Client: ss.client,
 			ProtocolVersion: ss.version, CreatedAt: ss.created, LastSeenAt: ss.lastSeen,
-			Inflight: ss.inflight, Streaming: ss.stream != nil})
+			Inflight: ss.inflight, Streaming: ss.stream != nil, AgentPID: ss.agent})
 		ss.mu.Unlock()
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].CreatedAt.Before(out[b].CreatedAt) })

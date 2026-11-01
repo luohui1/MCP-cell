@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Layers } from 'lucide-react';
 import { takeover, type AgentSummary, type McpRow } from './api';
-import { agentBrand, applyTakeover, AutostartOption, takeSteps } from './agents';
+import { applyTakeover, AutostartOption, brandOfAgent, takeSteps } from './agents';
+import { agentName } from './timeline';
 import { useStatus, type Unified } from './data';
 import { mcpView } from './model';
 import { firstLine } from './format';
@@ -95,13 +96,13 @@ export function OneClickDialog({
           <Layers className="size-5" />
         </div>
         <div>
-          <h2 className="text-base font-semibold">{only ? `一键托管：${data.agents.find((a) => a.id === only)?.name} 的 MCP` : '一键托管'}</h2>
-          <p className="mt-1 text-sm leading-6 text-zinc-500">选中的 MCP 改由 MCPcell 打开，同一个 MCP 全机只开一份。工具名不变，随时可以改回原样。</p>
+          <h2 className="text-base font-semibold">{only ? `一键托管：${agentName(only)} 的 MCP` : '一键托管'}</h2>
+          <p className="mt-0.5 text-[13px] text-zinc-500">改用 MCPcell 共用的这份，随时可以改回</p>
         </div>
       </div>
 
       {list.length === 0 ? (
-        <p className="mt-6 rounded-xl bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500 dark:bg-zinc-800/50">所有 MCP 都已经在用 MCPcell 这份了。</p>
+        <p className="mt-5 rounded-xl bg-zinc-50 px-4 py-5 text-center text-[13px] text-zinc-500 dark:bg-zinc-800/50">都已经在用 MCPcell 这份了</p>
       ) : (
         <div className="mt-5 max-h-[360px] divide-y divide-zinc-100 overflow-y-auto rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-700">
           {list.map(({ row, steps }) => (
@@ -119,24 +120,9 @@ export function OneClickDialog({
         </div>
       )}
 
-      <dl className="mt-4 space-y-1.5 text-[13px] leading-5 text-zinc-500">
-        <div className="flex gap-2">
-          <dt className="shrink-0">
-            <Badge tone="green">共用一份</Badge>
-          </dt>
-          <dd>所有对话共用一份，一段时间没人用就自动关掉。</dd>
-        </div>
-        <div className="flex gap-2">
-          <dt className="shrink-0">
-            <Badge tone="blue">每个对话一份</Badge>
-          </dt>
-          <dd>和原来一样每个对话单独一份，各记各的；但用到时才打开、对话结束就关掉，用不到它的对话不占内存。</dd>
-        </div>
-      </dl>
       {touched.length > 0 && (
-        <p className="mt-3 text-[13px] leading-5 text-zinc-400">
-          会改 {touched.map((a) => a.name).join('、')} 的配置文件，只改选中的项，改之前先备份整个文件。
-          {perSession > 0 && ` 其中 ${perSession} 个每个对话一份。`}
+        <p className="mt-3 text-xs text-zinc-400" title={perSession > 0 ? `其中 ${perSession} 个每个对话一份` : undefined}>
+          会改 {touched.map((a) => a.name).join('、')} 的配置，先备份
         </p>
       )}
       {offerAuto && <AutostartOption checked={auto} onChange={setAuto} />}
@@ -179,15 +165,22 @@ function CandidateRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{row.name}</span>
-          {!unverified && (mode === 'shared' ? <Badge tone="green">共用一份</Badge> : <Badge tone="blue">每个对话一份</Badge>)}
+          {!unverified &&
+            (mode === 'shared' ? (
+              <span title="所有对话共用一份，没人用时自动关掉">
+                <Badge tone="green">共用一份</Badge>
+              </span>
+            ) : (
+              <span title="每个对话单独一份，用到时才打开，对话结束就关掉">
+                <Badge tone="blue">每个对话一份</Badge>
+              </span>
+            ))}
         </div>
         <div className={cx('mt-0.5 truncate text-xs', broken ? 'text-red-600 dark:text-red-400' : 'text-zinc-400')} title={row.reason}>
           {broken
-            ? `现在${broken}，先修好再改`
-            : row.class === 'stateful'
-            ? '它为每个对话记着各自的东西（比如浏览器），所以每个对话一份'
+            ? `${broken}，先修好再改`
             : unverified
-              ? '没确认过能不能共用：先每个对话一份；确认它不记各对话的东西，可以改成共用一份'
+              ? '没确认能否共用'
               : row.launch}
         </div>
       </div>
@@ -206,7 +199,7 @@ function CandidateRow({
       <div className="flex items-center gap-1.5" title={steps.map((s) => s.agent.name).join('、')}>
         {steps.map((s) => (
           <span key={s.agent.id} className="grid size-6 place-items-center rounded-full bg-zinc-100 dark:bg-zinc-800">
-            <BrandMark brand={agentBrand[s.agent.id]} className="size-3.5" />
+            <BrandMark brand={brandOfAgent(s.agent.id)} className="size-3.5" />
           </span>
         ))}
       </div>

@@ -1,12 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronRight, ClipboardPaste, Lightbulb, Plus, TriangleAlert, X } from 'lucide-react';
+import { ChevronRight, ClipboardPaste, Plus, TriangleAlert, X } from 'lucide-react';
 import { api, type Service, type ServiceForm } from '../api';
 import { useServiceActions } from '../actions';
 import { useStatus, useUnified } from '../data';
 import { firstLine } from '../format';
 import { presets, type Preset } from '../presets';
 import { go } from '../router';
-import { Badge, Button, Card, cx, Field, IconButton, Input, Segmented, Switch, Textarea, useToast } from '../ui';
+import { Badge, Button, Card, cx, Field, IconButton, Input, Segmented, Switch, Textarea, Tip, useToast } from '../ui';
 
 // A service's settings: inline in the MCP detail for an existing service,
 // or the whole right pane when adding one (with presets and pasted JSON).
@@ -229,9 +229,8 @@ export function NewService() {
             </Chip>
           ))}
         </div>
-        <div className="mt-4 flex items-center gap-2 text-sm text-zinc-500">
-          <Lightbulb className="size-4 shrink-0 text-amber-500" />
-          <span>{preset?.hint ?? '写法和应用配置里 mcpServers 的一项相同；也可以直接粘贴那段 JSON。'}</span>
+        <div className="mt-3 flex items-center gap-2 text-[13px] text-zinc-500">
+          {preset?.hint && <Tip text={preset.hint} />}
           <button onClick={() => setPasteOpen((v) => !v)} className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-blue-600 hover:underline dark:text-blue-400">
             <ClipboardPaste className="size-4" />
             粘贴 JSON
@@ -257,9 +256,9 @@ export function NewService() {
           </div>
         )}
         {preset?.stateful && draft.form.mode !== 'per-session' && (
-          <div className="mt-3 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
-            <TriangleAlert className="mt-1 size-4 shrink-0" />
-            它会开着浏览器，建议选「每个对话单独一份」；共用一份时所有对话会用同一个浏览器。
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+            <TriangleAlert className="size-4 shrink-0" />
+            会开浏览器，建议每个对话单独一份
           </div>
         )}
       </Card>
@@ -293,14 +292,14 @@ export function NewService() {
   );
 }
 
-function SettingRow({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+function SettingRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[112px_minmax(0,1fr)] items-start gap-4 px-5 py-3.5">
-      <div className="pt-1.5 text-sm text-zinc-500">{label}</div>
-      <div className="min-w-0">
-        {children}
-        {hint && <div className="mt-1.5 text-xs leading-5 text-zinc-400">{hint}</div>}
+    <div className="grid grid-cols-[104px_minmax(0,1fr)] items-center gap-4 px-4 py-2.5">
+      <div className="flex items-center gap-1 text-[13px] text-zinc-500">
+        {label}
+        {hint && <Tip text={hint} />}
       </div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
@@ -384,7 +383,6 @@ function LaunchFields({ draft, setDraft }: { draft: Draft; setDraft: (d: Draft) 
             添加变量
           </Button>
         </div>
-        <span className="mt-1.5 block text-xs text-zinc-500">只传给这个 MCP；值保存在本机配置文件里，页面上不再显示。</span>
       </div>
       <Field label="工作目录" className="col-span-2" hint="留空时为用户目录">
         <Input value={form.cwd} placeholder="可选" onChange={(e) => setDraft({ ...draft, form: { ...form, cwd: e.target.value } })} />
@@ -436,10 +434,10 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
 
 function Toggle({ checked, onChange, title, desc }: { checked: boolean; onChange: (v: boolean) => void; title: string; desc: string }) {
   return (
-    <div className="flex items-center gap-6 rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-700">
-      <div className="flex-1">
-        <div className="text-sm font-medium">{title}</div>
-        <div className="mt-0.5 text-xs leading-5 text-zinc-500">{desc}</div>
+    <div className="flex items-center gap-6 rounded-lg border border-zinc-200 px-4 py-2.5 dark:border-zinc-700">
+      <div className="flex flex-1 items-center gap-1 text-[13px] font-medium">
+        {title}
+        <Tip text={desc} />
       </div>
       <Switch checked={checked} onChange={onChange} label={title} />
     </div>

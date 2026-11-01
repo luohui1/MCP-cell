@@ -136,7 +136,7 @@ func windowProc(hwnd windows.HWND, m uint32, w, l uintptr) uintptr {
 	case wmGetMinMaxInfo:
 		mmi := ptrOf[minMaxInfo](l)
 		dpi := dpiForWindow(hwnd)
-		mmi.MinTrackSize = point{scale(960, dpi), scale(640, dpi)}
+		mmi.MinTrackSize = point{scale(760, dpi), scale(520, dpi)}
 		return 0
 	case wmDpiChanged:
 		s := ptrOf[rect](l)
@@ -211,8 +211,8 @@ func (h *host) restorePlacement() bool {
 	return ok != 0
 }
 
-// defaultBounds is 1280×840 (logical) centered on the monitor under the
-// cursor, shrunk to fit its work area.
+// defaultBounds is a small window, 920×620 (logical), centered on the
+// monitor under the cursor and shrunk to fit its work area.
 func defaultBounds() rect {
 	var pt point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -229,7 +229,7 @@ func defaultBounds() rect {
 		}
 	}
 	work := mi.Work
-	w, h := min(scale(1280, dpi), work.width()-scale(32, dpi)), min(scale(840, dpi), work.height()-scale(32, dpi))
+	w, h := min(scale(920, dpi), work.width()-scale(32, dpi)), min(scale(620, dpi), work.height()-scale(32, dpi))
 	x, y := work.Left+(work.width()-w)/2, work.Top+(work.height()-h)/2
 	return rect{x, y, x + w, y + h}
 }

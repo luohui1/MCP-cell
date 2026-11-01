@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 
-// Hash routes keep the embedded page a plain static bundle. Three levels:
-// #/ (overview) › #/mcp, #/skills (lists) › #/mcp/<name>, #/skills/<name>
-// (details, shown beside the list). #/mcp/new adds a service, #/settings.
+// Hash routes keep the embedded page a plain static bundle: #/ (the MCP
+// list) › #/mcp/<name> (details). #/mcp/new adds a service, #/settings.
 // A query keeps the list's agent filter: #/mcp/context7?agent=codex.
 
 export interface Route {

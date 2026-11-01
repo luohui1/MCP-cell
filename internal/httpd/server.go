@@ -22,10 +22,10 @@ import (
 
 	"github.com/luohui1/MCP-cell/internal/autostart"
 	"github.com/luohui1/MCP-cell/internal/clients"
+	"github.com/luohui1/MCP-cell/internal/events"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/proc"
 	"github.com/luohui1/MCP-cell/internal/registry"
-	"github.com/luohui1/MCP-cell/internal/skills"
 )
 
 // The status page is built from web/ (npm run build) into ui/dist.
@@ -52,14 +52,17 @@ type Options struct {
 	Shutdown func()
 	// Desktop opens the window and starts or stops the tray icon process.
 	Desktop Desktop
-	// Skills manages agent skills for the Skill page.
-	Skills *skills.Manager
 	// Wrapper is the installed mcpcell-run. Takeovers keep the entry's
 	// command and wrap it; without it they point entries at /s/<name>.
 	Wrapper string
 	// AutoTakeoverEvery is how often new agent MCPs are looked for (see
 	// autotakeover.go); 0 turns the watcher off (tests).
 	AutoTakeoverEvery time.Duration
+	// SampleEvery is how often memory is sampled for the dashboard
+	// (metrics.go); 0 leaves it to the tests to call sample().
+	SampleEvery time.Duration
+	// Events is the timeline the page shows (GET /api/events).
+	Events *events.Log
 }
 
 type Server struct {
@@ -80,6 +83,7 @@ type Server struct {
 	variantOf sync.Map
 	// autoStamps: the agents' configuration files as last looked at.
 	autoStamps map[string][2]fileStamp
+	metrics    *sampler
 
 	cfgMu  sync.Mutex // serializes config.json edits
 	takeMu sync.Mutex // serializes client config takeovers
@@ -91,7 +95,7 @@ func New(p *pool.Pool, opts Options) *Server {
 	}
 	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
 		sessions: map[string]*session{}, codes: map[string]time.Time{}, runs: map[net.Conn]*runWriter{},
-		autoStamps: map[string][2]fileStamp{}}
+		autoStamps: map[string][2]fileStamp{}, metrics: newSampler(opts.Home, opts.SampleEvery)}
 	p.OnListChange(s.notifyListChanged)
 	return s
 }
@@ -107,6 +111,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/s/{name}", s.handleMCP)
 	mux.HandleFunc("GET /run", s.handleRun)
 	mux.HandleFunc("GET /api/status", s.api(s.handleStatus))
+	mux.HandleFunc("GET /api/metrics", s.api(s.handleMetrics))
+	mux.HandleFunc("GET /api/events", s.api(s.handleEvents))
 	mux.HandleFunc("POST /api/services/{name}/stop", s.api(s.handleStop))
 	mux.HandleFunc("POST /api/services/{name}/start", s.api(s.handleStart))
 	mux.HandleFunc("POST /api/services/{name}/update", s.api(s.handleUpdate))
@@ -119,9 +125,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/agents/{client}/add", s.api(s.handleAddToAgent))
 	mux.HandleFunc("POST /api/clients/{client}/attach", s.api(s.handleAttach))
 	mux.HandleFunc("POST /api/clients/{client}/restore", s.api(s.handleRestore))
-	mux.HandleFunc("GET /api/skills", s.api(s.handleSkills))
-	mux.HandleFunc("POST /api/skills/sync", s.api(s.handleSkillSync))
-	mux.HandleFunc("POST /api/skills/restore", s.api(s.handleSkillRestore))
 	mux.HandleFunc("GET /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/autostart", s.api(s.handleAutostart))
 	mux.HandleFunc("POST /api/shutdown", s.api(s.handleShutdown))
@@ -146,6 +149,9 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) Run(ctx context.Context) {
 	if s.opts.AutoTakeoverEvery > 0 {
 		go s.runAutoTakeover(ctx, s.opts.AutoTakeoverEvery)
+	}
+	if s.opts.SampleEvery > 0 {
+		go s.runSampler(ctx, s.opts.SampleEvery)
 	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()

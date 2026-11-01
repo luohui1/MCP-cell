@@ -15,7 +15,7 @@ body,
 
 body {
   margin: 0;
-  min-width: 960px;
+  min-width: 720px;
   background: #fafafa;
   color: #18181b;
   -webkit-font-smoothing: antialiased;

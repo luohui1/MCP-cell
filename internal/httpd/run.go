@@ -163,6 +163,7 @@ func (s *Server) serveRun(conn net.Conn, br *bufio.Reader) {
 		return
 	}
 
+	wrapper, agent := peerOf(conn)
 	ctx, cancel := context.WithCancel(context.Background())
 	var ss *session
 	var gen int
@@ -211,6 +212,7 @@ func (s *Server) serveRun(conn net.Conn, br *bufio.Reader) {
 				ss = newSession(name, m.Params)
 				// Used only if the session gets an instance of its own.
 				ss.spawnEnv, ss.spawnDir = envList(h.Env), h.Cwd
+				ss.wrapper, ss.agent = wrapper, agent
 				reply, _ := s.openSession(ctx, ss, m)
 				if len(reply.Error) > 0 {
 					// MCPcell could not start it; the agent might. Let the

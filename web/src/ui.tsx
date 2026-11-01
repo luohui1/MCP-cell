@@ -10,7 +10,7 @@ import {
   type ReactNode,
   type TextareaHTMLAttributes,
 } from 'react';
-import { ArrowLeft, Check, ChevronRight, Copy, Ellipsis, LoaderCircle } from 'lucide-react';
+import { Check, ChevronRight, Copy, Ellipsis, Info, LoaderCircle } from 'lucide-react';
 
 export function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(' ');
@@ -127,14 +127,14 @@ export function GroupHeader({
 }) {
   const body = (
     <>
-      {onToggle && <ChevronRight className={cx('size-4 text-zinc-400 transition-transform', open && 'rotate-90')} />}
-      <span className="shrink-0 text-sm font-semibold whitespace-nowrap text-zinc-800 dark:text-zinc-100">{title}</span>
-      {count !== undefined && <span className="text-sm text-zinc-400 tabular-nums">{count}</span>}
-      {hint && <span className="ml-1 truncate text-[13px] text-zinc-400">{hint}</span>}
+      {onToggle && <ChevronRight className={cx('size-3.5 text-zinc-400 transition-transform', open && 'rotate-90')} />}
+      <span className="shrink-0 text-xs font-medium whitespace-nowrap text-zinc-500 dark:text-zinc-400">{title}</span>
+      {count !== undefined && <span className="text-xs text-zinc-400 tabular-nums">{count}</span>}
+      {hint && <span className="ml-1 truncate text-xs text-zinc-400">{hint}</span>}
     </>
   );
   return (
-    <div className="mb-2.5 flex h-7 items-center gap-2 px-1">
+    <div className="mb-1.5 flex h-6 items-center gap-1.5 px-1">
       {onToggle ? (
         <button onClick={onToggle} aria-expanded={open} className="-ml-1 flex min-w-0 items-center gap-2 rounded-md px-1 hover:bg-zinc-100 dark:hover:bg-zinc-800">
           {body}
@@ -435,13 +435,24 @@ export function CodeBlock({ shown, copy }: { shown: string; copy: string }) {
   );
 }
 
-export function Field({ label, hint, children, className }: { label: string; hint?: ReactNode; children: ReactNode; className?: string }) {
+export function Field({ label, hint, children, className }: { label: string; hint?: string; children: ReactNode; className?: string }) {
   return (
     <label className={cx('block', className)}>
-      <span className="mb-2 block text-sm font-medium text-zinc-800 dark:text-zinc-200">{label}</span>
+      <span className="mb-1.5 flex items-center gap-1 text-[13px] font-medium text-zinc-800 dark:text-zinc-200">
+        {label}
+        {hint && <Tip text={hint} />}
+      </span>
       {children}
-      {hint && <span className="mt-1.5 block text-xs leading-5 text-zinc-500">{hint}</span>}
     </label>
+  );
+}
+
+/** A small info mark whose tooltip holds the explanation. */
+export function Tip({ text }: { text: string }) {
+  return (
+    <span title={text} className="inline-flex cursor-help text-zinc-400">
+      <Info className="size-3.5" />
+    </span>
   );
 }
 
@@ -454,34 +465,6 @@ export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
 
 export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...props} className={cx(inputBase, 'py-2.5 font-mono text-[13px] leading-6', props.className)} />;
-}
-
-export function PageHeader({
-  icon,
-  title,
-  subtitle,
-  back,
-  actions,
-}: {
-  icon?: ReactNode;
-  title: ReactNode;
-  subtitle?: ReactNode;
-  back?: () => void;
-  actions?: ReactNode;
-}) {
-  return (
-    <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/85 px-8 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/85">
-      {back && (
-        <IconButton label="返回" onClick={back} className="-ml-2 mr-0.5">
-          <ArrowLeft className="size-[18px]" />
-        </IconButton>
-      )}
-      {icon}
-      <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-      {subtitle && <span className="text-sm text-zinc-500">{subtitle}</span>}
-      <div className="ml-auto flex items-center gap-2">{actions}</div>
-    </header>
-  );
 }
 
 export function Dot({ tone, pulse }: { tone: 'green' | 'blue' | 'amber' | 'red' | 'gray'; pulse?: boolean }) {

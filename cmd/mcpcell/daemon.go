@@ -18,11 +18,11 @@ import (
 	"github.com/luohui1/MCP-cell/internal/catalog"
 	"github.com/luohui1/MCP-cell/internal/clients"
 	"github.com/luohui1/MCP-cell/internal/desktop"
+	"github.com/luohui1/MCP-cell/internal/events"
 	"github.com/luohui1/MCP-cell/internal/httpd"
 	"github.com/luohui1/MCP-cell/internal/npmcache"
 	"github.com/luohui1/MCP-cell/internal/pool"
 	"github.com/luohui1/MCP-cell/internal/registry"
-	"github.com/luohui1/MCP-cell/internal/skills"
 )
 
 // autoTakeoverEvery is how often the daemon looks for MCPs newly added to
@@ -72,7 +72,9 @@ func runDaemon(args []string) error {
 		defer f.Close()
 		logOut = f
 	}
-	log := slog.New(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// What the page's timeline shows comes from the log records themselves.
+	evlog := events.Open(filepath.Join(home, "events.json"))
+	log := slog.New(evlog.Handler(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	userHome, _ := os.UserHomeDir()
 	pkgs, err := npmcache.Open(filepath.Join(home, "pkgs"), nil)
 	if err != nil {
@@ -100,7 +102,8 @@ func runDaemon(args []string) error {
 	srv = httpd.New(p, httpd.Options{Port: cfg.Port, Token: token, Version: version,
 		ConfigPath: registry.ConfigPath(home), Home: home, MaxInstances: cfg.Limits.MaxInstances, Log: log,
 		Clients: clients.All(userHome, filepath.Join(home, "backups")), Takeovers: takeovers, Exe: exe, Shutdown: stop,
-		Desktop: shell, Wrapper: wrapperNextTo(exe), Skills: skills.New(home, userHome), AutoTakeoverEvery: autoTakeoverEvery()})
+		Desktop: shell, Wrapper: wrapperNextTo(exe), AutoTakeoverEvery: autoTakeoverEvery(),
+		SampleEvery: 10 * time.Second, Events: evlog})
 
 	started := time.Now()
 	if err := registry.WriteDaemonInfo(home, registry.DaemonInfo{PID: os.Getpid(), Port: cfg.Port,
@@ -137,11 +140,15 @@ func runDaemon(args []string) error {
 	fmt.Fprintln(os.Stderr, "管理页：另开终端运行 mcpcell ui；按 Ctrl+C 退出。")
 
 	if err := hs.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		srv.FlushMetrics()
 		p.Close()
+		_ = evlog.Save()
 		return err
 	}
+	srv.FlushMetrics()
 	p.Close()
 	log.Info("daemon stopped")
+	_ = evlog.Save()
 	fmt.Fprintln(os.Stderr, "MCPcell 已退出，所有 MCP 服务进程已结束。")
 	return nil
 }
