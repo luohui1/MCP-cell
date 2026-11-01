@@ -127,7 +127,7 @@ func TestShareabilityCheck(t *testing.T) {
 }
 
 func TestSharedInstanceForwardsToItsOnlyCaller(t *testing.T) {
-	dir := t.TempDir()
+	dir := settledDir(t)
 	p := newPoolWith(t, `{"services":{"fake":{"command":"x"}}}`, Options{Catalog: catalog.OpenStore(dir)})
 	a := newSession("a")
 	inst, err := p.Acquire(context.Background(), "fake", a)

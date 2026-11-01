@@ -181,7 +181,7 @@ args = ["mcp-server-time"]
 	if out, err = run("y\n", "--client", "cursor", "context7"); err != nil || !strings.Contains(out, "✓ Cursor / context7 → 新建服务 context7") {
 		t.Fatalf("cursor context7: %v\n%s", err, out)
 	}
-	if b := readFile(t, cursorFile); !strings.Contains(b, "mcpcell-run.exe") || !strings.Contains(b, `"remote": { "url"`) || !strings.Contains(b, `"python"`) {
+	if b := readFile(t, cursorFile); !strings.Contains(b, "mcpcell-run") || !strings.Contains(b, `"remote": { "url"`) || !strings.Contains(b, `"python"`) {
 		t.Fatalf("cursor config after taking over context7:\n%s", b)
 	}
 	if readFile(t, codexFile) != codexOrig {
@@ -209,7 +209,7 @@ args = ["mcp-server-time"]
 	if cfg.Services["time"].Mode != registry.ModePerSession || cfg.Services["context7"].Mode != registry.ModeShared {
 		t.Fatalf("modes after codex: time %q, context7 %q", cfg.Services["time"].Mode, cfg.Services["context7"].Mode)
 	}
-	if b := readFile(t, codexFile); !strings.Contains(b, "mcpcell-run.exe") {
+	if b := readFile(t, codexFile); !strings.Contains(b, "mcpcell-run") {
 		t.Fatalf("codex config:\n%s", b)
 	}
 

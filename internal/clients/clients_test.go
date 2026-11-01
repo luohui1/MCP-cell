@@ -337,7 +337,7 @@ func TestClassify(t *testing.T) {
 		{Entry{Kind: "stdio", Command: "cmd", Args: []string{"/c", "npx", "-y", "@upstash/context7-mcp"}}, ClassShared},
 		{Entry{Kind: "stdio", Command: "npx", Args: []string{"chrome-devtools-mcp@latest", "--autoConnect"}}, ClassStateful},
 		{Entry{Kind: "stdio", Command: "uvx", Args: []string{"mcp-server-fetch==1.0"}}, ClassShared},
-		{Entry{Kind: "stdio", Command: `C:\x\mcp-server-windows-x64.exe`, Args: []string{"--app", "a"}}, ClassStateful},
+		{Entry{Kind: "stdio", Command: filepath.Join("x", "mcp-server-windows-x64.exe"), Args: []string{"--app", "a"}}, ClassStateful},
 		{Entry{Kind: "stdio", Client: "codex", Name: "node_repl", Command: "node"}, ClassInternal},
 		{Entry{Kind: "stdio", Command: "npx", Args: []string{"-y", "@upstash/context7-mcp"}, EnvVars: []string{"PATH"}}, ClassUnknown},
 		{Entry{Kind: "stdio", Command: "python", Args: []string{"my_server.py"}}, ClassUnknown},

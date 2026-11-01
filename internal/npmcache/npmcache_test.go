@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,13 +18,18 @@ func TestDetect(t *testing.T) {
 	}{
 		{"npx -y @upstash/context7-mcp", "@upstash/context7-mcp", "", true},
 		{"npx chrome-devtools-mcp@latest --headless", "chrome-devtools-mcp@latest", "--headless", true},
-		{`D:\APPS\nodejs\npx.cmd @larksuiteoapi/lark-mcp mcp -a x`, "@larksuiteoapi/lark-mcp", "mcp -a x", true},
 		{"npx --yes pkg@^1.2.0", "pkg@^1.2.0", "", true},
 		{"npx -p pkg cmd", "", "", false},
 		{"npx ./local/server.js", "", "", false},
 		{"npx github:owner/repo", "", "", false},
 		{"npx", "", "", false},
 		{"node server.js", "", "", false},
+	}
+	if runtime.GOOS == "windows" {
+		cases = append(cases, struct {
+			in, spec, args string
+			ok             bool
+		}{`D:\APPS\nodejs\npx.cmd @larksuiteoapi/lark-mcp mcp -a x`, "@larksuiteoapi/lark-mcp", "mcp -a x", true})
 	}
 	for _, c := range cases {
 		spec, args, ok := Detect(strings.Fields(c.in))

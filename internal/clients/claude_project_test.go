@@ -111,7 +111,7 @@ func TestClaudeProjectLocalAttachRestore(t *testing.T) {
 	c, path, withLocal, _ := claudeProjects(t)
 	p := c.Project(withLocal)
 	before := read(t, path)
-	rec, err := p.Attach("ctx", Target{URL: base + "/s/ctx", Token: tok, Wrapper: `C:\mcpcell\mcpcell-run.exe`})
+	rec, err := p.Attach("ctx", Target{URL: base + "/s/ctx", Token: tok, Wrapper: wrapper})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestClaudeProjectSharedOverride(t *testing.T) {
 	p := c.Project(withShared)
 	mcpJSON := filepath.Join(withShared, ".mcp.json")
 	shared := read(t, mcpJSON)
-	rec, err := p.Attach("approved", Target{URL: base + "/s/approved", Token: tok, Wrapper: `C:\mcpcell\mcpcell-run.exe`})
+	rec, err := p.Attach("approved", Target{URL: base + "/s/approved", Token: tok, Wrapper: wrapper})
 	if err != nil {
 		t.Fatal(err)
 	}

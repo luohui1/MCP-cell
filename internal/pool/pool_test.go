@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -344,10 +345,15 @@ func TestLeanSpec(t *testing.T) {
 		env        bool
 	}{
 		{"node server.js --port 1", "node --max-semi-space-size=1 --optimize-for-size server.js --port 1", false},
-		{`cmd /c C:\n\node.exe s.js`, `C:\n\node.exe --max-semi-space-size=1 --optimize-for-size s.js`, false},
 		{"npx -y pkg", "npx -y pkg", true},
 		{"python server.py", "python server.py", false},
 		{"node --inspect s.js", "node --inspect s.js", true},
+	}
+	if runtime.GOOS == "windows" {
+		cases = append(cases, struct {
+			argv, want string
+			env        bool
+		}{`cmd /c C:\n\node.exe s.js`, `C:\n\node.exe --max-semi-space-size=1 --optimize-for-size s.js`, false})
 	}
 	for _, c := range cases {
 		got := leanSpec(proc.Spec{Argv: strings.Fields(c.argv)})
@@ -452,4 +458,22 @@ func TestUsage(t *testing.T) {
 	if st.Calls != 2 || st.LastUsedAt == nil {
 		t.Fatalf("calls %d, last used %v", st.Calls, st.LastUsedAt)
 	}
+}
+
+// settledDir is a temporary directory removed only once nothing writes into
+// it any more: instances that end with the test may still save a catalog.
+func settledDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "mcpcell-pool-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+			if os.RemoveAll(dir) == nil || time.Now().After(deadline) {
+				return
+			}
+		}
+	})
+	return dir
 }

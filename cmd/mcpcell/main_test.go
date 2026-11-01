@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,18 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("MCPCELL_HOME", home)
+	// The agent entries in these tests run npx, python and uvx; the test
+	// daemon starts the fake server instead, but takeover first checks that
+	// the program exists (clients.Missing), which differs between machines.
+	bin := filepath.Join(home, "path")
+	_ = os.MkdirAll(bin, 0o755)
+	for _, name := range []string{"npx", "python", "uvx", "node"} {
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		_ = os.WriteFile(filepath.Join(bin, name), nil, 0o755)
+	}
+	os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)

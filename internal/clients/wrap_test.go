@@ -2,6 +2,7 @@ package clients
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -10,7 +11,13 @@ import (
 	"github.com/luohui1/MCP-cell/internal/registry"
 )
 
-const wrapper = `C:\Users\me\.mcpcell\bin\mcpcell-run.exe`
+// wrapper is an installed mcpcell-run as this system names it.
+var wrapper = func() string {
+	if runtime.GOOS == "windows" {
+		return `C:\Users\me\.mcpcell\bin\mcpcell-run.exe`
+	}
+	return "/Users/me/.mcpcell/bin/mcpcell-run"
+}()
 
 func TestUnwrap(t *testing.T) {
 	cases := []struct {
