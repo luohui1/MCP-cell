@@ -4,7 +4,7 @@
 
 A local MCP runtime that lets every AI agent session on a machine share MCP server processes instead of spawning its own set.
 
-`0.6.0-dev` · Windows
+`0.6.0-dev` · Windows · macOS、Linux（预览）
 
 ## 为什么
 
@@ -17,6 +17,19 @@ Claude Code、Codex、Cursor 每开一个对话，就把配置里的 MCP 全部�
 1. **安装**：`bin/mcpcell.exe install`（现在还要自己编译，见下面的「开发」；之后会提供直接下载的安装包）
 2. **打开**：`~/.mcpcell/bin/mcpcell.exe open`，第一次打开会出现使用引导：一键检测各应用的 MCP，再一键托管（之后也可以点右上角的「一键托管」）
 3. **重开 Agent 的对话**：新对话就会用 MCPcell 共用的 MCP
+
+### macOS、Linux（预览）
+
+每次推送都会在 GitHub Actions 上测试并打包（`.github/workflows/build.yml`），`v*` 标签会把包挂到 Release：`mcpcell-darwin-arm64`（Apple 芯片）、`mcpcell-darwin-amd64`（Intel）、`mcpcell-linux-amd64`。
+
+```sh
+tar -xzf mcpcell-darwin-arm64.tar.gz && cd mcpcell-darwin-arm64
+xattr -dr com.apple.quarantine .     # 只在 macOS：没有签名，去掉下载隔离
+./mcpcell install
+~/.mcpcell/bin/mcpcell open           # 在浏览器里打开管理页
+```
+
+和 Windows 的区别：没有托盘图标和独立窗口，管理页在浏览器里打开；开机自启用 LaunchAgent（macOS）或 XDG 自启（Linux），下次登录生效；内存按进程组的常驻内存统计（macOS 用 `ps`，比 Windows 的私有提交略高）；不能给 MCP 设内存上限。
 
 Claude Code 里按项目加的 MCP（`claude mcp add` 默认的项目私有配置、项目里的 `.mcp.json`）也会找到；`.mcp.json` 是团队共享的文件，MCPcell 不改它，而是在你本机加一条同名的私有配置覆盖它。支持的应用：Claude Code、Codex、Cursor、Claude Desktop、VS Code、Copilot CLI、Gemini CLI、Antigravity、Windsurf、Kiro、Cline、Roo Code、OpenCode。所有应用用同一套 MCP：一键托管时，一个应用里有的 MCP 也会加到其他应用里（设置里可以关掉；从某个应用里还原或删掉的不会再加回去）。之后在这些应用里新加的 MCP 会自动交给 MCPcell，并同步到其他应用。不想用了：首页右上角菜单里的「全部还原」，或者 `mcpcell restore --all`，各应用的配置逐字节恢复。
 

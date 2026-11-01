@@ -469,6 +469,19 @@ Go 程序在 Windows 上的下限就是约 11.3–11.9 MB（只读标准输入�
 
 1,806 次调用全部成功。打开对话到拿到第一个结果：npx 启动的 4 个 MCP 原生 12.6–15.5 s，经 MCPcell 0.7–3.8 s；本地二进制的那个原生 0.25 s、经 MCPcell 0.34 s（多了按需启动）。MCP 已在运行时，本地工具每次调用经 MCPcell 多 0.4–0.7 ms，联网工具的差别在网络波动范围内。shadcn-ui 原生跑时访问 GitHub 报认证失败，结果取决于网络和限流，没有放进对比。
 
+## macOS、Linux 预览版（2026-11-01）
+
+以前只有 Windows 能用：非 Windows 上开机自启、窗口、托盘都是"不支持"，内存统计读的是 Linux 才有的 `/proc`，也没有给 macOS 编译 Rust 转发程序的地方。
+
+交付：
+- 开机自启：macOS 写 LaunchAgent（`com.mcpcell.daemon`，登录时运行 `mcpcell daemon --log`），Linux 写 XDG 自启项；都在下次登录生效（现在加载会和正在运行的守护进程撞端口）；没有托盘
+- 内存统计按平台分：macOS 用 `ps` 加总实例进程组的常驻内存（libproc 要 cgo），Linux 仍读 `/proc`
+- 管理页在浏览器里打开（`mcpcell open` 原本就会在没有窗口时这样做）；设置页在没有托盘的系统上不显示托盘那一行
+- GitHub Actions：macOS（Apple 芯片，测试并编译两种芯片）、Linux、Windows 上 vet、全部测试、Rust 转发程序测试与编译、打包；`v*` 标签挂到 Release
+- 各应用配置在 macOS 上的位置原本就按 home 算（`~/Library/Application Support` 下的 Claude Desktop、VS Code、Cline、Roo Code）
+
+验收：Windows 上 `GOOS=darwin|linux|windows|freebsd go vet ./...` 都通过，darwin/arm64、darwin/amd64 能编译；`internal/autostart` 新测试（临时 home 下写入、读回、删除登录项，程序不在时拒绝）；WSL 的 Ubuntu 上 `go test ./...` 全部通过——第一次跑有 5 个包失败，都是测试的问题：写死了 Windows 的路径（`C:\...\mcpcell-run.exe`、`npx.cmd`、`cmd /c`）、测试辅助进程让孙进程自立进程组（真实 MCP 的子进程不会）、刚启动的进程还没有内存就去读、临时目录清理和缓存写入抢时间、测试条目用的 `python` 在 Linux/macOS 上没有（命令行测试的 TestMain 现在在 PATH 上放 npx、python、uvx、node 空程序）。macOS 本机还没有实测，要等 CI 在 macOS 机器上跑。
+
 ## M4 Hub 聚合与上下文瘦身
 
 优先级已下调：Claude Code、Cursor、Codex 已经内置工具检索，这一步只面向没有工具检索的客户端。新版客户端连旧版上游、又确实需要 sampling 或 elicitation 时的 MRTR 双向翻译，也放在这一阶段，等遇到实际需要的服务再做。
