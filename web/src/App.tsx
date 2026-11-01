@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Settings as SettingsIcon } from 'lucide-react';
 import { api, Unauthorized, type Status } from './api';
 import { DataProvider, StatusContext, useStatus, useUnified } from './data';
+import { Guide } from './guide';
 import { Logo } from './icons';
 import { mcpView } from './model';
 import { href, redirect, useRoute } from './router';
@@ -54,6 +55,7 @@ export function App() {
             )}
             <Routes />
           </div>
+          <Guide />
         </DataProvider>
       </StatusContext.Provider>
     </ToastProvider>
@@ -88,7 +90,7 @@ function TopBar() {
   const { status } = useStatus();
   const { data } = useUnified();
   const [page = ''] = useRoute().parts;
-  const broken = data?.rows.filter((r) => mcpView(r, status, data?.auto).kind === 'broken').length ?? 0;
+  const broken = data?.rows.filter((r) => mcpView(r, status).kind === 'broken').length ?? 0;
   const tabs = [
     { label: 'MCP', to: href([]), active: page === '' || page === 'mcp', badge: broken },
     { label: '内存', to: href(['memory']), active: page === 'memory' },

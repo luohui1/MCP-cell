@@ -15,7 +15,21 @@ export interface TimelineItem {
   count: number;
 }
 
-const agentNames: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
+const agentNames: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  'claude-desktop': 'Claude Desktop',
+  vscode: 'VS Code',
+  copilot: 'Copilot CLI',
+  gemini: 'Gemini CLI',
+  antigravity: 'Antigravity',
+  windsurf: 'Windsurf',
+  kiro: 'Kiro',
+  cline: 'Cline',
+  roo: 'Roo Code',
+  opencode: 'OpenCode',
+};
 /** An agent's name; a Claude Code project's is "Claude Code · <folder>". */
 export function agentName(id?: string): string {
   if (!id) return '';
@@ -30,50 +44,50 @@ function describe(e: AppEvent, name: string, count: number, services: Service[])
   const times = count > 1 ? ` ${count} 次` : '';
   switch (e.kind) {
     case 'started':
-      return { tone: 'green', text: `${name} 打开了${times}` };
+      return { tone: 'green', text: `${name} 启动${times}` };
     case 'stopped_idle':
-      return { tone: 'gray', text: `${name} 一段时间没人用，自动关了${times}` };
+      return { tone: 'gray', text: `${name} 空闲停止${times}` };
     case 'stopped_manual':
-      return { tone: 'gray', text: `${name} 被手动关掉了` };
+      return { tone: 'gray', text: `${name} 手动停止` };
     case 'stopped_session':
-      return { tone: 'gray', text: count > 1 ? `${name} 有 ${count} 个对话结束，关掉了各自那份` : `${name} 的一个对话结束，关掉了它那份` };
+      return { tone: 'gray', text: `${name} 对话结束，停止${count > 1 ? ` ${count} 份` : ''}` };
     case 'stopped_budget':
-      return { tone: 'gray', text: `${name} 给其他 MCP 让位，先关了` };
+      return { tone: 'gray', text: `${name} 超出数量上限，停止` };
     case 'stopped_config':
-      return { tone: 'gray', text: `${name} 的设置改了，关掉旧的那份` };
+      return { tone: 'gray', text: `${name} 配置变更，重启` };
     case 'stopped_update':
-      return { tone: 'gray', text: `${name} 更新了版本，关掉旧的那份` };
+      return { tone: 'gray', text: `${name} 版本更新，重启` };
     case 'stopped_deleted':
     case 'deleted':
-      return { tone: 'gray', text: `${name} 从 MCPcell 删除了` };
+      return { tone: 'gray', text: `${name} 已删除` };
     case 'crashed':
-      return { tone: 'amber', text: `${name} 意外退出了${times}` };
+      return { tone: 'amber', text: `${name} 意外退出${times}` };
     case 'start_failed': {
       // The error kept with the service has the program's own output; the
       // saved event only its first line (stderr stays in memory).
       const now = services.find((s) => s.name === e.service && s.lastError)?.lastError;
-      return { tone: 'red', text: `${name} 打不开${times}`, detail: plainReason(now ?? e.detail) };
+      return { tone: 'red', text: `${name} 启动失败${times}`, detail: plainReason(now ?? e.detail) };
     }
     case 'quarantined':
-      return { tone: 'red', text: `${name} 反复崩溃，暂停打开` };
+      return { tone: 'red', text: `${name} 反复崩溃，已暂停` };
     case 'taken_over':
-      return { tone: 'blue', text: `${app} 的 ${entry} 改为用 MCPcell 共用的这份` };
+      return { tone: 'blue', text: `${app} · ${entry} 已托管` };
     case 'restored':
-      return { tone: 'gray', text: `${app} 的 ${entry} 改回了原样` };
+      return { tone: 'gray', text: `${app} · ${entry} 已还原` };
     case 'added':
-      return { tone: 'blue', text: `${name} 加到了 ${app}` };
+      return { tone: 'blue', text: `${name} 已添加到 ${app}` };
     case 'auto_taken':
-      return { tone: 'blue', text: `新发现 ${app} 的 ${entry}，已自动托管` };
+      return { tone: 'blue', text: `${app} · ${entry} 已自动托管` };
     case 'auto_failed':
-      return { tone: 'red', text: `新发现 ${app} 的 ${entry}，打不开，没有托管`, detail: plainReason(e.detail) };
+      return { tone: 'red', text: `${app} · ${entry} 自动托管失败`, detail: plainReason(e.detail) };
     case 'auto_stopped':
-      return { tone: 'amber', text: `${app} 一直把 ${entry} 改回原来的设置，不再自动托管它` };
+      return { tone: 'amber', text: `${app} · ${entry} 反复被改回，停止自动托管` };
     case 'saved':
-      return { tone: 'gray', text: `${name} 的设置保存了` };
+      return { tone: 'gray', text: `${name} 配置已保存` };
     case 'daemon_started':
-      return { tone: 'blue', text: 'MCPcell 启动了' };
+      return { tone: 'blue', text: 'MCPcell 启动' };
     case 'daemon_stopped':
-      return { tone: 'gray', text: 'MCPcell 退出了' };
+      return { tone: 'gray', text: 'MCPcell 退出' };
   }
   return null;
 }

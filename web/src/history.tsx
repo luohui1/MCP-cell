@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { metricsApi, type MetricsRange } from './api';
-import { MemoryChart, Swatch } from './chart';
+import { MemoryChart } from './chart';
 import { usePolled } from './data';
 import { Card, Segmented } from './ui';
 
-// The 内存 page's chart: memory over the last hour or day, against every
-// conversation running its own copy.
+// The 内存 page's chart: memory over the last hour or day.
 
 const rangeKey = 'mcpcell.chartRange';
 
@@ -34,25 +33,15 @@ export function MemoryPanel() {
   };
   return (
     <Card className="px-4 pt-3 pb-1.5">
-      <div className="mb-1 flex items-center gap-4 text-xs text-zinc-500">
-        <span className="flex items-center gap-1.5">
-          <Swatch kind="total" />
-          实际
-        </span>
-        <span className="flex items-center gap-1.5" title="每个对话各开一份时的估计">
-          <Swatch kind="estimate" />
-          各开各的
-        </span>
-        <div className="ml-auto">
-          <Segmented
-            value={range}
-            onChange={pick}
-            options={[
-              { value: '1h', label: '1 小时' },
-              { value: '24h', label: '24 小时' },
-            ]}
-          />
-        </div>
+      <div className="mb-1 flex justify-end">
+        <Segmented
+          value={range}
+          onChange={pick}
+          options={[
+            { value: '1h', label: '1 小时' },
+            { value: '24h', label: '24 小时' },
+          ]}
+        />
       </div>
       <MemoryChart
         points={shown?.points ?? []}
@@ -60,12 +49,9 @@ export function MemoryPanel() {
         from={nowT - span}
         to={nowT}
         height={170}
-        series={[
-          { key: 'total', label: '实际' },
-          { key: 'estimate', label: '各开各的' },
-        ]}
-        empty={shown ? '还没有记录' : '正在读取…'}
-        extra={(p) => [p.conversations ? `${p.conversations} 个对话` : '', p.running ? `${p.running} 个 MCP 进程` : ''].filter(Boolean).join(' · ')}
+        label="内存"
+        empty={shown ? '暂无数据' : '读取中…'}
+        extra={(p) => [p.conversations ? `${p.conversations} 个对话` : '', p.running ? `${p.running} 个进程` : ''].filter(Boolean).join(' · ')}
       />
     </Card>
   );

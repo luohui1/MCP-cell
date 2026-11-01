@@ -51,13 +51,13 @@ export function ActivityPage() {
           options={[
             { value: 'all', label: '全部' },
             { value: 'problems', label: problems ? `问题 ${problems}` : '问题' },
-            { value: 'runs', label: '打开和关掉' },
-            { value: 'apps', label: '应用设置' },
+            { value: 'runs', label: '启停' },
+            { value: 'apps', label: '托管' },
           ]}
         />
       </Toolbar>
-      {!events && <p className="py-12 text-center text-[13px] text-zinc-400">正在读取…</p>}
-      {events && !items.length && <p className="py-12 text-center text-[13px] text-zinc-400">没有动态</p>}
+      {!events && <p className="py-12 text-center text-[13px] text-zinc-400">读取中…</p>}
+      {events && !items.length && <p className="py-12 text-center text-[13px] text-zinc-400">暂无动态</p>}
       {days.map((g) => (
         <section key={g.day}>
           <h2 className="mb-1.5 px-1 text-xs text-zinc-400">{g.day}</h2>

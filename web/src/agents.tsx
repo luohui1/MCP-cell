@@ -1,20 +1,29 @@
 import { useState, type ReactNode } from 'react';
 import { TriangleAlert } from 'lucide-react';
-import { takeover, unified, type AgentCell, type AgentSummary, type AutostartStatus, type McpRow } from './api';
-import { useStatus } from './data';
+import { autoApi, takeover, unified, type AgentCell, type AgentSummary, type McpRow } from './api';
+import { useStatus, type Unified } from './data';
 import { firstLine } from './format';
 import { BrandMark } from './icons';
 import { agentOrder } from './model';
-import { Button, Checkbox, Modal, useToast } from './ui';
+import { Button, Modal, useToast } from './ui';
 
-export const agentBrand: Record<string, string> = { 'claude-code': 'claude', codex: 'openai', cursor: 'cursor' };
-export const restartHint: Record<string, string> = {
-  'claude-code': 'Claude Code 新开的对话立即生效，已经开着的重开后生效',
-  codex: '重启 Codex（包括桌面版）后生效',
-  cursor: '在 Cursor 的 MCP 设置里刷新，或重启 Cursor',
+export const agentBrand: Record<string, string> = {
+  'claude-code': 'claude',
+  codex: 'openai',
+  cursor: 'cursor',
+  'claude-desktop': 'claude',
+  vscode: 'vscode',
+  copilot: 'copilot',
+  gemini: 'gemini',
+  antigravity: 'gemini',
+  windsurf: 'windsurf',
+  kiro: 'kiro',
+  cline: 'cline',
+  opencode: 'opencode',
 };
-const shortHint: Record<string, string> = {
-  'claude-code': 'Claude Code 新开的对话立即生效',
+/** When a change to an app's configuration takes effect. */
+const applies: Record<string, string> = {
+  'claude-code': 'Claude Code 新对话生效',
   codex: 'Codex 重启后生效',
   cursor: 'Cursor 刷新 MCP 后生效',
 };
@@ -37,18 +46,12 @@ export const appsOf = (agents: AgentSummary[]) => [...new Set(agents.map((a) => 
 export const brandOfAgent = (id: string) => agentBrand[appOf(id)] ?? '';
 
 /** A native entry MCPcell can run: local stdio with an environment it can
- * reproduce (the daemon decides). */
-export const canTake = (c?: AgentCell) => !!c && c.state === 'native' && !!c.takeable;
-
-export type Mode = 'shared' | 'per-session';
+ * reproduce (the daemon decides), and not one that cannot start. */
+export const canTake = (c?: AgentCell) => !!c && c.state === 'native' && !!c.takeable && !c.dead;
 
 export interface TakeStep {
   agent: AgentSummary;
   entry: string;
-  service: string;
-  isNew: boolean;
-  mode: Mode;
-  force: boolean; // share an unverified server
 }
 export interface RestoreStep {
   agent: AgentSummary;
@@ -56,15 +59,13 @@ export interface RestoreStep {
   added?: boolean;
 }
 
-/** Steps that take over every eligible cell of a row (optionally one agent).
- * share runs an unverified server shared instead of per session. */
-export function takeSteps(r: McpRow, agents: AgentSummary[], only?: string, share = false): TakeStep[] {
+/** Steps that take over every eligible cell of a row (optionally of one
+ * app). The daemon picks how each runs: known-stateless servers shared, the
+ * rest one instance per conversation. */
+export function takeSteps(r: McpRow, agents: AgentSummary[], only?: string): TakeStep[] {
   return agents.flatMap((a) => {
     const c = r.agents[a.id];
-    if ((only && appOf(a.id) !== only) || !canTake(c)) return [];
-    const force = c.class === 'unknown' && share;
-    const mode: Mode = r.service ? (r.mode as Mode) : c.class === 'shared' || force ? 'shared' : 'per-session';
-    return [{ agent: a, entry: c.entry, service: r.service ?? r.proposed ?? c.entry, isNew: !r.service, mode, force }];
+    return (only && appOf(a.id) !== only) || !canTake(c) ? [] : [{ agent: a, entry: c.entry }];
   });
 }
 
@@ -73,6 +74,24 @@ export function restoreSteps(r: McpRow, agents: AgentSummary[]): RestoreStep[] {
     const c = r.agents[a.id];
     return c?.state === 'managed' ? [{ agent: a, entry: c.entry, added: c.added }] : [];
   });
+}
+
+/** How many additions a sync would make now (optionally to one app's agents). */
+export const pendingSync = (data: Unified, only?: string) =>
+  data.rows.reduce((n, r) => n + (r.syncTo ?? []).filter((id) => !only || appOf(id) === only).length, 0);
+
+/** Takes over, then, when every app keeps the same set, adds the MCPs to
+ * the apps that lack them (only to apps, when given). */
+export async function takeAndSync(steps: TakeStep[], sync: boolean, apps?: string[]) {
+  const taken = steps.length ? await attachAll(steps) : { ok: 0, failed: [] as string[], failedSteps: [] as TakeStep[] };
+  const added = sync ? (await autoApi.sync(apps)).results.filter((r) => r.ok).length : 0;
+  return { ...taken, added };
+}
+
+/** Rows 一键托管 takes over, with their steps (optionally for one app). */
+export function candidates(data: Unified, only?: string) {
+  const agents = data.agents.filter((a) => a.found);
+  return data.rows.map((row) => ({ row, steps: takeSteps(row, agents, only) })).filter((c) => c.steps.length > 0);
 }
 
 const byAgent = <T extends { agent: AgentSummary }>(steps: T[]) => {
@@ -85,22 +104,43 @@ const byAgent = <T extends { agent: AgentSummary }>(steps: T[]) => {
   return [...m.values()];
 };
 
-const hints = (agents: AgentSummary[]) => [...new Set(agents.map((a) => shortHint[appOf(a.id)] ?? `${a.name} 重启后生效`))].join('；');
+/** When the changes take effect, in one phrase: Claude Code's new
+ * conversations pick them up, the other apps once restarted. */
+export function appliesTo(steps: { agent: AgentSummary }[]): string {
+  const apps = [...new Map(steps.map((s) => [appOf(s.agent.id), s.agent])).entries()];
+  const claude = apps.some(([app]) => app === 'claude-code');
+  const others = apps.filter(([app]) => app !== 'claude-code');
+  if (!others.length) return claude ? applies['claude-code'] : '';
+  if (others.length === 1 && !claude) return applies[others[0][0]] ?? `${others[0][1].name} 重启后生效`;
+  return claude ? `${applies['claude-code']}，其他应用重启后生效` : '重启应用后生效';
+}
 
-/** Applies takeover steps agent by agent; throws with the first failure. */
-export async function applyTakeover(steps: TakeStep[]): Promise<string> {
+/** Takes over steps agent by agent: how many were, each failure, and the
+ * steps that failed. */
+export async function attachAll(steps: TakeStep[]): Promise<{ ok: number; failed: string[]; failedSteps: TakeStep[] }> {
   const failed: string[] = [];
+  const failedSteps: TakeStep[] = [];
   let ok = 0;
   for (const g of byAgent(steps)) {
-    for (const force of [false, true]) {
-      const names = g.steps.filter((s) => s.force === force).map((s) => s.entry);
-      if (!names.length) continue;
-      const { results } = await takeover.attach(g.agent.id, names, force);
-      for (const r of results) r.ok ? ok++ : failed.push(`${g.agent.name} ${r.name}：${r.error}`);
+    const { results } = await takeover.attach(g.agent.id, g.steps.map((s) => s.entry));
+    for (const r of results) {
+      if (r.ok) {
+        ok++;
+        continue;
+      }
+      failed.push(`${g.agent.name} ${r.name}：${r.error}`);
+      failedSteps.push(...g.steps.filter((s) => s.entry === r.name));
     }
   }
-  if (failed.length) throw new Error(`${ok ? `已改好 ${ok} 个，` : ''}${failed.length} 个没改成。${failed[0]}`);
-  return `已改好 ${ok} 个。${hints(byAgent(steps).map((g) => g.agent))}`;
+  return { ok, failed, failedSteps };
+}
+
+/** Applies takeover steps; throws only when none worked. The daemon
+ * remembers the ones that did not start, which are left out from then on. */
+async function applyTakeover(steps: TakeStep[]): Promise<string> {
+  const { ok, failed } = await attachAll(steps);
+  if (!ok && failed.length) throw new Error(`托管失败：${failed[0]}`);
+  return `已托管 ${ok} 个，${appliesTo(steps)}${failed.length ? `；${failed.length} 项无法托管，已忽略` : ''}`;
 }
 
 async function applyRestore(steps: RestoreStep[]): Promise<string> {
@@ -110,38 +150,35 @@ async function applyRestore(steps: RestoreStep[]): Promise<string> {
     const { results } = await takeover.restore(g.agent.id, g.steps.map((s) => s.entry));
     for (const r of results) r.ok ? ok++ : failed.push(`${g.agent.name} ${r.name}：${r.error}`);
   }
-  if (failed.length) throw new Error(`${ok ? `已改回 ${ok} 个，` : ''}${failed.length} 个没改成。${failed[0]}`);
-  return `已改回原样 ${ok} 个。${hints(byAgent(steps).map((g) => g.agent))}`;
+  if (failed.length) throw new Error(`${ok ? `已还原 ${ok} 个，` : ''}${failed.length} 个失败：${failed[0]}`);
+  return `已还原 ${ok} 个，${appliesTo(steps)}`;
 }
 
 interface Pending {
   title: string;
   intro?: ReactNode;
   groups: { agent: AgentSummary; lines: ReactNode[] }[];
-  warn?: string;
-  /** What happens to each agent's file, when it is not a takeover. */
+  /** What happens to each agent's file. */
   note?: string;
   confirm: string;
   danger?: boolean;
   run: () => Promise<string>;
 }
 
-/** Confirmed changes to agent configurations. Every change is listed, per
- * agent, before anything is written. */
-export function useAgentActions(reload: () => Promise<void>, auto: AutostartStatus | null) {
+/** Changes to agent configurations. Taking over, restoring one MCP and
+ * adding one run at once, since each is as easily undone; restoring many
+ * and forgetting a record ask first. */
+export function useAgentActions(reload: () => Promise<void>) {
   const { refresh } = useStatus();
   const toast = useToast();
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
-  const [enableAuto, setEnableAuto] = useState(true);
-  const offerAuto = !!auto?.supported && !auto.enabled;
 
-  async function run() {
-    if (!pending) return;
+  async function apply(work: () => Promise<string>) {
+    if (busy) return;
     setBusy(true);
     try {
-      if (offerAuto && enableAuto && !pending.danger) await takeover.autostart(true);
-      toast(await pending.run());
+      toast(await work());
     } catch (e) {
       toast(firstLine((e as Error).message), 'error');
     } finally {
@@ -152,92 +189,55 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
   }
 
   const actions = {
-    takeover(steps: TakeStep[], title?: string) {
-      if (!steps.length) return;
-      const n = new Set(steps.map((s) => s.service)).size;
-      setPending({
-        title: title ?? (n === 1 ? `${steps[0].service} 改为用 MCPcell 这份` : `${n} 个 MCP 改为用 MCPcell 这份`),
-        intro: steps.every((s) => s.mode === 'shared')
-          ? '改用 MCPcell 共用的这份，随时可以改回'
-          : '改由 MCPcell 打开，随时可以改回',
-        groups: byAgent(steps).map((g) => ({
-          agent: g.agent,
-          lines: g.steps.map((s) => (
-            <>
-              <span className="font-medium text-zinc-800 dark:text-zinc-200">{s.entry}</span>
-              <span className="text-zinc-400">
-                （{s.isNew ? '新加 · ' : ''}
-                {s.mode === 'shared' ? '共用一份' : '每个对话一份'}）
-              </span>
-            </>
-          )),
-        })),
-        warn: steps.some((s) => s.force)
-          ? '没确认过的 MCP 共用后，不同对话可能互相干扰；有问题就改回'
-          : undefined,
-        confirm: '确定',
-        run: () => applyTakeover(steps),
+    busy,
+    takeover(steps: TakeStep[]) {
+      if (steps.length) apply(() => applyTakeover(steps));
+    },
+    /** 一键托管: take everything over, and give every app the same set. */
+    oneClick(steps: TakeStep[], sync: boolean, apps?: string[]) {
+      apply(async () => {
+        const { ok, failed, added } = await takeAndSync(steps, sync, apps);
+        if (!ok && !added && failed.length) throw new Error(`托管失败：${failed[0]}`);
+        const done = [ok && `已托管 ${ok} 个`, added && `同步到其他应用 ${added} 项`].filter(Boolean).join('，') || '没有需要托管的';
+        const when = added ? `${applies['claude-code']}，其他应用重启后生效` : appliesTo(steps);
+        return `${done}${when ? `，${when}` : ''}${failed.length ? `；${failed.length} 项无法托管，已忽略` : ''}`;
       });
     },
-    restore(steps: RestoreStep[], title?: string) {
+    restore(steps: RestoreStep[]) {
+      if (steps.length) apply(() => applyRestore(steps));
+    },
+    /** Restores many after a confirmation. */
+    restoreAll(steps: RestoreStep[], title: string) {
       if (!steps.length) return;
       setPending({
-        title: title ?? (steps.length === 1 ? (steps[0].added ? `从 ${steps[0].agent.name} 去掉 ${steps[0].entry}` : `${steps[0].entry} 改回原样`) : `${steps.length} 项改回原样`),
-        intro: '恢复成原来的配置，一字不差',
-        groups: byAgent(steps).map((g) => ({
-          agent: g.agent,
-          lines: g.steps.map((s) => (
-            <>
-              <span className="font-medium text-zinc-800 dark:text-zinc-200">{s.entry}</span>
-              <span className="text-zinc-400">{s.added ? ' · 是 MCPcell 加的，会去掉' : ' · 改回应用自己开'}</span>
-            </>
-          )),
-        })),
-        note: '先备份整个文件',
-        confirm: '改回原样',
+        title,
+        groups: byAgent(steps).map((g) => ({ agent: g.agent, lines: g.steps.map((s) => (s.added ? `${s.entry}（移除）` : s.entry)) })),
+        note: '先备份配置文件',
+        confirm: '还原',
         danger: true,
         run: () => applyRestore(steps),
       });
     },
     forget(agent: AgentSummary, entry: string) {
       setPending({
-        title: `不再管 ${entry}`,
-        intro: '保留你现在的配置，只删掉 MCPcell 的记录',
+        title: `忽略 ${entry}`,
+        intro: '保留当前配置，只删除托管记录',
         groups: [{ agent, lines: [entry] }],
-        note: '配置文件不改动',
-        confirm: '不再管它',
+        confirm: '忽略',
         run: async () => {
           const { results } = await takeover.restore(agent.id, [entry], true);
           if (!results[0]?.ok) throw new Error(results[0]?.error ?? '失败');
-          return '已删掉记录';
+          return '已忽略';
         },
       });
     },
     add(agent: AgentSummary, row: McpRow) {
-      const service = row.service ?? row.proposed ?? row.name;
-      setPending({
-        title: `把 ${row.name} 加到 ${agent.name}`,
-        intro: row.service ? undefined : `会先在 MCPcell 里建好 ${service}，设置照搬其他应用里的同一个 MCP。`,
-        groups: [
-          {
-            agent,
-            lines: [
-              <>
-                新加 <span className="font-medium text-zinc-800 dark:text-zinc-200">{service}</span>
-                <span className="text-zinc-400">，用 MCPcell 这份</span>
-              </>,
-            ],
-          },
-        ],
-        note: '先备份整个文件',
-        confirm: '加上',
-        run: async () => (await unified.add(agent.id, row.key), `已把 ${row.name} 加到 ${agent.name}。${shortHint[appOf(agent.id)] ?? ''}`),
-      });
+      apply(async () => (await unified.add(agent.id, row.key), `已添加到 ${agent.name}，${applies[appOf(agent.id)] ?? '重启后生效'}`));
     },
   };
 
   const dialog = (
-    <Modal open={pending !== null} onClose={() => !busy && setPending(null)} width={500}>
+    <Modal open={pending !== null} onClose={() => !busy && setPending(null)} width={460}>
       {pending && (
         <>
           <div className="flex gap-3.5">
@@ -248,7 +248,7 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
             )}
             <div className="min-w-0">
               <h2 className="text-base font-semibold">{pending.title}</h2>
-              {pending.intro && <p className="mt-1.5 text-sm leading-6 text-zinc-500">{pending.intro}</p>}
+              {pending.intro && <p className="mt-1 text-sm text-zinc-500">{pending.intro}</p>}
             </div>
           </div>
           <div className="mt-4 space-y-2.5">
@@ -256,15 +256,11 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
               <AgentChangeCard key={g.agent.id} agent={g.agent} lines={g.lines} note={pending.note} />
             ))}
           </div>
-          {pending.warn && (
-            <p className="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-[13px] leading-6 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{pending.warn}</p>
-          )}
-          {offerAuto && !pending.danger && <AutostartOption checked={enableAuto} onChange={setEnableAuto} />}
           <div className="mt-6 flex justify-end gap-2">
             <Button disabled={busy} onClick={() => setPending(null)}>
               取消
             </Button>
-            <Button variant={pending.danger ? 'danger' : 'primary'} busy={busy} onClick={run}>
+            <Button variant={pending.danger ? 'danger' : 'primary'} busy={busy} onClick={() => apply(pending.run)}>
               {pending.confirm}
             </Button>
           </div>
@@ -277,12 +273,12 @@ export function useAgentActions(reload: () => Promise<void>, auto: AutostartStat
 }
 
 /** One agent's planned changes, with the file that will be edited. */
-export function AgentChangeCard({ agent, lines, note }: { agent: AgentSummary; lines: ReactNode[]; note?: string }) {
+function AgentChangeCard({ agent, lines, note }: { agent: AgentSummary; lines: ReactNode[]; note?: string }) {
   return (
     <div className="rounded-xl border border-zinc-200 px-4 py-3 dark:border-zinc-700">
       <div className="flex items-center gap-2">
         <BrandMark brand={brandOfAgent(agent.id)} className="size-4" />
-        <span className="text-sm font-medium">{agent.name}</span>
+        <span className="shrink-0 text-sm font-medium">{agent.name}</span>
         <span className="min-w-0 truncate font-mono text-xs text-zinc-400" title={agent.path}>
           {agent.path}
         </span>
@@ -294,20 +290,11 @@ export function AgentChangeCard({ agent, lines, note }: { agent: AgentSummary; l
           </li>
         ))}
       </ul>
-      <div className="mt-2 text-xs text-zinc-400">
-        {note ?? '原命令前加上 mcpcell-run，先备份整个文件'}
-        {restartHint[appOf(agent.id)]}
-      </div>
+      {note && (
+        <div className="mt-2 text-xs text-zinc-400">
+          {note}，{applies[appOf(agent.id)] ?? '重启后生效'}
+        </div>
+      )}
     </div>
-  );
-}
-
-export function AutostartOption({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label className="mt-4 flex cursor-pointer items-center gap-2.5 text-sm">
-      <Checkbox checked={checked} onChange={onChange} />
-      同时开启开机自启
-      <span className="text-zinc-400">改完后应用要靠 MCPcell 在后台开着</span>
-    </label>
   );
 }

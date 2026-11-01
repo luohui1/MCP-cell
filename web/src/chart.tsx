@@ -1,16 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MetricPoint } from './api';
-import { cx } from './ui';
 
-// The dashboard's memory chart: what MCPs take now (solid, the one series
-// in color) and, when given, what they would take without sharing (gray,
-// dashed: an estimate). One y-axis in bytes; hovering snaps a crosshair to
-// the nearest sample and reads both out.
-
-export interface ChartSeries {
-  key: 'total' | 'estimate';
-  label: string;
-}
+// The memory chart: one line over time, y-axis in bytes; hovering snaps a
+// crosshair to the nearest sample and reads it out.
 
 const pad = { left: 56, right: 14, top: 10, bottom: 24 };
 
@@ -48,7 +40,7 @@ export function MemoryChart({
   step,
   from,
   to,
-  series,
+  label,
   height = 200,
   empty,
   extra,
@@ -57,7 +49,7 @@ export function MemoryChart({
   step: number; // seconds between points
   from: number; // Unix seconds, the left edge
   to: number;
-  series: ChartSeries[];
+  label: string;
   height?: number;
   empty: string;
   /** More lines for the hover readout. */
@@ -77,25 +69,25 @@ export function MemoryChart({
 
   const w = Math.max(0, width - pad.left - pad.right);
   const h = height - pad.top - pad.bottom;
-  const maxV = Math.max(1, ...points.flatMap((p) => series.map((s) => p[s.key])));
+  const maxV = Math.max(1, ...points.map((p) => p.total));
   const yStep = niceStep(maxV * 1.08);
   const yMax = yStep * Math.max(1, Math.ceil((maxV * 1.08) / yStep));
   const x = (t: number) => pad.left + ((t - from) / Math.max(1, to - from)) * w;
   const y = (v: number) => pad.top + h - (v / yMax) * h;
 
   // A gap of more than a few samples (the daemon was not running) breaks the line.
-  const path = (key: ChartSeries['key']) => {
+  const path = () => {
     let d = '';
     let prev: MetricPoint | null = null;
     for (const p of points) {
       const join = prev && p.t - prev.t <= step * 2.5;
-      d += `${join ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p[key]).toFixed(1)}`;
+      d += `${join ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.total).toFixed(1)}`;
       prev = p;
     }
     return d;
   };
   const area = () => {
-    // The area under the solid line, per unbroken run.
+    // The area under the line, per unbroken run.
     const runs: MetricPoint[][] = [];
     for (const p of points) {
       const last = runs.at(-1);
@@ -139,7 +131,7 @@ export function MemoryChart({
   return (
     <div ref={box} className="relative select-none" style={{ height }}>
       {width > 0 && (
-        <svg width={width} height={height} role="img" aria-label={series.map((s) => s.label).join('与') + '随时间的变化'} className="block overflow-visible">
+        <svg width={width} height={height} role="img" aria-label={`${label}变化`} className="block overflow-visible">
           {yTicks.map((v) => (
             <g key={v}>
               <line x1={pad.left} x2={pad.left + w} y1={y(v)} y2={y(v)} className={v === 0 ? 'stroke-zinc-200 dark:stroke-zinc-700' : 'stroke-zinc-100 dark:stroke-zinc-800'} />
@@ -155,32 +147,14 @@ export function MemoryChart({
           ))}
           {shown && (
             <>
-              {series.some((s) => s.key === 'total') && <path d={area()} className="fill-blue-500/[0.07] dark:fill-blue-400/[0.08]" />}
-              {series
-                .filter((s) => s.key === 'estimate')
-                .map((s) => (
-                  <path key={s.key} d={path(s.key)} fill="none" strokeWidth={2} strokeDasharray="5 4" strokeLinejoin="round" className="stroke-zinc-500" />
-                ))}
-              {series
-                .filter((s) => s.key === 'total')
-                .map((s) => (
-                  <path key={s.key} d={path(s.key)} fill="none" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="stroke-blue-600 dark:stroke-blue-500" />
-                ))}
+              <path d={area()} className="fill-blue-500/[0.07] dark:fill-blue-400/[0.08]" />
+              <path d={path()} fill="none" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="stroke-blue-600 dark:stroke-blue-500" />
             </>
           )}
           {hp && (
             <g pointerEvents="none">
               <line x1={x(hp.t)} x2={x(hp.t)} y1={pad.top} y2={pad.top + h} className="stroke-zinc-300 dark:stroke-zinc-600" strokeDasharray="2 3" />
-              {series.map((s) => (
-                <circle
-                  key={s.key}
-                  cx={x(hp.t)}
-                  cy={y(hp[s.key])}
-                  r={4}
-                  strokeWidth={2}
-                  className={cx('stroke-white dark:stroke-zinc-900', s.key === 'total' ? 'fill-blue-600 dark:fill-blue-500' : 'fill-zinc-500')}
-                />
-              ))}
+              <circle cx={x(hp.t)} cy={y(hp.total)} r={4} strokeWidth={2} className="fill-blue-600 stroke-white dark:fill-blue-500 dark:stroke-zinc-900" />
             </g>
           )}
           <rect x={pad.left} y={pad.top} width={w} height={h} fill="transparent" onMouseMove={onMove} onMouseLeave={() => setHover(null)} />
@@ -197,34 +171,14 @@ export function MemoryChart({
           style={{ top: pad.top, left: flip ? undefined : tipLeft + 12, right: flip ? width - tipLeft + 12 : undefined }}
         >
           <div className="mb-1 font-medium text-zinc-500 tabular-nums">{hhmm(hp.t)}</div>
-          {series.map((s) => (
-            <div key={s.key} className="flex items-center gap-2 leading-5">
-              <Swatch kind={s.key} />
-              <span className="text-zinc-500">{s.label}</span>
-              <span className="ml-auto pl-3 font-medium text-zinc-800 tabular-nums dark:text-zinc-100">{s.key === 'estimate' && !hp.estimate ? '—' : readBytes(hp[s.key])}</span>
-            </div>
-          ))}
+          <div className="flex items-center gap-2 leading-5">
+            <span className="size-2 rounded-full bg-blue-600 dark:bg-blue-500" />
+            <span className="text-zinc-500">{label}</span>
+            <span className="ml-auto pl-3 font-medium text-zinc-800 tabular-nums dark:text-zinc-100">{readBytes(hp.total)}</span>
+          </div>
           {extra?.(hp) && <div className="mt-1 border-t border-zinc-100 pt-1 text-zinc-500 dark:border-zinc-800">{extra(hp)}</div>}
         </div>
       )}
     </div>
-  );
-}
-
-/** The legend mark of a series: a solid or dashed stroke. */
-export function Swatch({ kind }: { kind: ChartSeries['key'] }) {
-  return (
-    <svg width="16" height="8" aria-hidden className="shrink-0">
-      <line
-        x1="1"
-        x2="15"
-        y1="4"
-        y2="4"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray={kind === 'estimate' ? '4 3' : undefined}
-        className={kind === 'total' ? 'stroke-blue-600 dark:stroke-blue-500' : 'stroke-zinc-500'}
-      />
-    </svg>
   );
 }

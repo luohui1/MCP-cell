@@ -36,7 +36,7 @@ const idleOptions = (mode: string) => [
   { value: '10m', label: '10 分钟' },
   { value: '30m', label: '30 分钟' },
   { value: '1h', label: '1 小时' },
-  { value: '0', label: '不自动关' },
+  { value: '0', label: '不停止' },
 ];
 
 interface Draft {
@@ -84,14 +84,14 @@ export function ServiceSettings({ name, svc, openAdvanced }: { name: string; svc
       .configs()
       .then((all) => {
         const f = all.find((c) => c.name === name);
-        if (!f) throw new Error('config.json 里没有这个服务');
+        if (!f) throw new Error('config.json 中没有此服务');
         setSaved(draftOf(f));
         setDraft(draftOf(f));
       })
       .catch((e) => setError((e as Error).message));
   }, [name]);
 
-  if (!draft || !saved) return <Card className="p-5 text-sm text-zinc-400">{error || '正在读取配置…'}</Card>;
+  if (!draft || !saved) return <Card className="p-5 text-sm text-zinc-400">{error || '读取中…'}</Card>;
   const dirty = JSON.stringify(formOf(draft)) !== JSON.stringify(formOf(saved));
 
   async function save() {
@@ -104,7 +104,7 @@ export function ServiceSettings({ name, svc, openAdvanced }: { name: string; svc
       setSaved(draftOf(back));
       setDraft(draftOf(back));
       await Promise.all([refresh(), reload()]);
-      toast(`已保存 ${name}，下次打开时按新设置`);
+      toast(`已保存 ${name}，下次启动生效`);
     } catch (e) {
       setError(firstLine((e as Error).message));
     } finally {
@@ -117,12 +117,12 @@ export function ServiceSettings({ name, svc, openAdvanced }: { name: string; svc
     <Card className="divide-y divide-zinc-100 dark:divide-zinc-800">
       <RunFields form={draft.form} set={set} />
       {svc?.package && (
-        <SettingRow label="版本" hint="版本已固定，用 node 直接打开，不经过 npx">
+        <SettingRow label="版本" hint="已固定版本，node 直接启动">
           <div className="flex items-center gap-3">
             <span className="min-w-0 truncate font-mono text-[13px]">{svc.package.name}</span>
             <Badge>{svc.package.version}</Badge>
             <Button size="sm" className="ml-auto" busy={actions.busy[name]} onClick={() => actions.update(name)}>
-              更新到最新
+              更新
             </Button>
           </div>
         </SettingRow>
@@ -218,7 +218,7 @@ export function NewService() {
   return (
     <>
       <Card className="p-5">
-        <div className="mb-3 text-sm font-medium">从预设开始</div>
+        <div className="mb-3 text-sm font-medium">预设</div>
         <div className="flex flex-wrap gap-2">
           <Chip active={preset === null} onClick={() => pick(null)}>
             自定义
@@ -258,13 +258,13 @@ export function NewService() {
         {preset?.stateful && draft.form.mode !== 'per-session' && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
             <TriangleAlert className="size-4 shrink-0" />
-            会开浏览器，建议每个对话单独一份
+            会打开浏览器，建议每个对话一份
           </div>
         )}
       </Card>
 
       <Card className="p-5">
-        <Field label="名称" hint="应用里看到的 MCP 名称，也是接入地址的一部分；保存后不能改">
+        <Field label="名称" hint="也用于接入地址，保存后不可修改">
           <Input value={draft.form.name} placeholder="例如：context7" onChange={(e) => set({ name: e.target.value })} />
         </Field>
         <div className="mt-5">
@@ -311,20 +311,20 @@ function RunFields({ form, set }: { form: ServiceForm; set: (f: Partial<ServiceF
         label="运行方式"
         hint={
           form.mode === 'per-session'
-            ? '每个对话单独开一份，各记各的（浏览器、连接）；用到时才打开，对话结束就关掉'
-            : '所有对话共用一份，适合不为各对话记东西的 MCP'
+            ? '每个对话一份，对话结束即停止'
+            : '所有对话共用一份，适合无状态的 MCP'
         }
       >
         <Segmented<string>
           value={form.mode || 'shared'}
           onChange={(v) => set({ mode: v })}
           options={[
-            { value: 'shared', label: '所有对话共用一份' },
-            { value: 'per-session', label: '每个对话单独一份' },
+            { value: 'shared', label: '共用一份' },
+            { value: 'per-session', label: '每个对话一份' },
           ]}
         />
       </SettingRow>
-      <SettingRow label="多久关掉" hint="没人用多久之后自动关掉；再用到时自动打开">
+      <SettingRow label="空闲停止" hint="空闲多久后停止，用到时自动启动">
         <select
           value={form.idleTimeout}
           onChange={(e) => set({ idleTimeout: e.target.value })}
@@ -338,7 +338,7 @@ function RunFields({ form, set }: { form: ServiceForm; set: (f: Partial<ServiceF
           ))}
         </select>
       </SettingRow>
-      <SettingRow label="内存上限" hint="它和它开的子程序加起来最多占多少内存，超过就立即停掉；留空不限制">
+      <SettingRow label="内存上限" hint="含子进程，超出即停止；留空不限制">
         <Input className="!h-9 w-56" value={form.memoryLimit} placeholder="例如：1GB" onChange={(e) => set({ memoryLimit: e.target.value })} />
       </SettingRow>
     </>
@@ -350,7 +350,7 @@ function LaunchFields({ draft, setDraft }: { draft: Draft; setDraft: (d: Draft) 
   const setEnv = (rows: EnvRow[]) => setDraft({ ...draft, env: rows });
   return (
     <div className="grid grid-cols-2 gap-x-6 gap-y-5">
-      <Field label="启动命令" className="col-span-2" hint="npx、uvx、node，或可执行文件的完整路径。Windows 上原样写 cmd /c npx … 也可以">
+      <Field label="启动命令" className="col-span-2" hint="npx、uvx、node 或可执行文件的完整路径">
         <Input className="font-mono" value={form.command} placeholder="npx" onChange={(e) => setDraft({ ...draft, form: { ...form, command: e.target.value } })} />
       </Field>
       <Field label="参数" className="col-span-2" hint="每行一个参数">
@@ -369,7 +369,7 @@ function LaunchFields({ draft, setDraft }: { draft: Draft; setDraft: (d: Draft) 
                   className="font-mono"
                   type="password"
                   autoComplete="off"
-                  placeholder={row.stored ? '已保存，不显示；留空则保持不变' : '值'}
+                  placeholder={row.stored ? '已保存（留空不变）' : '值'}
                   value={row.value}
                   onChange={(e) => setEnv(env.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
                 />
@@ -384,7 +384,7 @@ function LaunchFields({ draft, setDraft }: { draft: Draft; setDraft: (d: Draft) 
           </Button>
         </div>
       </div>
-      <Field label="工作目录" className="col-span-2" hint="留空时为用户目录">
+      <Field label="工作目录" className="col-span-2" hint="默认为用户目录">
         <Input value={form.cwd} placeholder="可选" onChange={(e) => setDraft({ ...draft, form: { ...form, cwd: e.target.value } })} />
       </Field>
     </div>
@@ -398,19 +398,19 @@ function Toggles({ form, set }: { form: ServiceForm; set: (f: Partial<ServiceFor
         checked={form.flatten}
         onChange={(v) => set({ flatten: v })}
         title="npm 包直接用 node 启动"
-        desc="第一次用时装到 MCPcell 里并固定版本，之后不经过 npx：少开一个约 130 MB 的进程，打开也快得多"
+        desc="首次使用时安装并固定版本，少一个 npx 进程（约 130 MB），启动更快"
       />
       <Toggle
         checked={form.lean}
         onChange={(v) => set({ lean: v })}
         title="精简 Node 内存"
-        desc="给 Node.js 写的 MCP 加上 --max-semi-space-size=1 --optimize-for-size，实测内存少 27%–38%，功能不变"
+        desc="加 --max-semi-space-size=1 --optimize-for-size，实测内存少 27%–38%"
       />
       <Toggle
         checked={form.catalog}
         onChange={(v) => set({ catalog: v })}
         title="记住工具列表"
-        desc="应用连上来、问有哪些工具时，直接用记下的列表回答，不用先把它打开。工具列表会在运行中变、又不通知的 MCP 才需要关掉"
+        desc="无需启动即可返回工具列表；工具会动态变化的 MCP 才需关闭"
       />
     </div>
   );
@@ -467,7 +467,7 @@ export function parsePasted(text: string): Partial<ServiceForm> {
   let entry = obj as Entry;
   if (!('command' in obj)) {
     const found = Object.entries(obj).find(([, v]) => v && typeof v === 'object' && 'command' in (v as object));
-    if (!found) throw new Error('没找到 command 字段；HTTP 类型的 MCP 不需要接入 MCPcell');
+    if (!found) throw new Error('未找到 command 字段（HTTP 类型无需接入）');
     [name, entry] = [found[0], found[1] as Entry];
   }
   let command = entry.command ?? '';

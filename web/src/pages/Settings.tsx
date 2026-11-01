@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react';
 import { autoApi, daemonApi, desktop, instancesOf, takeover, uiMode, type AutostartStatus, type DesktopStatus, type InterfaceMode, type InterfaceStatus } from '../api';
 import { clients as manualClients, masked } from '../clients';
 import { useStatus } from '../data';
+import { openGuide } from '../guide';
 import { bytes, clock, since } from '../format';
 import { BrandMark, brandOf } from '../icons';
 import { Body } from '../layout';
@@ -14,9 +15,9 @@ import { Badge, Button, CodeBlock, CopyButton, cx, Dot, GroupHeader, Modal, Segm
 
 const commands = [
   'mcpcell open            # 打开窗口',
-  'mcpcell status          # 各个 MCP 的情况',
+  'mcpcell status          # 查看状态',
   'mcpcell takeover        # 一键托管',
-  'mcpcell restore --all   # 全部改回原样',
+  'mcpcell restore --all   # 全部还原',
   'mcpcell stop            # 停止后台服务',
   'mcpcell help --all      # 全部命令',
 ].join('\n');
@@ -28,13 +29,17 @@ export function SettingsPage({ diag }: { diag: boolean }) {
   const attempt = useAttempt();
   const [auto, setAuto] = useState<AutostartStatus | null>(null);
   const [autoOn, setAutoOn] = useState<boolean | null>(null);
+  const [syncOn, setSyncOn] = useState<boolean | null>(null);
   const [desk, setDesk] = useState<DesktopStatus | null>(null);
   const [mode, setMode] = useState<InterfaceStatus | null>(null);
   const [stopping, setStopping] = useState(false);
   const [stopBusy, setStopBusy] = useState(false);
   useEffect(() => {
     takeover.autostartStatus().then(setAuto).catch(() => setAuto(null));
-    autoApi.status().then((s) => setAutoOn(s.enabled)).catch(() => setAutoOn(null));
+    autoApi
+      .status()
+      .then((s) => (setAutoOn(s.enabled), setSyncOn(s.sync)))
+      .catch(() => setAutoOn(null));
     desktop.status().then(setDesk).catch(() => setDesk(null));
     uiMode.status().then(setMode).catch(() => setMode(null));
   }, []);
@@ -44,14 +49,19 @@ export function SettingsPage({ diag }: { diag: boolean }) {
       <section>
         <GroupHeader title="常规" />
         <TableCard>
-          <Row title="开机自启" tip={auto?.supported === false ? auto.error : '登录电脑时就在后台打开 MCPcell。关着也行：应用用到 MCP 时会自动打开它。'}>
+          <Row title="开机自启" tip={auto?.supported === false ? auto.error : '关闭时，应用用到 MCP 会自动启动 MCPcell'}>
             {auto?.supported && (
               <Switch checked={auto.enabled} label="开机自启" onChange={(on) => attempt(() => takeover.autostart(on), on ? '已开启开机自启' : '已关闭开机自启', setAuto)} />
             )}
           </Row>
           {autoOn !== null && (
-            <Row title="自动托管新 MCP" tip="在 Claude Code、Codex、Cursor 里新加的 MCP 自动改用 MCPcell 共用的这份；打不开的、你改回原样的不动。">
+            <Row title="自动托管新 MCP" tip="跳过打不开的和还原过的">
               <Switch checked={autoOn} label="自动托管新 MCP" onChange={(on) => attempt(() => autoApi.set(on), on ? '已开启' : '已关闭', (s) => setAutoOn(s.enabled))} />
+            </Row>
+          )}
+          {syncOn !== null && (
+            <Row title="所有应用同一套 MCP" tip="托管时把 MCP 加到还没有它的应用里；从某个应用里还原或删掉的不再加回去">
+              <Switch checked={syncOn} label="所有应用同一套 MCP" onChange={(on) => attempt(() => autoApi.setSync(on), on ? '已开启' : '已关闭', (s) => setSyncOn(s.sync))} />
             </Row>
           )}
           {mode && <TrayRow status={mode} onChange={(m) => attempt(() => uiMode.set(m), m === 'cli' ? '已关掉托盘图标' : '已显示托盘图标', setMode)} />}
@@ -73,6 +83,11 @@ export function SettingsPage({ diag }: { diag: boolean }) {
               </Row>
             </>
           )}
+          <Row title="使用引导">
+            <Button size="sm" onClick={openGuide}>
+              打开
+            </Button>
+          </Row>
         </TableCard>
       </section>
 
@@ -107,7 +122,7 @@ export function SettingsPage({ diag }: { diag: boolean }) {
               <CopyButton text={status.configPath} label="复制路径" />
             </span>
           </Info>
-          <Row title="停止后台服务" tip="一般不需要：关掉窗口、从托盘退出都不会停止它。">
+          <Row title="停止后台服务" tip="关闭窗口或退出托盘不会停止后台服务">
             <button onClick={() => setStopping(true)} className="rounded-md px-2 py-1 text-[13px] font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950">
               停止
             </button>
@@ -116,7 +131,7 @@ export function SettingsPage({ diag }: { diag: boolean }) {
       </section>
       <Modal open={stopping} onClose={() => !stopBusy && setStopping(false)} width={400}>
         <h2 className="text-[15px] font-semibold">停止后台服务？</h2>
-        <p className="mt-2 text-[13px] leading-6 text-zinc-600 dark:text-zinc-300">正在用的 MCP 会改回各开各的，直到 MCPcell 再次打开。</p>
+        <p className="mt-2 text-[13px] leading-6 text-zinc-600 dark:text-zinc-300">停止期间由应用自行启动 MCP。</p>
         <div className="mt-5 flex justify-end gap-2">
           <Button size="sm" disabled={stopBusy} onClick={() => setStopping(false)}>
             取消
@@ -297,7 +312,7 @@ function Diagnostics({ open }: { open: boolean }) {
  * the tray icon runs. Switching is immediate. */
 function TrayRow({ status, onChange }: { status: InterfaceStatus; onChange: (m: InterfaceMode) => void }) {
   return (
-    <Row title="托盘图标" tip={status.error ?? '只决定要不要托盘图标；后台服务和 MCP 不受影响。从托盘退出只关托盘和窗口。'}>
+    <Row title="托盘图标" tip={status.error ?? '不影响后台服务'}>
       <Segmented<InterfaceMode>
         value={status.interface}
         onChange={(m) => m !== status.interface && onChange(m)}

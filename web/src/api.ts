@@ -34,8 +34,6 @@ export interface Service {
   failures?: number; // consecutive failed starts; 0 once one succeeds
   calls: number; // since the daemon started, ended instances included
   lastUsedAt?: string;
-  typicalBytes?: number; // median memory peak of the last runs
-  typicalRuns?: number;
   direct: boolean;
   lean: boolean;
   package?: { name: string; version: string; installedAt: string };
@@ -191,6 +189,8 @@ export interface AgentCell {
   takeable?: boolean;
   /** Managed, but the entry was edited since: how it differs from its service. */
   drift?: string;
+  /** Native, but its program is missing or it did not start: 一键托管 leaves it out. */
+  dead?: string;
 }
 
 /** One MCP server, merged across MCPcell's services and every agent. */
@@ -207,6 +207,8 @@ export interface McpRow {
   proposed?: string;
   agents: Record<string, AgentCell>;
   canAdd: boolean;
+  /** The apps a sync would add it to, so every app has the same set. */
+  syncTo?: string[];
 }
 
 export interface AgentSummary {
@@ -267,6 +269,8 @@ export interface AutoEvent {
 
 export interface AutoStatus {
   enabled: boolean;
+  /** Every app keeps the same set of MCPs (internal/httpd/sync.go). */
+  sync: boolean;
   events: AutoEvent[];
   excluded: { client: string; name: string; reason: string; at: string }[];
 }
@@ -274,6 +278,10 @@ export interface AutoStatus {
 export const autoApi = {
   status: () => call<AutoStatus>('GET', '/api/auto'),
   set: (enabled: boolean) => call<AutoStatus>('POST', '/api/auto', { enabled }),
+  setSync: (sync: boolean) => call<AutoStatus>('POST', '/api/auto', { sync }),
+  /** Adds the MCPs MCPcell runs to the apps that lack them (only these, when given). */
+  sync: (clients?: string[]) =>
+    call<{ results: { client: string; service: string; ok: boolean; error?: string }[] }>('POST', '/api/sync', clients ? { clients } : {}),
   ack: () => call<{ ok: boolean }>('POST', '/api/auto/ack'),
 };
 
@@ -281,7 +289,6 @@ export const autoApi = {
 export interface MetricPoint {
   t: number; // Unix seconds
   total: number;
-  estimate: number;
   running: number;
   conversations: number;
 }
@@ -293,8 +300,6 @@ export interface MetricsNow {
   instanceBytes: number;
   wrapperBytes: number;
   wrappers: number;
-  estimateBytes: number;
-  unmeasured: string[];
   instances: number;
   runningServices: number;
   services: number;

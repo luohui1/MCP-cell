@@ -22,7 +22,7 @@ export function McpPage({ id }: { id: string }) {
   const { status } = useStatus();
   const { data, error } = useUnified();
   const edit = useRoute().query.get('edit') === '1';
-  const views = data && id !== 'new' ? data.rows.map((r) => mcpView(r, status, data.auto)) : [];
+  const views = data && id !== 'new' ? data.rows.map((r) => mcpView(r, status)) : [];
   const view = views.find((v) => v.id === id) ?? views.find((v) => v.row.name === id); // a name works too
   let body: ReactNode;
   if (id === 'new') {
@@ -43,7 +43,7 @@ export function McpPage({ id }: { id: string }) {
       </Placeholder>
     );
   } else {
-    body = <p className="py-12 text-center text-[13px] text-zinc-400">{error || '正在读取…'}</p>;
+    body = <p className="py-12 text-center text-[13px] text-zinc-400">{error || '读取中…'}</p>;
   }
   return <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>;
 }
@@ -59,7 +59,7 @@ function Back() {
 function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: boolean }) {
   const { status } = useStatus();
   const { reload } = useUnified();
-  const acts = useAgentActions(reload, data.autostart);
+  const acts = useAgentActions(reload);
   const svcActs = useServiceActions();
   const copy = useCopy();
   const [advanced, setAdvanced] = useState(edit);
@@ -75,23 +75,23 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
     ? [
         running
           ? {
-              label: '现在关掉',
+              label: '停止',
               icon: <Square className="size-4" />,
               onSelect: () => view.services.forEach((s) => instancesOf(s).length && svcActs.stop(s.name)),
             }
-          : { label: '打开一次试试', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) },
+          : { label: '启动', icon: <Play className="size-4" />, onSelect: () => svcActs.start(svc.name) },
         ...(svc.package
-          ? [{ label: `更新（现在 ${svc.package.version}）`, icon: <Package className="size-4" />, onSelect: () => svcActs.update(svc.name) }]
+          ? [{ label: `更新（${svc.package.version}）`, icon: <Package className="size-4" />, onSelect: () => svcActs.update(svc.name) }]
           : []),
-        { label: '复制接入地址', icon: <Copy className="size-4" />, onSelect: () => copy(`${status.baseUrl}/s/${svc.name}`, '已复制接入地址') },
+        { label: '复制接入地址', icon: <Copy className="size-4" />, onSelect: () => copy(`${status.baseUrl}/s/${svc.name}`, '已复制') },
         'sep' as const,
         ...(back.length
-          ? [{ label: '改回原样', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back, `${row.name} 改回原样`) }]
+          ? [{ label: '还原', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back) }]
           : []),
         { label: '从 MCPcell 删除', icon: <Trash2 className="size-4" />, danger: true, onSelect: () => svcActs.askDelete(svc.name) },
       ]
     : back.length
-      ? [{ label: '改回原样', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back) }]
+      ? [{ label: '还原', icon: <Undo2 className="size-4" />, danger: true, onSelect: () => acts.restore(back) }]
       : [];
 
   return (
@@ -108,13 +108,13 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
         actions={
           <>
             {!row.service && take.length > 0 && back.length === 0 && (
-              <Button size="sm" variant="primary" icon={<Layers className="size-3.5" />} onClick={() => acts.takeover(take)}>
-                改为共用
+              <Button size="sm" variant="primary" icon={<Layers className="size-3.5" />} busy={acts.busy} onClick={() => acts.takeover(take)}>
+                托管
               </Button>
             )}
             {view.broken && (
               <Button size="sm" icon={<RotateCw className="size-3.5" />} busy={busy} onClick={() => svcActs.start(view.broken!.name)}>
-                再试一次
+                重试
               </Button>
             )}
             {menu.length > 0 && <Menu items={menu} />}
@@ -123,14 +123,13 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
       />
       {view.purpose && <p className="-mt-1 text-[13px] text-zinc-500">{view.purpose}</p>}
 
-      {!view.broken && view.autoError && <Broken error={view.autoError} wrapped={false} retry="改为共用" />}
       {view.broken && (
         <Broken error={view.broken.lastError} at={view.broken.lastErrorAt} retryAt={view.broken.retryAt} stderr={view.broken.stderrTail} wrapped={back.length > 0} />
       )}
 
       {svc && view.kind !== 'native' && <Numbers view={view} />}
 
-      <Block title="哪些应用在用">
+      <Block title="应用">
         <UsedBy view={view} agents={agents} acts={acts} />
       </Block>
 
@@ -159,21 +158,21 @@ function McpDetail({ view, data, edit }: { view: McpView; data: Unified; edit: b
   );
 }
 
-function Broken({ error, at, retryAt, stderr, wrapped, retry = '再试一次' }: { error?: string; at?: string; retryAt?: string; stderr?: string; wrapped: boolean; retry?: string }) {
+function Broken({ error, at, retryAt, stderr, wrapped }: { error?: string; at?: string; retryAt?: string; stderr?: string; wrapped: boolean }) {
   const reason = plainReason(error);
   return (
     <Card className="border-red-200 bg-red-50/50 p-5 dark:border-red-900 dark:bg-red-950/20">
       <div className="text-[15px] font-semibold text-red-700 dark:text-red-400">打不开：{reason}</div>
       <p className="mt-1.5 text-sm leading-6 text-red-700/90 dark:text-red-300">
-        {advice(reason).replace('「再试一次」', `「${retry}」`)}
-        {wrapped && ' 打不开的这段时间，应用会像原来一样自己开它，不影响使用。'}
+        {advice(reason)}
+        {wrapped && ' 期间由应用自行启动，不影响使用。'}
       </p>
       <details className="mt-2">
         <summary className="cursor-pointer text-[13px] text-red-700/80 dark:text-red-400">
-          具体出错信息
+          出错信息
           <span className="ml-2 text-red-500/80">
             {at && `${since(at)}前`}
-            {retryAt && ` · ${until(retryAt)}后自动再试`}
+            {retryAt && ` · ${until(retryAt)}后自动重试`}
           </span>
         </summary>
         <pre className="mt-2 overflow-x-auto rounded-xl bg-white/70 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
@@ -193,7 +192,6 @@ function Numbers({ view }: { view: McpView }) {
   useEffect(() => setNowT(Date.now() / 1000), [metrics]);
   const runs = view.services.flatMap(instancesOf);
   const used = runs.reduce((n, i) => n + i.usage.privateBytes, 0);
-  const oldest = runs.reduce<string | undefined>((a, i) => (!a || i.startedAt < a ? i.startedAt : a), undefined);
   const conv = new Set(view.sessions.map((x) => (x.agentPid ? `p${x.agentPid}` : `s${x.id}`))).size;
   const calls = view.services.reduce((n, s) => n + (s.calls ?? 0), 0);
   const last = view.services.map((s) => s.lastUsedAt).filter((t): t is string => !!t).sort().at(-1);
@@ -201,18 +199,9 @@ function Numbers({ view }: { view: McpView }) {
     <section className="space-y-3">
       <StatGrid
         cells={[
-          {
-            label: '现在占用',
-            value: used ? readBytes(used) : '待命',
-            sub: runs.length > 1 ? `开着 ${runs.length} 份，每个对话一份` : oldest ? `已经开了 ${since(oldest)}` : '没人用时不占内存',
-          },
-          {
-            label: '平时开一份',
-            value: svc.typicalBytes ? readBytes(svc.typicalBytes) : '—',
-            sub: svc.typicalRuns ? `最近 ${svc.typicalRuns} 次运行的中位数` : '打开过一次后才知道',
-          },
-          { label: '在用的对话', value: conv, sub: svc.mode === 'per-session' ? '每个对话单独一份' : '所有对话共用一份' },
-          { label: '调用', value: calls, sub: last ? `${since(last)}前用过` : 'MCPcell 这次启动后还没用过' },
+          { label: '内存', value: used ? readBytes(used) : '待命', tip: runs.length > 1 ? `${runs.length} 份` : undefined },
+          { label: '对话', value: conv, tip: svc.mode === 'per-session' ? '每个对话一份' : '共用一份' },
+          { label: '调用', value: calls, tip: last ? `上次 ${since(last)}前` : undefined },
         ]}
       />
       <Card className="px-4 pt-3 pb-1.5">
@@ -223,8 +212,8 @@ function Numbers({ view }: { view: McpView }) {
           from={nowT - 3600}
           to={nowT}
           height={130}
-          series={[{ key: 'total', label: '占用' }]}
-          empty={metrics ? '最近 1 小时没打开过' : '正在读取…'}
+          label="内存"
+          empty={metrics ? '暂无数据' : '读取中…'}
         />
       </Card>
     </section>
@@ -247,48 +236,57 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
       let why: string | undefined;
       let action: ReactNode = null;
       if (c?.state === 'managed') {
-        state = '共用';
+        state = '已托管';
         if (c.drift) {
-          state += '（设置改过，单独一份）';
+          state += '（设置不同）';
           why = c.drift;
         }
         action = (
           <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={() => acts.restore([{ agent: a, entry: c.entry, added: c.added }])}>
-            {c.added ? '去掉' : '改回原样'}
+            {c.added ? '移除' : '还原'}
           </Button>
         );
       } else if (c?.state === 'changed') {
-        state = '被改过';
+        state = '配置被改动';
         action = (
           <Button size="sm" onClick={() => acts.forget(a, c.entry)}>
-            不再管它
+            忽略
+          </Button>
+        );
+      } else if (c?.state === 'native' && c.dead) {
+        // Its program is gone, or it did not start: left out of 一键托管.
+        state = '无法启动';
+        why = plainReason(c.dead);
+        action = (
+          <Button size="sm" busy={acts.busy} onClick={() => acts.takeover([{ agent: a, entry: c.entry }])}>
+            重试
           </Button>
         );
       } else if (c && canTake(c)) {
         const excluded = (data?.auto?.excluded ?? []).some((e) => e.client === a.id && e.name === c.entry);
-        state = excluded ? '各开各的（你改回过）' : '各开各的';
+        state = excluded ? '未托管（还原过）' : '未托管';
         action = (
-          <Button size="sm" icon={<Layers className="size-3.5" />} onClick={() => acts.takeover(takeSteps(row, [a]))}>
-            改为共用
+          <Button size="sm" icon={<Layers className="size-3.5" />} busy={acts.busy} onClick={() => acts.takeover(takeSteps(row, [a]))}>
+            托管
           </Button>
         );
       } else if (c) {
-        state = c.state === 'remote' ? '远程' : c.state === 'internal' ? '自带' : '各开各的';
+        state = c.state === 'remote' ? '远程' : c.state === 'internal' ? '内置' : '未托管';
         why = c.reason;
       } else if (row.canAdd && row.service && view.kind !== 'broken' && !isProject(a.id)) {
-        state = '没有';
+        state = '未添加';
         action = (
-          <Button size="sm" variant="ghost" onClick={() => acts.add(a, row)}>
-            加到 {a.name}
+          <Button size="sm" variant="ghost" busy={acts.busy} onClick={() => acts.add(a, row)}>
+            添加
           </Button>
         );
       } else return null;
-      if (c && !c.enabled) state += '（已关）';
+      if (c && !c.enabled) state += '（已停用）';
       return { id: a.id, brand: brandOfAgent(a.id), name: a.name, state, why, action, sessions };
     })
     .filter((l) => !!l);
-  if (others.length) lines.push({ id: 'other', brand: '', name: '其他程序', state: '用接入地址连着', why: undefined, action: null, sessions: others });
-  if (!lines.length) return <p className="text-sm text-zinc-500">还没有应用用它。</p>;
+  if (others.length) lines.push({ id: 'other', brand: '', name: '其他程序', state: '直连', why: undefined, action: null, sessions: others });
+  if (!lines.length) return <p className="text-sm text-zinc-500">暂无应用使用</p>;
 
   return (
     <div className="-my-2 divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -332,8 +330,8 @@ function Conversation({ x, inst }: { x: SessionInfo; inst?: InstanceSnapshot }) 
     <div className="flex items-center gap-3 py-1 text-[13px]">
       <span className="min-w-0 flex-1 truncate">{x.client || '未知程序'}</span>
       {inst && <span className="text-zinc-700 tabular-nums dark:text-zinc-200">{bytes(inst.usage.privateBytes)}</span>}
-      <span className="text-zinc-500 tabular-nums">{clock(x.createdAt)} 连上</span>
-      <span className="w-32 text-right text-zinc-500">{x.inflight ? `正在处理 ${x.inflight} 个请求` : `${since(x.lastSeenAt)}前用过`}</span>
+      <span className="text-zinc-500 tabular-nums">{clock(x.createdAt)} 连接</span>
+      <span className="w-32 text-right text-zinc-500">{x.inflight ? '处理中' : `${since(x.lastSeenAt)}前`}</span>
     </div>
   );
 }
@@ -348,13 +346,13 @@ function Technical({ view }: { view: McpView }) {
     [
       '进程',
       runs.length
-        ? `${runs.reduce((n, i) => n + i.usage.processes, 0)} 个${svc.direct ? '（用 node 直接启动）' : ''}${runs.length === 1 ? `，PID ${runs[0].pid}` : ''}`
-        : '现在没有',
+        ? `${runs.reduce((n, i) => n + i.usage.processes, 0)} 个${svc.direct ? '（node 直接启动）' : ''}${runs.length === 1 ? `，PID ${runs[0].pid}` : ''}`
+        : '无',
     ],
     ['调用', runs.length ? `${runs.reduce((n, i) => n + i.calls, 0)} 次，失败 ${runs.reduce((n, i) => n + i.failures, 0)} 次` : '—'],
-    ['工具', svc.catalog ? `${svc.catalog.tools} 个${svc.catalog.toolNames?.length ? `：${svc.catalog.toolNames.join('、')}` : ''}` : '还不知道（第一次打开后记下）'],
-    ['它报告的名称', runs[0]?.serverName ? `${runs[0].serverName} ${runs[0].serverVersion ?? ''}` : '—'],
-    ['累计打开', `${svc.starts} 次`],
+    ['工具', svc.catalog ? `${svc.catalog.tools} 个${svc.catalog.toolNames?.length ? `：${svc.catalog.toolNames.join('、')}` : ''}` : '启动后可见'],
+    ['服务名称', runs[0]?.serverName ? `${runs[0].serverName} ${runs[0].serverVersion ?? ''}` : '—'],
+    ['启动次数', `${svc.starts}`],
   ];
   if (svc.note) rows.push(['提示', <span className="text-amber-700 dark:text-amber-300">{svc.note}</span>]);
   if (svc.lastError && !view.broken)
@@ -398,7 +396,7 @@ function ManualConnect({ name }: { name: string }) {
       </div>
       <Segmented value={client} onChange={setClient} options={mainClients.map((c) => ({ value: c.id, label: c.name }))} />
       <p className="mt-3 mb-2 text-xs text-zinc-500">
-        替换 <span className="text-zinc-800 dark:text-zinc-200">{spec.file}</span> 里同名的一项
+        替换 <span className="text-zinc-800 dark:text-zinc-200">{spec.file}</span> 中的同名项
       </p>
       <CodeBlock shown={spec.snippet!([{ name, url }], masked(status.token))} copy={spec.snippet!([{ name, url }], status.token)} />
     </Card>
