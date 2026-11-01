@@ -15,10 +15,10 @@ Claude Code、Codex、Cursor 每开一个对话，就把配置里的 MCP 全部�
 ## 上手
 
 1. **安装**：`bin/mcpcell.exe install`（现在还要自己编译，见下面的「开发」；之后会提供直接下载的安装包）
-2. **打开**：`~/.mcpcell/bin/mcpcell.exe open`，点右上角的「一键托管」，确认要改的内容
+2. **打开**：`~/.mcpcell/bin/mcpcell.exe open`，第一次打开会出现使用引导：一键检测各应用的 MCP，再一键托管（之后也可以点右上角的「一键托管」）
 3. **重开 Agent 的对话**：新对话就会用 MCPcell 共用的 MCP
 
-Claude Code 里按项目加的 MCP（`claude mcp add` 默认的项目私有配置、项目里的 `.mcp.json`）也会找到；`.mcp.json` 是团队共享的文件，MCPcell 不改它，而是在你本机加一条同名的私有配置覆盖它。之后在 Claude Code、Codex、Cursor 里新加的 MCP 会自动交给 MCPcell。不想用了：首页右上角菜单里的「全部改回原样」，或者 `mcpcell restore --all`，各应用的配置逐字节恢复。
+Claude Code 里按项目加的 MCP（`claude mcp add` 默认的项目私有配置、项目里的 `.mcp.json`）也会找到；`.mcp.json` 是团队共享的文件，MCPcell 不改它，而是在你本机加一条同名的私有配置覆盖它。支持的应用：Claude Code、Codex、Cursor、Claude Desktop、VS Code、Copilot CLI、Gemini CLI、Antigravity、Windsurf、Kiro、Cline、Roo Code、OpenCode。所有应用用同一套 MCP：一键托管时，一个应用里有的 MCP 也会加到其他应用里（设置里可以关掉；从某个应用里还原或删掉的不会再加回去）。之后在这些应用里新加的 MCP 会自动交给 MCPcell，并同步到其他应用。不想用了：首页右上角菜单里的「全部还原」，或者 `mcpcell restore --all`，各应用的配置逐字节恢复。
 
 ## 常用命令
 
@@ -26,7 +26,7 @@ Claude Code 里按项目加的 MCP（`claude mcp add` 默认的项目私有配�
 |---|---|
 | `mcpcell open` | 打开窗口（需要时先启动后台服务） |
 | `mcpcell status` | 各个 MCP 开着几份、连着的对话、占多少内存 |
-| `mcpcell takeover` | 一键托管：先列出要改的内容，确认后执行（`-y` 直接执行） |
+| `mcpcell takeover` | 一键托管：先列出要改的内容，确认后执行（`-y` 直接执行），再把 MCP 同步到其他应用（`--sync off` 关掉） |
 | `mcpcell restore --all` | 全部改回原样（后台服务在运行时由它来做，不在也能用） |
 | `mcpcell stop` | 停止后台服务 |
 

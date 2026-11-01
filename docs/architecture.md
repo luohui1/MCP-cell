@@ -66,7 +66,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 | `internal/httpd` ✅ | Streamable HTTP（旧版，POST/GET/DELETE、会话、SSE）、Origin/Host 校验、token 鉴权、管理 API、内嵌状态页 | M1 |
 | `internal/testutil/fakemcp` ✅ | 基于官方 SDK 的测试用上游 | M1 |
 | `internal/catalog` ✅ | 能力目录：拉取并合并分页、按配置指纹判断有效、按客户端画像（协议版本，按会话时加能力）分别缓存、`list_changed` 时先标记过期再刷新、记录共享资格检测结果，存到 `~/.mcpcell/catalog` | M2 |
-| `internal/clients` | 各客户端配置的发现、改写、备份、还原（移植自 legacy）；Claude Code 的项目级 MCP（local 作用域和项目 `.mcp.json`）按项目作为子应用 `claude-code@<目录>` | M3 |
+| `internal/clients` | 各客户端配置的发现、改写、备份、还原（移植自 legacy）：Claude Code、Codex 各有适配器，Cursor、Claude Desktop、VS Code、Copilot CLI、Gemini CLI、Antigravity、Windsurf、Kiro、Cline、Roo Code、OpenCode 共用一个 JSON 适配器（`jsonAgents`：文件路径、放 MCP 的键、条目写法）；Claude Code 的项目级 MCP（local 作用域和项目 `.mcp.json`）按项目作为子应用 `claude-code@<目录>` | M3 |
 | `internal/hub` | 聚合命名空间、元工具、调用策略 | M4 |
 
 ## 5. 数据模型
@@ -204,9 +204,11 @@ cold ──acquire──► starting ──握手+能力校验──► ready �
 
 ### 9.2 接管与还原
 
-接管有三个入口：管理页的「一键托管」、`mcpcell takeover`，以及自动托管（见下）。两者都先读 `GET /api/mcp` 列出计划，确认后调用同一个 `POST /api/clients/{client}/attach`，由守护进程先试着启动服务、再改写条目；命令行不另写改配置的逻辑。运行方式的规则也相同：已知无状态的共享，其余按会话；`force`（`--shared`）让未验证的也共享，`mode: "per-session"`（`--per-session`）让新建的服务一律按会话，已有服务沿用自己的模式。
+接管有三个入口：管理页的「一键托管」、`mcpcell takeover`，以及自动托管（见下）。前两者都从 `GET /api/mcp` 得到计划，调用同一个 `POST /api/clients/{client}/attach`（管理页点了直接执行；命令行先列出计划、确认后执行，`-y` 直接执行），由守护进程先试着启动服务、再改写条目；命令行不另写改配置的逻辑。运行方式的规则也相同：已知无状态的共享，其余按会话；`force`（`--shared`）让未验证的也共享，`mode: "per-session"`（`--per-session`）让新建的服务一律按会话，已有服务沿用自己的模式。
 
-**自动托管**（2026-10-21，config.json 的 `autoTakeover`，默认开；设置页和 `mcpcell takeover --auto on|off` 可改）：守护进程每 45 秒看一次各 Agent 配置文件的修改时间和大小，变了才重新读（`clients.Overview`）。第一次看到某个 Agent 时只把已有条目记为"见过"（`takeover.json` 的 `Seen`、`Baseline`），之后新出现的、启用的、可托管的本机 stdio 条目走和一键托管完全相同的 `tryForTakeover` + `attachOne`：先试启动，起不来的保持原样并记下原因，改配置前照样备份、可逐字节还原，运行方式用现有的自动判定。用户还原过的条目（`restore`、`mcpcell restore`）和点了"不再管它"的条目进 `Excluded`，之后无论内容怎么改都不再自动托管；手动托管会清掉排除。Agent 自己把被托管的条目改回原命令（Codex 运行时会重写 config.toml）时，最多重新托管一次（记录里 `reattached`），再被改回就停下、记为排除并在页面提示，不和 Agent 反复抢。每次尝试写进 `Events`（保留最近 50 条）和日志，首页据此提示"新发现 N 个 MCP，已自动托管"，起不来的在列表里显示「打不开：原因」。
+**所有应用同一套 MCP**（2026-11-01，config.json 的 `syncApps`，默认开）：某个应用经 MCPcell 用着的服务，会加到还没有它的应用里（`internal/httpd/sync.go`）。`/api/mcp` 的每行带 `syncTo`（会加到哪些应用），`POST /api/sync` 照着加，加法和「添加到应用」相同（先试启动、写包装条目、记为 `Added`，还原时删掉）。一键托管托管完就同步，自动托管接到新条目后也同步。不同步的：打不开的服务、只有 Claude Code 项目用的、远程的、应用里有同名别的 MCP 的，以及用户从某个应用里还原过或删掉 MCPcell 加的条目的（排除名单或残留记录）。
+
+**自动托管**（2026-10-21，config.json 的 `autoTakeover`，默认开；设置页和 `mcpcell takeover --auto on|off` 可改）：守护进程每 45 秒看一次各 Agent 配置文件的修改时间和大小，变了才重新读（`clients.Overview`）。第一次看到某个 Agent 时只把已有条目记为"见过"（`takeover.json` 的 `Seen`、`Baseline`），之后新出现的、启用的、可托管的本机 stdio 条目走和一键托管完全相同的 `tryForTakeover` + `attachOne`：先试启动，起不来的保持原样并记下原因，改配置前照样备份、可逐字节还原，运行方式用现有的自动判定。用户还原过的条目（`restore`、`mcpcell restore`）和点了"不再管它"的条目进 `Excluded`，之后无论内容怎么改都不再自动托管；手动托管会清掉排除。Agent 自己把被托管的条目改回原命令（Codex 运行时会重写 config.toml）时，最多重新托管一次（记录里 `reattached`），再被改回就停下、记为排除并在页面提示，不和 Agent 反复抢。每次尝试写进 `Events`（保留最近 50 条）和日志，首页据此提示「已自动托管 …」，起不来的在列表里显示「打不开：原因」。
 
 改写时优先调用客户端自带的 CLI 修改配置（例如 `claude mcp add --transport http …`），因为 `~/.claude.json` 会被 Claude Code 自己频繁改写，外部直接写文件容易冲突。没有 CLI 时用 legacy 的局部改写逻辑：先备份、只改目标条目、写后校验、可逐条还原。改完需要重启对应客户端。
 
