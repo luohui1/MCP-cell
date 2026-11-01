@@ -293,9 +293,9 @@ Go 程序在 Windows 上的下限就是约 11.3–11.9 MB（只读标准输入�
 - `restore` 后配置内容与备份一致；外部改过的条目报冲突，不强制覆盖
 - 工具全名不变，客户端原有的允许/拒绝规则继续生效
 
-## Skill 统一管理 ✅（2026-10-20）
+## Skill 统一管理 ✅（2026-10-20，2026-10-31 已移除）
 
-设计见 [skills.md](skills.md)。
+2026-10-31 为了让 MCPcell 只做 MCP 这一件事，Skill 的代码、命令、接口和页面都移除了（本机没有同步过任何 Skill，没有要还原的）。下面是当时的记录，设计文档 `docs/skills.md` 在 git 历史里。
 
 交付：
 - 核实各 Agent 的用户级 Skill 目录（Claude Code、Codex、Gemini CLI、Antigravity、Cursor、OpenCode、GitHub Copilot），`~/.agents/skills` 的使用方
@@ -359,6 +359,34 @@ Go 程序在 Windows 上的下限就是约 11.3–11.9 MB（只读标准输入�
 - 所有子命令先校验参数，`-h/--help` 只打印用法，未知参数退出码 2
 
 验收（试验环境，临时 MCPCELL_HOME、CODEX_HOME、CLAUDE_CONFIG_DIR、USERPROFILE，另一个端口）：`scripts/mcptray.py bin --window` 20 项全过（托盘出现、退出后图标消失、守护进程和包装会话照旧且仍是同一个上游进程、mode 启停托盘、`stop --help` 不停服务、再次 open 不开第二个窗口、退出托盘关窗口）；从旧版（托盘在守护进程里）升级的沙箱测试 10 项全过；`scripts/mcpreconnect.py` 21 项全过。
+
+## 精简与界面重做（2026-10-31）
+
+用户："把这个工具做得简洁一点，适合所有人无缝使用"，以及看过第一版后："UI 被吃得很难看……去看看 CC Switch、magpie 怎么设计的，就是简洁但功能齐全、可视化好"。
+
+- 去掉 Skill 统一管理（代码、命令、接口、页面），MCPcell 只做 MCP
+- 命令行：`mcpcell help` 只列 `open`、`status`、`takeover`、`restore`、`stop`、`version`，`help --all` 列全部；新增 `status`（同 `ps`）
+- 管理页按 magpie、CC Switch 重做，第二轮按用户意见（"很多批注语言，不简洁，我们是小窗口就行"）改成小窗口：窗口默认 920×620（原来 1280×840），最小 760×520；顶部标签 MCP / 内存 / 动态 加设置齿轮，去掉侧栏；页面上不写说明，解释放进悬停提示；MCP 页四个数字一条、所有 MCP 在一张卡片里一行一个（应用图标、内存或状态、托管开关，按钮悬停才出现），按应用筛选；新增「内存」页（曲线和每个 MCP 的内存）、「动态」页（按天、可筛选）；详情页加这个 MCP 的数字和最近 1 小时曲线；设置页每行只有名字和开关；一键托管、改回原样等确认框只留一两句
+- 首页那条「开机自启没开，重启后 MCP 用不了」的提示去掉了：包装程序发现守护进程不在会自己拉起它，这句话不对
+- `GET /api/metrics?range=now` 只返回当前一次采样，给首页的数字用
+
+验收（试验守护进程，临时 `MCPCELL_HOME`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`USERPROFILE`，端口 47699；服务直接写在试验的 config.json 里，不改任何 Agent 配置）：context7、shadcn-ui 两个真实 MCP 加一个程序不存在的，`tools/mcpprobe` 开 5 个对话并调用工具；首页、内存、动态、设置、详情、添加 MCP 用无头 Edge 在 920×620 下截图核对，一键托管确认框在内置浏览器里打开看过后取消，数字与 `/api/status` 一致（如 2 个 MCP 运行中、现在 152 MB、比各开各的省约 87 MB）。`go vet`（Windows、Linux）、`go test ./...` 全部通过。
+
+## Claude Code 项目级 MCP（2026-10-31）
+
+以前只读 `~/.claude.json` 顶层（用户级）的 MCP。`claude mcp add` 不加 `-s user` 时默认存进项目私有的 local 作用域（`~/.claude.json` 的 `projects["<目录>"].mcpServers`），项目里还可能有提交进仓库的 `.mcp.json`，这些都找不到，别人的电脑上会漏掉很多。
+
+用真实 claude 2.1.310 在临时 `CLAUDE_CONFIG_DIR` 里核对的行为：local 作用域按 git 仓库根目录（不在仓库里就按当前目录）记，键是正斜杠路径；和 `.mcp.json` 同名的 local 条目可以加，且优先；**每次改 local 作用域，Claude Code 都会把这个项目的 `.mcp.json` 批准记录从 `~/.claude.json` 挪到项目的 `.claude/settings.local.json`**（不是丢失）。
+
+交付：
+- 每个有自己 MCP 的项目是一个子应用 `claude-code@<目录>`（名字「Claude Code · 目录名」），接管记录、自动托管、还原都和其他应用一样各管各的；界面上同一行里按应用合成一个图标（右上角数字是项目数），悬停逐个列出
+- local 条目：在项目目录里运行 `claude mcp remove/add-json -s local`
+- `.mcp.json` 条目：不改这个共享文件，加一条同名 local 条目覆盖（`Record.Override`），还原时删掉；没在 Claude Code 里批准的、用了 `${VAR}` 的不托管（`Entry.Hold`）
+- 自动托管：升级后第一次查看时已有的项目只记下；之后出现的项目（在新项目里 `claude mcp add`）整个算新的
+- 写入后读回 Claude Code 实际保存的内容记作 `Written`，CLI 加上 `"type"` 之类的默认值也不影响之后的还原
+- 顺带修了一个已有的问题：守护进程运行时 `mcpcell restore --all` 直接改文件，守护进程内存里的记录还在，会把变回原命令的条目重新托管；现在守护进程在运行就交给它做
+
+验收：`internal/clients` 的测试（临时目录：项目列表、local 托管还原、`.mcp.json` 覆盖且文件一字不改、未批准和 `${VAR}` 不托管、按 ID 找回项目）；`internal/httpd` 的自动托管测试（第一次只记下、之后出现的项目和老项目里新加的被托管、还原）；`MCPCELL_REAL_CLAUDE=1` 用真实 claude CLI 托管并还原 local 条目和 `.mcp.json` 覆盖；`cmd/mcpcell` 测试确认守护进程运行时 `restore --all` 由它完成（去掉修复时这一项失败）。沙箱端到端（真实 claude CLI、临时 `CLAUDE_CONFIG_DIR`、`USERPROFILE`）：已有的两个项目只记下；在新项目里 `claude mcp add` 后约 5 秒被自动托管；命令行托管 `.mcp.json` 条目后文件 SHA1 不变；`restore --all` 后全部恢复，15 秒内没有被重新托管。
 
 ## M4 Hub 聚合与上下文瘦身
 

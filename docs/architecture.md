@@ -51,7 +51,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 一个二进制 `mcpcell.exe`，三种角色：
 - `mcpcell daemon`：常驻，空闲时预计十几 MB（M1 实测）
 - `mcpcell shim <service>`：给只支持 stdio 的客户端用，在 stdio 和守护进程之间转发，也能在守护进程不在时把它拉起来
-- CLI：`ps`、`clients`、`takeover`、`restore`、`mode`、`skills` 等（`doctor` 待做）。命令行和图形界面（托盘 + 管理页窗口，都是独立进程）是同一个守护进程的两种操作入口，见 §9.4
+- CLI：`status`、`takeover`、`restore`、`stop` 等，`mcpcell help --all` 列出全部（`doctor` 待做）。命令行和图形界面（托盘 + 管理页窗口，都是独立进程）是同一个守护进程的两种操作入口，见 §9.4
 
 ## 4. 组件
 
@@ -66,8 +66,7 @@ Windows 会压缩闲置进程的工作集，但它们的提交内存仍然计入
 | `internal/httpd` ✅ | Streamable HTTP（旧版，POST/GET/DELETE、会话、SSE）、Origin/Host 校验、token 鉴权、管理 API、内嵌状态页 | M1 |
 | `internal/testutil/fakemcp` ✅ | 基于官方 SDK 的测试用上游 | M1 |
 | `internal/catalog` ✅ | 能力目录：拉取并合并分页、按配置指纹判断有效、按客户端画像（协议版本，按会话时加能力）分别缓存、`list_changed` 时先标记过期再刷新、记录共享资格检测结果，存到 `~/.mcpcell/catalog` | M2 |
-| `internal/clients` | 各客户端配置的发现、改写、备份、还原（移植自 legacy） | M3 |
-| `internal/skills` ✅ | 各 Agent 的 Skill 目录：按内容哈希比较、同步到来源目录（目录链接）、备份与逐字节还原，见 [skills.md](skills.md) | M3 后 |
+| `internal/clients` | 各客户端配置的发现、改写、备份、还原（移植自 legacy）；Claude Code 的项目级 MCP（local 作用域和项目 `.mcp.json`）按项目作为子应用 `claude-code@<目录>` | M3 |
 | `internal/hub` | 聚合命名空间、元工具、调用策略 | M4 |
 
 ## 5. 数据模型
@@ -223,9 +222,9 @@ HTTP 客户端无法拉起守护进程，所以自启动是必需项：Windows �
 
 `config.json` 的 `interface` 是 `gui`（默认）或 `cli`，只决定托盘进程启不启动：开机自启在 Run 键里有守护进程（`MCPcell`）和托盘（`MCPcellTray`，仅 gui）两项；`mcpcell start`、`open` 在 gui 下也拉起托盘。运行中切换走 `POST /api/interface`（守护进程没运行时 `mcpcell mode` 直接做）：写回配置、启停托盘进程、调整托盘的自启项，守护进程和包装会话不受影响。两种方式的接管、按需启动、能力目录、重连完全相同。
 
-### 9.5 Skill
+### 9.5 Skill（已移除）
 
-Skill（`SKILL.md` 加脚本的文件夹）没有进程，问题只在于同一份要在各 Agent 的目录里各放一份。MCPcell 把它当成和 MCP 配置一样的"定义与绑定"：来源目录 `~/.mcpcell/skills` 存唯一的一份，各 Agent 的 Skill 目录用目录链接（Windows 用 junction，不需要管理员权限）指向它。规则与接管相同：改前备份、只改所选的 Skill 和位置、内容不同的副本不覆盖、被用户改过的不动、可以逐字节还原。命令行直接读写文件，不需要守护进程；管理页的「Skill」页调用同一个包。各 Agent 读哪些目录、来源目录的取舍、同步与还原规则见 [skills.md](skills.md)。
+Skill 统一管理曾在 2026-10-20 做成（`internal/skills`、`mcpcell skills`、管理页「Skill」页），2026-10-31 为了让 MCPcell 只做一件事而移除，代码留在 git 历史里。
 
 ### 9.6 客户端支持矩阵
 
