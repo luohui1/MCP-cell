@@ -1,0 +1,96 @@
+name: build
+
+# Tests on every platform, then packages MCPcell for it: the CLI and daemon
+# (Go), the mcpcell-run wrapper (Rust), and on Windows the windowless daemon
+# and the tray icon. A v* tag also attaches the packages to a release.
+
+on:
+  push:
+    branches: [main, core-go]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon runs the tests and also builds for Intel Macs.
+          - name: macos
+            os: macos-latest
+            targets: darwin/arm64/aarch64-apple-darwin darwin/amd64/x86_64-apple-darwin
+          - name: linux
+            os: ubuntu-latest
+            targets: linux/amd64/x86_64-unknown-linux-gnu
+          - name: windows
+            os: windows-latest
+            targets: windows/amd64/x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Test the wrapper
+        working-directory: shim
+        run: cargo test --release
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages
+          for t in ${{ matrix.targets }}; do
+            IFS=/ read -r goos goarch rust <<< "$t"
+            ext=""; [ "$goos" = windows ] && ext=".exe"
+            out="build/mcpcell-$goos-$goarch"
+            mkdir -p "$out"
+            rustup target add "$rust"
+            (cd shim && cargo build --release --target "$rust")
+            cp "shim/target/$rust/release/mcpcell-run$ext" "$out/"
+            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-s -w" -o "$out/mcpcell$ext" ./cmd/mcpcell
+            if [ "$goos" = windows ]; then
+              GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-s -w -H windowsgui" -o "$out/mcpcelld.exe" ./cmd/mcpcell
+              GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-s -w -H windowsgui" -o "$out/mcpcell-tray.exe" ./cmd/mcpcell-tray
+            fi
+            cp README.md LICENSE* "$out/" 2>/dev/null || true
+            # tar keeps the executable bits that artifact zips drop.
+            tar -czf "packages/mcpcell-$goos-$goarch.tar.gz" -C build "mcpcell-$goos-$goarch"
+          done
+          ls -l packages
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpcell-${{ matrix.name }}
+          path: packages/*.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Attach the packages to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" packages/*.tar.gz --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes \
+            || gh release upload "$GITHUB_REF_NAME" packages/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber

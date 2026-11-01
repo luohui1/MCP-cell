@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -38,12 +39,16 @@ func helper(mode string) {
 		fmt.Println("allocated")
 		time.Sleep(time.Minute)
 	case "spawn":
-		child, err := Start(helperSpec("sleep"))
-		if err != nil {
+		// Started the way an MCP server starts its own children: in its
+		// process group (Unix) and its job (Windows), not a group of its own.
+		s := helperSpec("sleep")
+		child := exec.Command(s.Argv[0])
+		child.Env = s.Env
+		if err := child.Start(); err != nil {
 			fmt.Println("error", err)
 			return
 		}
-		fmt.Println(child.Pid)
+		fmt.Println(child.Process.Pid)
 		time.Sleep(time.Minute)
 	}
 }
@@ -105,7 +110,13 @@ func TestUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Kill()
-	u, err := p.Usage()
+	// A child just started may not have touched any memory yet.
+	var u Usage
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if u, err = p.Usage(); err == nil && u.PrivateBytes > 0 {
+			break
+		}
+	}
 	if err != nil || u.Processes < 1 || u.PrivateBytes == 0 {
 		t.Fatalf("usage %+v %v", u, err)
 	}

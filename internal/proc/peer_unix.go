@@ -42,7 +42,4 @@ func Parent(pid int) (ppid int, exe string, err error) {
 }
 
 // Of reports one process's own memory (not its children's).
-func Of(pid int) Usage {
-	u, _ := statusOf(strconv.Itoa(pid))
-	return u
-}
+func Of(pid int) Usage { return processUsage(pid) }

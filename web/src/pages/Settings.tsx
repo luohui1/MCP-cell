@@ -64,7 +64,9 @@ export function SettingsPage({ diag }: { diag: boolean }) {
               <Switch checked={syncOn} label="所有应用同一套 MCP" onChange={(on) => attempt(() => autoApi.setSync(on), on ? '已开启' : '已关闭', (s) => setSyncOn(s.sync))} />
             </Row>
           )}
-          {mode && <TrayRow status={mode} onChange={(m) => attempt(() => uiMode.set(m), m === 'cli' ? '已关掉托盘图标' : '已显示托盘图标', setMode)} />}
+          {mode?.traySupported && (
+            <TrayRow status={mode} onChange={(m) => attempt(() => uiMode.set(m), m === 'cli' ? '已关掉托盘图标' : '已显示托盘图标', setMode)} />
+          )}
           {desk?.supported && (
             <>
               <Row title="桌面快捷方式">
