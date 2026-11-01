@@ -31,7 +31,7 @@ func asking(version, caps string) string {
 }
 
 func TestSharedInstancePerProtocolVersion(t *testing.T) {
-	store := catalog.OpenStore(t.TempDir())
+	store := catalog.OpenStore(settledDir(t))
 	p := newPoolWith(t, `{"services":{"fake":{"command":"x"}}}`, Options{Catalog: store})
 	old1 := client{"a", asking("2025-03-26", `{}`)}
 	old2 := client{"b", asking("2025-03-26", `{"roots":{}}`)}
@@ -62,7 +62,7 @@ func TestSharedInstancePerProtocolVersion(t *testing.T) {
 }
 
 func TestPerSessionCatalogIsPerKindOfClient(t *testing.T) {
-	store := catalog.OpenStore(t.TempDir())
+	store := catalog.OpenStore(settledDir(t))
 	p := newPoolWith(t, `{"services":{"s":{"command":"x","mode":"per-session"}}}`, Options{Catalog: store})
 	withRoots := client{"a", asking("2025-11-25", `{"roots":{"listChanged":true}}`)}
 	without := client{"b", asking("2025-11-25", `{}`)}
@@ -88,7 +88,7 @@ func TestPerSessionCatalogIsPerKindOfClient(t *testing.T) {
 }
 
 func TestShareabilityCheck(t *testing.T) {
-	dir := t.TempDir()
+	dir := settledDir(t)
 	cfg := `{"services":{"asks":{"command":"asks"},"plain":{"command":"plain"}}}`
 	spec := func(name string, _ *registry.Service) proc.Spec {
 		s := fakemcp.Spec()

@@ -194,7 +194,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 func TestCatalogServesWhileCold(t *testing.T) {
-	store := catalog.OpenStore(t.TempDir())
+	store := catalog.OpenStore(settledDir(t))
 	p := newPoolWith(t, `{"services":{"fake":{"command":"x"},"live":{"command":"x","catalog":"off"}}}`, Options{Catalog: store})
 	if _, _, ok := p.CachedInit("fake", nil); ok {
 		t.Fatal("catalog before first start")
@@ -228,7 +228,7 @@ func TestCatalogServesWhileCold(t *testing.T) {
 }
 
 func TestListChangedRefreshesCatalog(t *testing.T) {
-	store := catalog.OpenStore(t.TempDir())
+	store := catalog.OpenStore(settledDir(t))
 	p := newPoolWith(t, `{"services":{"fake":{"command":"x"}}}`, Options{Catalog: store})
 	changed := make(chan string, 4)
 	p.OnListChange(func(service, list string) { changed <- service + " " + list })
@@ -412,7 +412,7 @@ func statusOf(p *Pool, name string) ServiceStatus {
 // A failed start is still reported after the daemon restarts, until the
 // service is redefined or starts.
 func TestFailedStartSurvivesRestart(t *testing.T) {
-	dir := t.TempDir()
+	dir := settledDir(t)
 	cfg := `{"services":{"broken":{"command":"definitely-not-a-real-binary-xyz"}}}`
 	open := func() *Pool {
 		return newPoolWith(t, cfg, Options{Catalog: catalog.OpenStore(dir),
@@ -442,7 +442,7 @@ func TestFailedStartSurvivesRestart(t *testing.T) {
 
 // Calls and the last activity add up over instances.
 func TestUsage(t *testing.T) {
-	p := newPoolWith(t, `{"services":{"fake":{"command":"fake"}}}`, Options{Catalog: catalog.OpenStore(t.TempDir())})
+	p := newPoolWith(t, `{"services":{"fake":{"command":"fake"}}}`, Options{Catalog: catalog.OpenStore(settledDir(t))})
 	for i := 0; i < 2; i++ {
 		inst, err := p.Acquire(context.Background(), "fake", nil)
 		if err != nil {

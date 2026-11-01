@@ -14,7 +14,7 @@ import (
 	"github.com/luohui1/MCP-cell/internal/desktop"
 )
 
-const version = "0.6.0-dev"
+const version = "0.6.0"
 
 type command struct {
 	name, usage string
@@ -147,8 +147,12 @@ func dispatch(argv []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	err := commands[i].run(args)
-	if err != nil && (name == "open" || name == "ui" || name == "window") && !desktop.HasConsole() {
+	var ue usageError
+	if err != nil && !errors.As(err, &ue) && (name == "open" || name == "ui" || name == "window") && !desktop.HasConsole() {
 		// mcpcelld.exe was opened by the user and has nowhere to print to.
+		// A wrong invocation is not the user's double click, so it is only
+		// reported as usual (a test or CI run without a console would wait
+		// on the box forever).
 		desktop.Alert("MCPcell", err.Error())
 		return 1
 	}

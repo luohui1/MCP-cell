@@ -10,7 +10,12 @@ import (
 // Writes into a temp dir only; the real Desktop and Start menu are left
 // alone.
 func TestShortcutRoundTrip(t *testing.T) {
-	dir := t.TempDir()
+	// The long form of the path: TEMP may hold 8.3 names (C:\Users\RUNNER~1)
+	// that the shortcut gives back in full.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(dir, "mcpcelld.exe")
 	if err := os.WriteFile(target, []byte("MZ"), 0o755); err != nil {
 		t.Fatal(err)
