@@ -213,10 +213,16 @@ args = ["mcp-server-time"]
 		t.Fatalf("codex config:\n%s", b)
 	}
 
-	// Nothing left; a name that matches nothing is an error.
-	if out, err = run("", "-y"); err != nil || !strings.Contains(out, "没有需要托管的条目") {
+	// Nothing left to take over, but a takeover of everything gives every
+	// app the same set: what only Cursor or only Codex had goes to the other.
+	if out, err = run("", "-y"); err != nil || !strings.Contains(out, "没有需要托管的条目") ||
+		!strings.Contains(out, "+ Codex / mine") || !strings.Contains(out, "+ Codex / chrome") || !strings.Contains(out, "+ Cursor / time") {
 		t.Fatalf("again: %v\n%s", err, out)
 	}
+	if out, err = run("", "-y"); err != nil || strings.Contains(out, "+ ") {
+		t.Fatalf("synced twice: %v\n%s", err, out)
+	}
+	// A name that matches nothing is an error.
 	if _, err = run("", "nosuch", "-y"); err == nil {
 		t.Fatal("an unknown entry name was not an error")
 	}
@@ -242,8 +248,8 @@ args = ["mcp-server-time"]
 	if err := daemonCall("GET", "/api/auto", &auto); err != nil {
 		t.Fatal(err)
 	}
-	if len(auto.Excluded) != 5 {
-		t.Fatalf("the daemon lists %d restored entries, want 5", len(auto.Excluded))
+	if len(auto.Excluded) != 8 { // 5 taken over, 3 added by the sync
+		t.Fatalf("the daemon lists %d restored entries, want 8", len(auto.Excluded))
 	}
 	store, _ := clients.OpenStore(home)
 	if len(store.All()) != 0 || len(store.Exclusions()) == 0 {

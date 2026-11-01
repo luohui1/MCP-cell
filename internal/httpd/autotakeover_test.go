@@ -66,7 +66,8 @@ const (
 )
 
 // Entries already there on the first look are not new; one added later is
-// taken over, one that does not start is left as it is and not tried again.
+// taken over, one whose program is missing is left as it is without even
+// trying it.
 func TestAutoTakeoverNewEntries(t *testing.T) {
 	a := newAutoAgent(t, oldEntry)
 	a.h.srv.autoTakeover()
@@ -86,19 +87,14 @@ func TestAutoTakeoverNewEntries(t *testing.T) {
 		t.Fatal("the entry that does not start was rewritten")
 	}
 	ev := a.store.Events()
-	if len(ev) != 2 {
+	if len(ev) != 1 || ev[0].Name != "fresh" || !ev[0].OK || ev[0].Service == "" {
 		t.Fatalf("events: %+v", ev)
-	}
-	for _, e := range ev {
-		if e.Name == "fresh" && (!e.OK || e.Service == "") || e.Name == "broken" && (e.OK || e.Error == "") {
-			t.Fatalf("event: %+v", e)
-		}
 	}
 	// Nothing changed: the file is not even read. Touched: broken is not tried again.
 	a.h.srv.autoTakeover()
 	a.write(t, strings.TrimSuffix(a.content(t)[len(`{"mcpServers": {`):], "}}"))
 	a.h.srv.autoTakeover()
-	if n := len(a.store.Events()); n != 2 {
+	if n := len(a.store.Events()); n != 1 {
 		t.Fatalf("%d events, want no new attempt", n)
 	}
 	code, body := a.h.apiCall(t, "GET", "/api/auto", "")

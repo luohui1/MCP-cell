@@ -2,29 +2,37 @@ package clients
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
-// jsonEntry is the shape most clients use under mcpServers.
+// jsonEntry is the shape most clients use for one server, with the members
+// some of them name differently.
 type jsonEntry struct {
-	Type     string            `json:"type"`
-	Command  any               `json:"command"`
-	Args     []string          `json:"args"`
-	Env      map[string]string `json:"env"`
-	Cwd      string            `json:"cwd"`
-	URL      string            `json:"url"`
-	Disabled bool              `json:"disabled"`
+	Type        string            `json:"type"`
+	Command     any               `json:"command"`
+	Args        []string          `json:"args"`
+	Env         map[string]string `json:"env"`
+	Environment map[string]string `json:"environment"` // OpenCode
+	Cwd         string            `json:"cwd"`
+	URL         string            `json:"url"`
+	ServerURL   string            `json:"serverUrl"` // Windsurf, Antigravity
+	HTTPURL     string            `json:"httpUrl"`   // Gemini CLI
+	Disabled    bool              `json:"disabled"`
+	Enabled     *bool             `json:"enabled"` // OpenCode
 }
 
 func entryFromJSON(client, name string, raw []byte) Entry {
 	var j jsonEntry
 	_ = json.Unmarshal(stripJSONC(raw), &j)
-	e := Entry{Client: client, Name: name, Args: j.Args, Cwd: j.Cwd, URL: j.URL, Enabled: !j.Disabled}
+	e := Entry{Client: client, Name: name, Args: j.Args, Cwd: j.Cwd, URL: cmp.Or(j.URL, j.ServerURL, j.HTTPURL),
+		Enabled: !j.Disabled && (j.Enabled == nil || *j.Enabled)}
 	switch c := j.Command.(type) {
 	case string:
 		e.Command = c
@@ -39,7 +47,11 @@ func entryFromJSON(client, name string, raw []byte) Entry {
 			}
 		}
 	}
-	e.setEnv(j.Env)
+	env := j.Env
+	if env == nil {
+		env = j.Environment
+	}
+	e.setEnv(env)
 	switch {
 	case e.URL != "":
 		e.Kind = "http"
@@ -51,8 +63,9 @@ func entryFromJSON(client, name string, raw []byte) Entry {
 	return e
 }
 
-// mcpServers returns the raw entries of a JSON config's mcpServers object.
-func mcpServers(path string) (map[string]json.RawMessage, error) {
+// jsonServers returns the raw entries under key in a JSON config: nil when
+// the file does not exist, empty when it has none.
+func jsonServers(path, key string) (map[string]json.RawMessage, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -60,23 +73,48 @@ func mcpServers(path string) (map[string]json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	var doc struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	}
+	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(stripJSONC(b), &doc); err != nil {
 		return nil, errSyntax
 	}
-	return doc.MCPServers, nil
+	servers := map[string]json.RawMessage{}
+	if raw := doc[key]; len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return nil, errSyntax
+		}
+	}
+	return servers, nil
 }
 
-func listJSON(client, path string) ([]Entry, error) {
-	servers, err := mcpServers(path)
-	if err != nil {
+// mcpServers returns the raw entries of a JSON config's mcpServers object.
+func mcpServers(path string) (map[string]json.RawMessage, error) {
+	return jsonServers(path, "mcpServers")
+}
+
+// heldJSON says why an entry cannot run as written outside its app: the app
+// fills in ${…} variables (and VS Code's envFile) itself when it starts it.
+func heldJSON(raw []byte) string {
+	switch {
+	case bytes.Contains(raw, []byte("${")):
+		return "用了 ${…} 变量，由应用自己展开，MCPcell 拿不到这些值"
+	case bytes.Contains(raw, []byte(`"envFile"`)):
+		return "用 envFile 读取环境变量，MCPcell 拿不到这些值"
+	}
+	return ""
+}
+
+func listJSON(client, path, key string) ([]Entry, error) {
+	servers, err := jsonServers(path, key)
+	if err != nil || servers == nil {
 		return nil, err
 	}
 	out := make([]Entry, 0, len(servers))
 	for name, raw := range servers {
-		out = append(out, entryFromJSON(client, name, raw))
+		e := entryFromJSON(client, name, raw)
+		if e.Kind == "stdio" {
+			e.Hold = heldJSON(raw)
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
@@ -108,29 +146,108 @@ func indentedValue(src []byte, start int, v any) string {
 	return strings.ReplaceAll(string(b), "\n", newline(src))
 }
 
-// Cursor edits ~/.cursor/mcp.json in place.
-type Cursor struct{ path, backups string }
+// jsonStyle is how an agent writes one server.
+type jsonStyle int
 
-func NewCursor(home, backups string) *Cursor {
-	return &Cursor{path: filepath.Join(home, ".cursor", "mcp.json"), backups: backups}
+const (
+	styleCommand jsonStyle = iota // "command": "x", "args": [...]
+	styleTyped                    // the same, and "type": "stdio" or "http" (VS Code)
+	styleArray                    // "type": "local", "command": ["x", ...], "environment" (OpenCode)
+)
+
+// jsonAgent is one agent whose servers are an object in a JSON file.
+type jsonAgent struct {
+	id, name string
+	path     func(home string) string // under the user's home
+	key      string                   // the object holding the servers
+	style    jsonStyle
 }
 
-func (c *Cursor) ID() string             { return "cursor" }
-func (c *Cursor) Name() string           { return "Cursor" }
-func (c *Cursor) Path() string           { return c.path }
-func (c *Cursor) List() ([]Entry, error) { return listJSON(c.ID(), c.path) }
+// appDir is where desktop apps keep their settings, under home, so a test
+// or a trial daemon with another home never reaches the real ones.
+func appDir(home string) string {
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(home, "AppData", "Roaming")
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support")
+	}
+	return filepath.Join(home, ".config")
+}
 
-func (c *Cursor) Attach(name string, t Target) (Record, error) {
-	rec := Record{Client: c.ID(), Name: name}
-	backup, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
-		start, end, err := valueSpan(old, "mcpServers", name)
+func inHome(parts ...string) func(string) string {
+	return func(home string) string { return filepath.Join(append([]string{home}, parts...)...) }
+}
+
+func inAppDir(parts ...string) func(string) string {
+	return func(home string) string { return filepath.Join(append([]string{appDir(home)}, parts...)...) }
+}
+
+// jsonAgents are the agents MCPcell edits as JSON, in display order. Paths
+// follow each agent's documentation (docs/architecture.md §9.4); the VS Code
+// extensions are found in VS Code's own storage.
+var jsonAgents = []jsonAgent{
+	{"cursor", "Cursor", inHome(".cursor", "mcp.json"), "mcpServers", styleCommand},
+	{"claude-desktop", "Claude Desktop", inAppDir("Claude", "claude_desktop_config.json"), "mcpServers", styleCommand},
+	{"vscode", "VS Code", inAppDir("Code", "User", "mcp.json"), "servers", styleTyped},
+	{"copilot", "Copilot CLI", inHome(".copilot", "mcp-config.json"), "mcpServers", styleCommand},
+	{"gemini", "Gemini CLI", inHome(".gemini", "settings.json"), "mcpServers", styleCommand},
+	{"antigravity", "Antigravity", inHome(".gemini", "antigravity", "mcp_config.json"), "mcpServers", styleCommand},
+	{"windsurf", "Windsurf", inHome(".codeium", "windsurf", "mcp_config.json"), "mcpServers", styleCommand},
+	{"kiro", "Kiro", inHome(".kiro", "settings", "mcp.json"), "mcpServers", styleCommand},
+	{"cline", "Cline", inAppDir("Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"), "mcpServers", styleCommand},
+	{"roo", "Roo Code", inAppDir("Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings", "mcp_settings.json"), "mcpServers", styleCommand},
+	{"opencode", "OpenCode", inHome(".config", "opencode", "opencode.json"), "mcp", styleArray},
+}
+
+// JSONClient edits one JSON agent's servers in place: only the entry
+// changes, the rest of the file (other settings, comments, key order) stays
+// as it was.
+type JSONClient struct {
+	jsonAgent
+	path, backups string
+}
+
+func newJSONClient(a jsonAgent, home, backups string) *JSONClient {
+	return &JSONClient{jsonAgent: a, path: a.path(home), backups: backups}
+}
+
+// NewCursor is Cursor's ~/.cursor/mcp.json.
+func NewCursor(home, backups string) *JSONClient { return newJSONClient(jsonAgents[0], home, backups) }
+
+// jsonClients returns a client for every JSON agent.
+func jsonClients(home, backups string) []Client {
+	out := make([]Client, len(jsonAgents))
+	for i, a := range jsonAgents {
+		out[i] = newJSONClient(a, home, backups)
+	}
+	return out
+}
+
+func (c *JSONClient) ID() string             { return c.id }
+func (c *JSONClient) Name() string           { return c.name }
+func (c *JSONClient) Path() string           { return c.path }
+func (c *JSONClient) List() ([]Entry, error) { return listJSON(c.id, c.path, c.key) }
+
+func (c *JSONClient) httpValue(t Target) map[string]any {
+	v := httpEntry(c.style == styleTyped, t.URL, t.Token)
+	if c.style == styleArray {
+		v["type"] = "remote"
+	}
+	return v
+}
+
+func (c *JSONClient) Attach(name string, t Target) (Record, error) {
+	rec := Record{Client: c.id, Name: name}
+	backup, err := rewrite(c.path, c.backups, c.id, func(old []byte) ([]byte, error) {
+		start, end, err := valueSpan(old, c.key, name)
 		if err != nil {
 			return nil, err
 		}
 		rec.Original = string(old[start:end])
-		var value any = httpEntry(false, t.URL, t.Token)
+		var value any = c.httpValue(t)
 		if t.wrapped() {
-			if value, err = wrapJSON(old[start:end], t.Wrapper, entryFromJSON(c.ID(), name, old[start:end])); err != nil {
+			if value, err = wrapJSON(old[start:end], t.Wrapper, entryFromJSON(c.id, name, old[start:end])); err != nil {
 				return nil, err
 			}
 		}
@@ -141,9 +258,9 @@ func (c *Cursor) Attach(name string, t Target) (Record, error) {
 	return rec, err
 }
 
-func (c *Cursor) Restore(rec Record) error {
-	_, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
-		start, end, err := valueSpan(old, "mcpServers", rec.Name)
+func (c *JSONClient) Restore(rec Record) error {
+	_, err := rewrite(c.path, c.backups, c.id, func(old []byte) ([]byte, error) {
+		start, end, err := valueSpan(old, c.key, rec.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -151,7 +268,7 @@ func (c *Cursor) Restore(rec Record) error {
 			return nil, ErrConflict
 		}
 		if rec.Added {
-			return removeMember(old, []string{"mcpServers"}, rec.Name)
+			return removeMember(old, []string{c.key}, rec.Name)
 		}
 		return splice(old, start, end, rec.Original), nil
 	})
@@ -165,25 +282,25 @@ func splice(src []byte, start, end int, with string) []byte {
 	return append(out, src[end:]...)
 }
 
-func (c *Cursor) Add(name string, t Target) (Record, error) {
-	rec := Record{Client: c.ID(), Name: name, Added: true}
-	if err := ensureFile(c.path, "{\n  \"mcpServers\": {}\n}\n"); err != nil {
+func (c *JSONClient) Add(name string, t Target) (Record, error) {
+	rec := Record{Client: c.id, Name: name, Added: true}
+	if err := ensureFile(c.path, "{\n  \""+c.key+"\": {}\n}\n"); err != nil {
 		return rec, err
 	}
-	backup, err := rewrite(c.path, c.backups, c.ID(), func(old []byte) ([]byte, error) {
-		if _, _, err := valueSpan(old, "mcpServers", name); err == nil {
+	backup, err := rewrite(c.path, c.backups, c.id, func(old []byte) ([]byte, error) {
+		if _, _, err := valueSpan(old, c.key, name); err == nil {
 			return nil, ErrExists
 		}
-		if _, _, err := valueSpan(old, "mcpServers"); errors.Is(err, ErrNotFound) {
-			if old, _, err = insertMember(old, nil, "mcpServers", map[string]any{}); err != nil {
+		if _, _, err := valueSpan(old, c.key); errors.Is(err, ErrNotFound) {
+			if old, _, err = insertMember(old, nil, c.key, map[string]any{}); err != nil {
 				return nil, err
 			}
 		}
-		var value any = httpEntry(false, t.URL, t.Token)
+		var value any = c.httpValue(t)
 		if t.wrapped() {
-			value = newJSON(false, t.Wrapper, t.Server)
+			value = newJSON(c.style, t.Wrapper, t.Server)
 		}
-		out, written, err := insertMember(old, []string{"mcpServers"}, name, value)
+		out, written, err := insertMember(old, []string{c.key}, name, value)
 		rec.Written = written
 		return out, err
 	})

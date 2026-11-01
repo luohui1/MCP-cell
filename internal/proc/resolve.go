@@ -11,6 +11,14 @@ import (
 	"strings"
 )
 
+// ErrNotFound marks a program or script that is not on this machine.
+var ErrNotFound = errors.New("不存在")
+
+type notFound string
+
+func (e notFound) Error() string        { return string(e) }
+func (e notFound) Is(target error) bool { return target == ErrNotFound }
+
 // ResolveArgv turns a client-style command into something CreateProcess can run
 // without cmd.exe: `cmd /c X ...` is unwrapped, bare names are looked up on the
 // target env's PATH, and npm .cmd shims are replaced by node + their script.
@@ -63,7 +71,7 @@ func lookPath(name, pathEnv, pathext, dir string) (string, error) {
 		if p, ok := findExecutable(name, pathext); ok {
 			return p, nil
 		}
-		return "", fmt.Errorf("找不到启动程序 %s", name)
+		return "", notFound(fmt.Sprintf("找不到启动程序 %s", name))
 	}
 	for _, d := range filepath.SplitList(pathEnv) {
 		if d == "" {
@@ -73,7 +81,7 @@ func lookPath(name, pathEnv, pathext, dir string) (string, error) {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("在 PATH 中找不到启动程序 %q", name)
+	return "", notFound(fmt.Sprintf("在 PATH 中找不到启动程序 %q", name))
 }
 
 func findExecutable(path, pathext string) (string, bool) {
@@ -128,12 +136,12 @@ func resolveShim(shim string, args []string, env []string, dir string) ([]string
 		return nil, fmt.Errorf("不支持直接运行批处理文件 %s：请把 command 改成可执行文件或 node 脚本", filepath.Base(shim))
 	}
 	if _, err := os.Stat(script); err != nil {
-		return nil, fmt.Errorf("%s 指向的脚本不存在：%s", filepath.Base(shim), script)
+		return nil, notFound(fmt.Sprintf("%s 指向的脚本不存在：%s", filepath.Base(shim), script))
 	}
 	node := filepath.Join(base, "node.exe")
 	if _, err := os.Stat(node); err != nil {
 		if node, err = lookPath("node", lookupEnv(env, "PATH"), lookupEnv(env, "PATHEXT"), dir); err != nil {
-			return nil, fmt.Errorf("找不到 node，无法运行 %s", filepath.Base(shim))
+			return nil, notFound(fmt.Sprintf("找不到 node，无法运行 %s", filepath.Base(shim)))
 		}
 	}
 	return append([]string{node, script}, args...), nil

@@ -434,14 +434,9 @@ func TestFailedStartSurvivesRestart(t *testing.T) {
 	}
 }
 
-// Calls and the last activity add up over instances; the typical memory is
-// the median of the last runs' peaks and survives a restart.
-func TestUsageAndTypicalMemory(t *testing.T) {
-	dir := t.TempDir()
-	open := func() *Pool {
-		return newPoolWith(t, `{"services":{"fake":{"command":"fake"}}}`, Options{Catalog: catalog.OpenStore(dir)})
-	}
-	p := open()
+// Calls and the last activity add up over instances.
+func TestUsage(t *testing.T) {
+	p := newPoolWith(t, `{"services":{"fake":{"command":"fake"}}}`, Options{Catalog: catalog.OpenStore(t.TempDir())})
 	for i := 0; i < 2; i++ {
 		inst, err := p.Acquire(context.Background(), "fake", nil)
 		if err != nil {
@@ -454,22 +449,7 @@ func TestUsageAndTypicalMemory(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond) // the watcher counts the ended instance
 	st := statusOf(p, "fake")
-	if st.Calls != 2 || st.LastUsedAt == nil || st.TypicalBytes != 0 {
-		t.Fatalf("calls %d, last used %v, typical %d", st.Calls, st.LastUsedAt, st.TypicalBytes)
-	}
-	for _, b := range []uint64{100, 300, 200} {
-		p.RecordPeak("fake", b<<20)
-	}
-	if st := statusOf(p, "fake"); st.TypicalBytes != 200<<20 || st.TypicalRuns != 3 {
-		t.Fatalf("typical %d over %d runs", st.TypicalBytes>>20, st.TypicalRuns)
-	}
-	p.Close()
-	p = open()
-	for _, b := range []uint64{400, 500, 600} {
-		p.RecordPeak("fake", b<<20)
-	}
-	// The last five: 300 200 400 500 600.
-	if st := statusOf(p, "fake"); st.TypicalBytes != 400<<20 || st.TypicalRuns != 5 {
-		t.Fatalf("after a restart: typical %d over %d runs", st.TypicalBytes>>20, st.TypicalRuns)
+	if st.Calls != 2 || st.LastUsedAt == nil {
+		t.Fatalf("calls %d, last used %v", st.Calls, st.LastUsedAt)
 	}
 }

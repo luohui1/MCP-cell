@@ -148,9 +148,6 @@ type file struct {
 	// Failure is the last failed start, kept until the service starts or its
 	// configuration changes, so a restarted daemon still shows it.
 	Failure *Failure `json:"failure,omitempty"`
-	// Peaks are the private commit peaks of the service's last runs, so
-	// the page can estimate what every session running its own copy costs.
-	Peaks []uint64 `json:"peaks,omitempty"`
 }
 
 // Failure is a service's failed start as the daemon reports it.
@@ -272,25 +269,6 @@ func (s *Store) Failure(service, fingerprint string) *Failure {
 		return &cp
 	}
 	return nil
-}
-
-// Peaks returns the memory peaks recorded for this configuration.
-func (s *Store) Peaks(service, fingerprint string) []uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if f := s.fileLocked(service, fingerprint); f != nil {
-		return append([]uint64(nil), f.Peaks...)
-	}
-	return nil
-}
-
-// SetPeaks records the memory peaks of the service's last runs.
-func (s *Store) SetPeaks(service, fingerprint string, peaks []uint64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	f := s.fileForWriteLocked(service, fingerprint)
-	f.Peaks = append([]uint64(nil), peaks...)
-	return s.saveLocked(service, f)
 }
 
 // SetFailure records a failed start for this configuration; nil clears it.

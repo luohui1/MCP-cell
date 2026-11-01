@@ -17,9 +17,11 @@ import (
 
 // Point is one sample. Memory is in KB.
 type Point struct {
-	At       uint32 // Unix seconds
-	Total    uint32 // the daemon and every MCP instance
-	Estimate uint32 // every session running its own copy (measured services only)
+	At    uint32 // Unix seconds
+	Total uint32 // the daemon and every MCP instance
+	// Once an estimate of every session running its own copy; kept blank
+	// so the saved layout stays 16 bytes and older files still read.
+	_        uint32
 	Running  uint16 // instances
 	Sessions uint16
 }
@@ -128,12 +130,11 @@ func Downsample(pts []Point, step uint32) []Point {
 		return pts
 	}
 	var out []Point
-	var sumT, sumE uint64
-	var n uint64
+	var sum, n uint64
 	var cur Point
 	flush := func() {
 		if n > 0 {
-			cur.Total, cur.Estimate = uint32(sumT/n), uint32(sumE/n)
+			cur.Total = uint32(sum / n)
 			out = append(out, cur)
 		}
 	}
@@ -141,13 +142,12 @@ func Downsample(pts []Point, step uint32) []Point {
 		b := p.At - p.At%step
 		if n > 0 && b != cur.At {
 			flush()
-			sumT, sumE, n = 0, 0, 0
+			sum, n = 0, 0
 		}
 		if n == 0 {
 			cur = Point{At: b}
 		}
-		sumT += uint64(p.Total)
-		sumE += uint64(p.Estimate)
+		sum += uint64(p.Total)
 		n++
 		cur.Running = max(cur.Running, p.Running)
 		cur.Sessions = max(cur.Sessions, p.Sessions)

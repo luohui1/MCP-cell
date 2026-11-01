@@ -31,9 +31,8 @@ func (h *harness) getJSON(t *testing.T, path string, v any) int {
 	return resp.StatusCode
 }
 
-// What the dashboard shows: memory now and without sharing, the
-// conversations, and each service's typical memory once a run ended.
-func TestSampleMeasuresAndEstimates(t *testing.T) {
+// What the page shows: memory now, what runs, and the conversations.
+func TestSampleMeasures(t *testing.T) {
 	h := start(t)
 	a := h.connect(t, nil)
 	h.connect(t, nil)
@@ -46,34 +45,14 @@ func TestSampleMeasuresAndEstimates(t *testing.T) {
 	if m.InstanceBytes == 0 || m.DaemonBytes == 0 || m.TotalBytes != m.DaemonBytes+m.InstanceBytes+m.WrapperBytes {
 		t.Fatalf("memory: %+v", m)
 	}
-	// Two conversations, the instance measured now (no run ended yet).
-	if m.EstimateBytes != 2*m.InstanceBytes || len(m.Unmeasured) != 0 {
-		t.Fatalf("estimate %d for two sessions of %d, unmeasured %v", m.EstimateBytes, m.InstanceBytes, m.Unmeasured)
-	}
 	if len(m.Conversations) != 1 || m.Conversations[0] != (agentCount{Agent: "sdk-test", Conversations: 2}) {
 		t.Fatalf("conversations: %+v", m.Conversations)
 	}
 
-	// The run ends: its peak becomes the service's typical memory.
-	peak := m.InstanceBytes
 	h.srv.pool.Stop("fake", "手动回收")
 	m = h.srv.sample(time.Now())
-	st := h.service(t, "fake")
-	if st.TypicalRuns != 1 || st.TypicalBytes != peak {
-		t.Fatalf("typical %d over %d runs, want %d", st.TypicalBytes, st.TypicalRuns, peak)
-	}
-	if m.Instances != 0 || m.InstanceBytes != 0 || m.EstimateBytes != 2*peak {
+	if m.Instances != 0 || m.InstanceBytes != 0 || m.RunningServices != 0 {
 		t.Fatalf("after stopping: %+v", m)
-	}
-}
-
-func TestSampleLeavesUnmeasuredOut(t *testing.T) {
-	h := start(t)
-	h.connect(t, nil)
-	h.srv.pool.Stop("fake", "手动回收") // before any sample: never measured
-	m := h.srv.sample(time.Now())
-	if m.EstimateBytes != 0 || len(m.Unmeasured) != 1 || m.Unmeasured[0] != "fake" {
-		t.Fatalf("estimate %d, unmeasured %v", m.EstimateBytes, m.Unmeasured)
 	}
 }
 

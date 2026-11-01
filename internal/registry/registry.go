@@ -48,9 +48,12 @@ type Config struct {
 	Interface string `json:"interface,omitempty"`
 	// AutoTakeover takes over MCPs that newly appear in an agent's
 	// configuration, the way 一键托管 would. Default true.
-	AutoTakeover *bool               `json:"autoTakeover,omitempty"`
-	Limits       Limits              `json:"limits,omitzero"`
-	Services     map[string]*Service `json:"services"`
+	AutoTakeover *bool `json:"autoTakeover,omitempty"`
+	// SyncApps keeps every app on the same set of MCPs: a service one app
+	// uses is added to the others too. Default true.
+	SyncApps *bool               `json:"syncApps,omitempty"`
+	Limits   Limits              `json:"limits,omitzero"`
+	Services map[string]*Service `json:"services"`
 }
 
 // CLI reports whether the user chose the command line over the tray icon.
@@ -59,6 +62,9 @@ func (c *Config) CLI() bool { return c.Interface == InterfaceCLI }
 // AutoTakeoverEnabled reports whether new agent MCPs are taken over
 // without asking.
 func (c *Config) AutoTakeoverEnabled() bool { return c.AutoTakeover == nil || *c.AutoTakeover }
+
+// SyncAppsEnabled reports whether every app keeps the same set of MCPs.
+func (c *Config) SyncAppsEnabled() bool { return c.SyncApps == nil || *c.SyncApps }
 
 // ParseInterface accepts "gui" or "cli".
 func ParseInterface(s string) (string, error) {
@@ -301,6 +307,19 @@ func Save(home string, cfg *Config) error {
 
 // SetInterface records the interface choice in config.json. The daemon
 // edits the file itself while it runs; this is for when it does not.
+// SetSyncApps records whether every app keeps the same set of MCPs.
+func SetSyncApps(home string, on bool) error {
+	cfg, err := Load(home)
+	if err != nil {
+		return err
+	}
+	if cfg.SyncAppsEnabled() == on && cfg.SyncApps != nil {
+		return nil
+	}
+	cfg.SyncApps = &on
+	return Save(home, cfg)
+}
+
 // SetAutoTakeover records whether new agent MCPs are taken over by
 // themselves.
 func SetAutoTakeover(home string, on bool) error {

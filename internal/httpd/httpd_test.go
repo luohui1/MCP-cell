@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,7 +31,25 @@ import (
 
 func TestMain(m *testing.M) {
 	fakemcp.MaybeRun()
-	os.Exit(m.Run())
+	// Test services run this binary instead of their command (fakeSpec).
+	// Programs of those names on PATH keep agent entries running them from
+	// counting as missing (clients.Missing).
+	dir, err := os.MkdirTemp("", "mcpcell-httpd-path")
+	if err != nil {
+		panic(err)
+	}
+	for _, name := range []string{"fake", "exits-mcp"} {
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o755); err != nil {
+			panic(err)
+		}
+	}
+	os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 var token = strings.Repeat("ab", 32)
@@ -880,5 +899,31 @@ func TestTakeoverLeavesServersThatDoNotStart(t *testing.T) {
 	}
 	if len(store.All()) != 1 {
 		t.Fatalf("records: %+v", store.All())
+	}
+
+	// Both are left out of 一键托管 from now on: gone has no program, noargs
+	// did not start as it is now. Once noargs changes, it is offered again.
+	dead := func() map[string]string {
+		_, body := h.apiCall(t, "GET", "/api/mcp", "")
+		var v struct {
+			Rows []struct {
+				Agents map[string]struct{ Entry, Dead string }
+			}
+		}
+		_ = json.Unmarshal([]byte(body), &v)
+		out := map[string]string{}
+		for _, r := range v.Rows {
+			if c, ok := r.Agents["cursor"]; ok {
+				out[c.Entry] = c.Dead
+			}
+		}
+		return out
+	}
+	if d := dead(); d["noargs"] == "" || d["gone"] == "" || d["ok"] != "" {
+		t.Fatalf("dead: %v", d)
+	}
+	_ = os.WriteFile(cursorFile, []byte(strings.Replace(string(b), `"exits-mcp" }`, `"exits-mcp", "args": ["--fixed"] }`, 1)), 0o600)
+	if d := dead(); d["noargs"] != "" || d["gone"] == "" {
+		t.Fatalf("after changing noargs: %v", d)
 	}
 }

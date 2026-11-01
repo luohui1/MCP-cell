@@ -47,14 +47,14 @@ func TestServiceRings(t *testing.T) {
 func TestDownsample(t *testing.T) {
 	var pts []Point
 	for i := range uint32(60) { // ten minutes at one every 10 s
-		pts = append(pts, Point{At: 6000 + i*10, Total: i, Estimate: 2 * i, Running: uint16(i % 7), Sessions: uint16(i % 5)})
+		pts = append(pts, Point{At: 6000 + i*10, Total: i, Running: uint16(i % 7), Sessions: uint16(i % 5)})
 	}
 	got := Downsample(pts, 300)
 	if len(got) != 2 {
 		t.Fatalf("%d buckets, want 2: %+v", len(got), got)
 	}
 	// 6000..6290 → values 0..29, average 14; the next 30..59, average 44.
-	if got[0].At != 6000 || got[0].Total != 14 || got[0].Estimate != 29 || got[1].Total != 44 {
+	if got[0].At != 6000 || got[0].Total != 14 || got[1].Total != 44 {
 		t.Fatalf("averages %+v", got)
 	}
 	if got[0].Running != 6 || got[0].Sessions != 4 {
@@ -70,7 +70,7 @@ func TestSaveAndLoad(t *testing.T) {
 	now := uint32(time.Now().Unix())
 	r := NewRing(10)
 	r.Add(Point{At: now - 7200, Total: 1}, nil) // older than an hour
-	r.Add(Point{At: now - 60, Total: 2, Estimate: 3, Running: 4, Sessions: 5}, map[string]uint32{"a": 64})
+	r.Add(Point{At: now - 60, Total: 2, Running: 4, Sessions: 5}, map[string]uint32{"a": 64})
 	r.Add(Point{At: now, Total: 6}, nil)
 	if err := r.Save(path); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestSaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := back.Since(time.Unix(0, 0))
-	if len(got) != 2 || got[0] != (Point{At: now - 60, Total: 2, Estimate: 3, Running: 4, Sessions: 5}) || got[1].Total != 6 {
+	if len(got) != 2 || got[0] != (Point{At: now - 60, Total: 2, Running: 4, Sessions: 5}) || got[1].Total != 6 {
 		t.Fatalf("loaded %+v", got)
 	}
 }

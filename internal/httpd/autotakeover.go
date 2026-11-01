@@ -71,6 +71,7 @@ func (s *Server) autoTakeover() {
 	if err != nil {
 		return
 	}
+	took := false
 	for _, c := range clients.Expand(s.opts.Clients) {
 		st, ok := stamp(c)
 		if !ok {
@@ -80,16 +81,28 @@ func (s *Server) autoTakeover() {
 		same := s.autoStamps[c.ID()] == st
 		s.autoStamps[c.ID()] = st
 		s.mu.Unlock()
-		if !same {
-			s.autoClient(c, cfg)
+		if !same && s.autoClient(c, cfg) {
+			took = true
 		}
 	}
 	if !s.opts.Takeovers.Baselined(projectsBaseline) {
 		_ = s.opts.Takeovers.MarkSeen(projectsBaseline, nil, true)
 	}
+	if took && cfg.SyncAppsEnabled() {
+		// What one app got, the others get too (sync.go).
+		s.takeMu.Lock()
+		results, _ := s.syncApps(nil)
+		s.takeMu.Unlock()
+		for _, r := range results {
+			if !r.OK {
+				s.opts.Log.Warn("sync: not added", "client", r.Client, "service", r.Service, "err", firstLine(r.Error))
+			}
+		}
+	}
 }
 
-func (s *Server) autoClient(c clients.Client, cfg *registry.Config) {
+// autoClient takes over c's new entries; took is whether any was.
+func (s *Server) autoClient(c clients.Client, cfg *registry.Config) (took bool) {
 	store := s.opts.Takeovers
 	views := clients.Overview([]clients.Client{c}, store, cfg.Services, s.baseURL())
 	v := views[0]
@@ -131,7 +144,7 @@ func (s *Server) autoClient(c clients.Client, cfg *registry.Config) {
 		if _, no := store.Excluded(c.ID(), ev.Name); no || ev.TakenOver || !cfg.AutoTakeoverEnabled() {
 			continue
 		}
-		if ev.Kind == "stdio" && ev.Class != clients.ClassInternal && clients.Takeable(ev) {
+		if ev.Kind == "stdio" && ev.Class != clients.ClassInternal && clients.Takeable(ev) && ev.Dead == "" {
 			take = append(take, ev.Name)
 		}
 	}
@@ -161,6 +174,7 @@ func (s *Server) autoClient(c clients.Client, cfg *registry.Config) {
 		var errText string
 		service, _, ok := s.attachOne(c, name, req, tried, &errText)
 		if ok {
+			took = true
 			if rec, found := store.Get(c.ID(), name); found {
 				rec.Auto = true
 				if n, back := again[name]; back {
@@ -176,6 +190,7 @@ func (s *Server) autoClient(c clients.Client, cfg *registry.Config) {
 			s.opts.Log.Warn("auto takeover: not taken over", "client", c.ID(), "entry", name, "err", firstLine(errText))
 		}
 	}
+	return took
 }
 
 // putBack reports whether an entry that was taken over is its original
@@ -189,6 +204,7 @@ func putBack(ev clients.EntryView, def *registry.Service) bool {
 
 type autoStatus struct {
 	Enabled  bool                `json:"enabled"`
+	Sync     bool                `json:"sync"` // every app keeps the same set (sync.go)
 	Events   []clients.AutoEvent `json:"events"`
 	Excluded []clients.Exclusion `json:"excluded"`
 }
@@ -198,7 +214,7 @@ func (s *Server) autoStatus() (autoStatus, error) {
 	if err != nil {
 		return autoStatus{}, err
 	}
-	st := autoStatus{Enabled: cfg.AutoTakeoverEnabled(), Events: []clients.AutoEvent{}, Excluded: []clients.Exclusion{}}
+	st := autoStatus{Enabled: cfg.AutoTakeoverEnabled(), Sync: cfg.SyncAppsEnabled(), Events: []clients.AutoEvent{}, Excluded: []clients.Exclusion{}}
 	if s.opts.Takeovers != nil {
 		// Never null in JSON: the page iterates them.
 		st.Events = append(st.Events, s.opts.Takeovers.Events()...)
@@ -207,20 +223,30 @@ func (s *Server) autoStatus() (autoStatus, error) {
 	return st, nil
 }
 
-// handleAuto is GET/POST /api/auto: the setting, recent automatic
-// takeovers, and the entries left alone.
+// handleAuto is GET/POST /api/auto: the settings (automatic takeover, and
+// keeping every app on the same set), recent automatic takeovers, and the
+// entries left alone.
 func (s *Server) handleAuto(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
-		var req struct{ Enabled *bool }
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil || req.Enabled == nil {
+		var req struct{ Enabled, Sync *bool }
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil || req.Enabled == nil && req.Sync == nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
 			return
 		}
-		if err := s.editConfig(func(cfg *registry.Config) error { cfg.AutoTakeover = req.Enabled; return nil }); err != nil {
+		err := s.editConfig(func(cfg *registry.Config) error {
+			if req.Enabled != nil {
+				cfg.AutoTakeover = req.Enabled
+			}
+			if req.Sync != nil {
+				cfg.SyncApps = req.Sync
+			}
+			return nil
+		})
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		s.opts.Log.Info("auto takeover setting", "enabled", *req.Enabled)
+		s.opts.Log.Info("auto takeover setting", "enabled", req.Enabled != nil && *req.Enabled, "sync", req.Sync != nil && *req.Sync)
 	}
 	st, err := s.autoStatus()
 	if err != nil {

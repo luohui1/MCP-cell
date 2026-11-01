@@ -94,11 +94,7 @@ var (
 // All returns the supported clients for this user. backups is where full
 // copies of a config file go before its first change.
 func All(home, backups string) []Client {
-	return []Client{
-		NewClaudeCode(home, backups, nil),
-		NewCodex(home, backups),
-		NewCursor(home, backups),
-	}
+	return append([]Client{NewClaudeCode(home, backups, nil), NewCodex(home, backups)}, jsonClients(home, backups)...)
 }
 
 // rewrite applies edit to path atomically and refuses if the file changed

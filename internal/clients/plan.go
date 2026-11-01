@@ -84,6 +84,10 @@ type EntryView struct {
 	// Drift says how a wrapped entry edited since the takeover differs from
 	// its service: MCPcell then runs it apart from that service.
 	Drift string `json:"drift,omitempty"`
+	// Dead says why a native entry cannot run: its program is not on this
+	// machine, or it did not start when MCPcell last tried it as it is now.
+	// 一键托管 and automatic takeover leave such an entry alone.
+	Dead string `json:"dead,omitempty"`
 }
 
 // drift compares a wrapped entry with the service it was taken over for.
@@ -151,6 +155,10 @@ func Overview(cs []Client, store *Store, services map[string]*registry.Service, 
 				ev.Service = strings.TrimPrefix(e.URL, baseURL+"/s/")
 			} else if e.Kind == "stdio" && ev.Class != ClassInternal {
 				ev.Service = proposeName(e, byKey, services, taken)
+				ev.Dead = Missing(e)
+				if f, ok := store.FailedStart(c.ID(), e.Name, EntryKey(e)); ok && ev.Dead == "" {
+					ev.Dead = f.Error
+				}
 			}
 			_, ev.ServiceExists = services[ev.Service]
 			v.Entries = append(v.Entries, ev)

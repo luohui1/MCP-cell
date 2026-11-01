@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
@@ -36,8 +37,8 @@ type mcpRowView struct {
 }
 
 type cellView struct {
-	State, Entry, Class, Reason string
-	Takeable                    bool
+	State, Entry, Class, Reason, Dead string
+	Takeable                          bool
 }
 
 // takeoverOptions narrow a takeover and choose how new services run.
@@ -46,6 +47,7 @@ type takeoverOptions struct {
 	entries map[string]bool // entry or service names; none means all
 	mode    string          // "", registry.ModeShared or registry.ModePerSession
 	auto    string          // --auto on|off: the automatic takeover setting instead
+	sync    string          // --sync on|off: whether every app keeps the same set, instead
 }
 
 type takeStep struct {
@@ -94,6 +96,9 @@ func takeoverWith(w io.Writer, in io.Reader, args []string) error {
 	if o.auto != "" {
 		return setAutoTakeover(w, o.auto == "on")
 	}
+	if o.sync != "" {
+		return setSyncApps(w, o.sync == "on")
+	}
 	if _, _, err := ensureDaemon(); err != nil {
 		return err
 	}
@@ -106,18 +111,24 @@ func takeoverWith(w io.Writer, in io.Reader, args []string) error {
 	}
 	p := planTakeover(v, o)
 	printPlan(w, p)
+	// Only a takeover of everything brings the other apps the same set;
+	// --client and entry names limit what changes.
+	full := len(o.clients) == 0 && len(o.entries) == 0
 	if len(p.steps) == 0 {
 		if len(o.entries) > 0 && len(p.unmatched) == len(o.entries) {
 			return errors.New("没有找到要托管的条目，可以用 mcpcell clients 查看条目名")
 		}
 		fmt.Fprintln(w, "没有需要托管的条目。")
+		if full {
+			syncApps(w, v.Agents)
+		}
 		return nil
 	}
 	if !yes && !confirm(w, in, fmt.Sprintf("托管以上 %d 个条目？[y/N] ", len(p.steps))) {
 		fmt.Fprintln(w, "已取消，没有改动。")
 		return nil
 	}
-	return applyPlan(w, p, o.mode, v.Autostart.Supported && !v.Autostart.Enabled)
+	return applyPlan(w, p, o.mode, v.Autostart.Supported && !v.Autostart.Enabled, full)
 }
 
 // listFlag collects a repeatable, comma-separated flag.
@@ -141,6 +152,7 @@ func parseTakeover(args []string) (o takeoverOptions, yes bool, err error) {
 	shared := fs.Bool("shared", false, "未验证的 MCP 也共享（需要会话隔离的仍按会话）")
 	perSession := fs.Bool("per-session", false, "新建的服务一律每个会话一个实例")
 	auto := fs.String("auto", "", "on|off：自动托管新加的 MCP（默认开）")
+	syncApps := fs.String("sync", "", "on|off：所有应用用同一套 MCP（默认开）")
 	var clientList, names listFlag
 	fs.Var(&clientList, "client", "只处理这些客户端：claude-code、codex、cursor（可重复或用逗号分隔）")
 	fs.Usage = func() {
@@ -163,6 +175,13 @@ func parseTakeover(args []string) (o takeoverOptions, yes bool, err error) {
 			return o, false, badUsage("--auto 只能单独使用：mcpcell takeover --auto on|off")
 		}
 		o.auto = *auto
+		return o, false, nil
+	}
+	if *syncApps != "" {
+		if *syncApps != "on" && *syncApps != "off" || len(names) > 0 || len(clientList) > 0 || *shared || *perSession || yes {
+			return o, false, badUsage("--sync 只能单独使用：mcpcell takeover --sync on|off")
+		}
+		o.sync = *syncApps
 		return o, false, nil
 	}
 	switch {
@@ -244,8 +263,10 @@ func planTakeover(v mcpView, o takeoverOptions) takeoverPlan {
 			switch {
 			case c.State == "managed":
 				p.managed[a.ID] = append(p.managed[a.ID], c.Entry)
-			case c.State == "native" && c.Takeable:
+			case c.State == "native" && c.Takeable && c.Dead == "":
 				steps = append(steps, planStep(a, r, c, o.mode))
+			case c.State == "native" && c.Dead != "":
+				p.skipped = append(p.skipped, skipStep{a, c.Entry, "无法启动：" + c.Dead})
 			case c.State == "changed":
 				p.skipped = append(p.skipped, skipStep{a, c.Entry, "托管后被改过：先用 mcpcell restore 还原，或在管理页忘记托管记录"})
 			default:
@@ -395,7 +416,7 @@ type attachResult struct {
 
 // applyPlan has the daemon take the planned entries over, one request per
 // agent, and reports every entry.
-func applyPlan(w io.Writer, p takeoverPlan, mode string, offerAutostart bool) error {
+func applyPlan(w io.Writer, p takeoverPlan, mode string, offerAutostart, sync bool) error {
 	fmt.Fprintln(w, "正在托管：MCPcell 先确认每个 MCP 能在它下面启动，第一次可能要安装 npm 包……")
 	ok, failed := 0, 0
 	var done []agentView
@@ -435,6 +456,9 @@ func applyPlan(w io.Writer, p takeoverPlan, mode string, offerAutostart bool) er
 		}
 	}
 	fmt.Fprintf(w, "\n已托管 %d 个，失败 %d 个。\n", ok, failed)
+	if sync {
+		syncApps(w, p.agents)
+	}
 	said := map[string]bool{}
 	for _, a := range done {
 		app, _, _ := strings.Cut(a.ID, "@") // a Claude Code project is Claude Code
@@ -452,6 +476,67 @@ func applyPlan(w io.Writer, p takeoverPlan, mode string, offerAutostart bool) er
 	}
 	if failed > 0 {
 		return errors.New("部分条目没有托管")
+	}
+	return nil
+}
+
+// syncApps has the daemon add the MCPs it runs to the apps that lack them,
+// when every app keeps the same set (the syncApps setting, on by default).
+func syncApps(w io.Writer, agents []agentView) {
+	var st struct{ Sync bool }
+	if daemonCall("GET", "/api/auto", &st) != nil || !st.Sync {
+		return
+	}
+	var out struct {
+		Results []struct {
+			Client, Service, Error string
+			OK                     bool
+		}
+	}
+	if err := daemonSend("POST", "/api/sync", map[string]any{}, &out); err != nil {
+		fmt.Fprintf(w, "同步到其他应用失败：%v\n", err)
+		return
+	}
+	name := map[string]string{}
+	for _, a := range agents {
+		name[a.ID] = a.Name
+	}
+	n := 0
+	for _, r := range out.Results {
+		app := cmp.Or(name[r.Client], r.Client)
+		if !r.OK {
+			fmt.Fprintf(w, "  ✗ %s / %s：%s\n", app, r.Service, r.Error)
+			continue
+		}
+		n++
+		fmt.Fprintf(w, "  + %s / %s\n", app, r.Service)
+	}
+	if n > 0 {
+		fmt.Fprintf(w, "已同步到其他应用 %d 项：所有应用用同一套 MCP（mcpcell takeover --sync off 可关掉）。\n", n)
+	}
+}
+
+// setSyncApps turns keeping every app on the same set of MCPs on or off,
+// through the daemon when it runs.
+func setSyncApps(w io.Writer, on bool) error {
+	var st struct{ Sync bool }
+	if daemonCall("GET", "/api/auto", &st) == nil {
+		if err := daemonSend("POST", "/api/auto", map[string]bool{"sync": on}, &st); err != nil {
+			return err
+		}
+	} else {
+		home, err := registry.Home()
+		if err != nil {
+			return err
+		}
+		if err := registry.SetSyncApps(home, on); err != nil {
+			return err
+		}
+	}
+	if on {
+		fmt.Fprintln(w, "同一套 MCP：开。托管时把 MCP 加到还没有它的应用里；你从某个应用里还原或删掉的不会再加回去。")
+	} else {
+		fmt.Fprintln(w, "同一套 MCP：关。各应用保留自己的 MCP 清单。")
 	}
 	return nil
 }

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,12 +15,9 @@ import (
 	"github.com/luohui1/MCP-cell/internal/proc"
 )
 
-// The home page's dashboard: every 10 seconds the daemon measures what
-// MCPs cost right now (itself, every instance, every mcpcell-run) and what
-// they would cost if every conversation ran its own copy, and keeps a day
-// of that in memory (internal/metrics). It also follows each instance's
-// peak and hands it to the pool when the instance ends, which turns those
-// into each service's typical memory.
+// The page's numbers and chart: every 10 seconds the daemon measures what
+// MCPs cost right now (itself, every instance, every mcpcell-run) and who
+// uses them, and keeps a day of that in memory (internal/metrics).
 
 const (
 	sampleEvery = 10 * time.Second
@@ -34,25 +30,15 @@ type sampler struct {
 	every time.Duration // between samples
 
 	mu    sync.Mutex
-	peaks map[string]*runPeak // by instKey
-	now   metricsNow          // the last sample
+	now   metricsNow // the last sample
 	saved time.Time
-}
-
-type runPeak struct {
-	service string
-	bytes   uint64
-}
-
-func instKey(service string, pid int, started time.Time) string {
-	return service + "\x00" + strconv.Itoa(pid) + "\x00" + strconv.FormatInt(started.UnixNano(), 10)
 }
 
 func newSampler(home string, every time.Duration) *sampler {
 	if every <= 0 {
 		every = sampleEvery
 	}
-	sp := &sampler{ring: metrics.NewRing(int(24 * time.Hour / every)), peaks: map[string]*runPeak{}, every: every}
+	sp := &sampler{ring: metrics.NewRing(int(24 * time.Hour / every)), every: every}
 	if home != "" {
 		sp.path = filepath.Join(home, "metrics.bin")
 		_ = sp.ring.Load(sp.path, 24*time.Hour)
@@ -62,39 +48,51 @@ func newSampler(home string, every time.Duration) *sampler {
 
 // agentCount is how many conversations of one agent use MCPs right now.
 type agentCount struct {
-	Agent         string `json:"agent"` // claude-code | codex | cursor | the client's own name
+	Agent         string `json:"agent"` // a client id (claude-code, codex, vscode, …) or the client's own name
 	Conversations int    `json:"conversations"`
 }
 
 type metricsNow struct {
-	At            time.Time `json:"at"`
-	TotalBytes    uint64    `json:"totalBytes"` // the three below
-	DaemonBytes   uint64    `json:"daemonBytes"`
-	InstanceBytes uint64    `json:"instanceBytes"`
-	WrapperBytes  uint64    `json:"wrapperBytes"` // mcpcell-run, one per conversation and MCP
-	Wrappers      int       `json:"wrappers"`
-	// EstimateBytes is what the MCPs in use would cost if every conversation
-	// ran its own copy: per service, its conversations times its measured
-	// memory. Services not measured yet are left out and listed.
-	EstimateBytes   uint64       `json:"estimateBytes"`
-	Unmeasured      []string     `json:"unmeasured"`
+	At              time.Time    `json:"at"`
+	TotalBytes      uint64       `json:"totalBytes"` // the three below
+	DaemonBytes     uint64       `json:"daemonBytes"`
+	InstanceBytes   uint64       `json:"instanceBytes"`
+	WrapperBytes    uint64       `json:"wrapperBytes"` // mcpcell-run, one per conversation and MCP
+	Wrappers        int          `json:"wrappers"`
 	Instances       int          `json:"instances"`
 	RunningServices int          `json:"runningServices"`
 	Services        int          `json:"services"` // configured
 	Conversations   []agentCount `json:"conversations"`
 }
 
-// agentOf names the agent behind a session from its clientInfo, like the
-// page's agentOfClient.
+// clientMarks tell the agent from a session's clientInfo name, first match
+// wins; the page's agentOfClient uses the same list.
+var clientMarks = []struct{ mark, agent string }{
+	{"claude-ai", "claude-desktop"},
+	{"claude", "claude-code"},
+	{"codex", "codex"},
+	{"openai", "codex"},
+	{"cursor", "cursor"},
+	{"visual studio code", "vscode"},
+	{"vscode", "vscode"},
+	{"copilot", "copilot"},
+	{"antigravity", "antigravity"},
+	{"gemini", "gemini"},
+	{"windsurf", "windsurf"},
+	{"kiro", "kiro"},
+	{"cline", "cline"},
+	{"roo code", "roo"},
+	{"roo-code", "roo"},
+	{"opencode", "opencode"},
+}
+
+// agentOf names the agent behind a session from its clientInfo.
 func agentOf(client string) string {
 	c := strings.ToLower(client)
-	switch {
-	case strings.Contains(c, "claude"):
-		return "claude-code"
-	case strings.Contains(c, "codex"), strings.Contains(c, "openai"):
-		return "codex"
-	case strings.Contains(c, "cursor"):
-		return "cursor"
+	for _, m := range clientMarks {
+		if strings.Contains(c, m.mark) {
+			return m.agent
+		}
 	}
 	if f := strings.Fields(c); len(f) > 0 {
 		return f[0]
@@ -197,7 +195,7 @@ func (s *Server) sample(now time.Time) metricsNow {
 	}
 	s.mu.Unlock()
 
-	m := metricsNow{At: now, DaemonBytes: proc.Self().PrivateBytes, Unmeasured: []string{}, Instances: len(running)}
+	m := metricsNow{At: now, DaemonBytes: proc.Self().PrivateBytes, Instances: len(running)}
 	m.Services = len(s.configuredNames())
 
 	// Each wrapper process once, though it may have opened more sessions.
@@ -211,67 +209,19 @@ func (s *Server) sample(now time.Time) metricsNow {
 	m.Wrappers = len(wrappers)
 
 	perService := map[string]uint32{} // KB, under the configured name
-	current := map[string]uint64{}    // the largest instance of each service now
-	runningBase := map[string]bool{}
-	seen := map[string]bool{}
-	sp.mu.Lock()
 	for _, r := range running {
 		m.InstanceBytes += r.Bytes
-		base := s.baseName(r.Service)
-		perService[base] += uint32(r.Bytes >> 10)
-		runningBase[base] = true
-		current[r.Service] = max(current[r.Service], r.Bytes)
-		k := instKey(r.Service, r.PID, r.StartedAt)
-		seen[k] = true
-		if pk := sp.peaks[k]; pk != nil {
-			pk.bytes = max(pk.bytes, r.Bytes)
-		} else {
-			sp.peaks[k] = &runPeak{service: r.Service, bytes: r.Bytes}
-		}
+		perService[s.baseName(r.Service)] += uint32(r.Bytes >> 10)
 	}
-	var ended []*runPeak
-	for k, pk := range sp.peaks {
-		if !seen[k] {
-			ended = append(ended, pk)
-			delete(sp.peaks, k)
-		}
-	}
-	sp.mu.Unlock()
-	for _, pk := range ended {
-		s.pool.RecordPeak(pk.service, pk.bytes)
-	}
-	typical := s.pool.Typical()
-	m.RunningServices = len(runningBase)
+	m.RunningServices = len(perService)
 	m.TotalBytes = m.DaemonBytes + m.InstanceBytes + m.WrapperBytes
-
-	// Without MCPcell every conversation starts each of its MCPs itself.
-	using := map[string]int{}
-	for _, ss := range list {
-		using[ss.service]++
-	}
-	unmeasured := map[string]bool{}
-	for name, n := range using {
-		each := typical[name]
-		if each == 0 {
-			each = current[name] // measured now, though the run has not ended
-		}
-		if each == 0 {
-			unmeasured[s.baseName(name)] = true
-			continue
-		}
-		m.EstimateBytes += uint64(n) * each
-	}
-	for name := range unmeasured {
-		m.Unmeasured = append(m.Unmeasured, name)
-	}
-	sort.Strings(m.Unmeasured)
 	m.Conversations = conversations(list)
 	total := 0
 	for _, c := range m.Conversations {
 		total += c.Conversations
 	}
 
-	sp.ring.Add(metrics.Point{At: uint32(now.Unix()), Total: kb(m.TotalBytes), Estimate: kb(m.EstimateBytes),
+	sp.ring.Add(metrics.Point{At: uint32(now.Unix()), Total: kb(m.TotalBytes),
 		Running: uint16(min(len(running), 0xffff)), Sessions: uint16(min(total, 0xffff))}, perService)
 	sp.mu.Lock()
 	sp.now = m
@@ -318,27 +268,17 @@ func (s *Server) saveMetrics() {
 	}
 }
 
-// FlushMetrics hands the peaks of the instances still running to the pool
-// and saves the samples; the daemon calls it on the way out.
+// FlushMetrics saves the samples; the daemon calls it on the way out.
 func (s *Server) FlushMetrics() {
-	sp := s.metrics
-	sp.mu.Lock()
-	peaks := sp.peaks
-	sp.peaks = map[string]*runPeak{}
-	sp.mu.Unlock()
-	for _, pk := range peaks {
-		s.pool.RecordPeak(pk.service, pk.bytes)
-	}
-	if sp.path != "" {
+	if s.metrics.path != "" {
 		s.saveMetrics()
 	}
 }
 
 type metricPoint struct {
-	T        int64  `json:"t"` // Unix seconds
-	Total    uint64 `json:"total"`
-	Estimate uint64 `json:"estimate"`
-	Running  int    `json:"running"`
+	T       int64  `json:"t"` // Unix seconds
+	Total   uint64 `json:"total"`
+	Running int    `json:"running"`
 	// Conversations is the most conversations at once in the step.
 	Conversations int `json:"conversations"`
 }
@@ -387,7 +327,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if span > 0 {
 		for _, p := range metrics.Downsample(s.metrics.ring.Since(from), bucket) {
 			out.Points = append(out.Points, metricPoint{T: int64(p.At), Total: uint64(p.Total) << 10,
-				Estimate: uint64(p.Estimate) << 10, Running: int(p.Running), Conversations: int(p.Sessions)})
+				Running: int(p.Running), Conversations: int(p.Sessions)})
 		}
 	}
 	s.metrics.mu.Lock()

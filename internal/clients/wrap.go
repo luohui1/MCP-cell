@@ -142,14 +142,22 @@ func marshalPlain(v any) (json.RawMessage, error) {
 }
 
 // wrapJSON rewrites a JSON entry to run its command through the wrapper,
-// keeping every other member as it was.
+// keeping every other member as it was. A command given as one array
+// (OpenCode) stays one array.
 func wrapJSON(raw []byte, wrapper string, e Entry) (object, error) {
 	o, err := parseObject(raw)
 	if err != nil {
 		return nil, err
 	}
 	for _, m := range o {
-		if m.key == "command" && !bytes.HasPrefix(bytes.TrimSpace(m.value), []byte(`"`)) {
+		if m.key != "command" {
+			continue
+		}
+		switch bytes.TrimSpace(m.value)[0] {
+		case '[':
+			return o.set("command", append([]string{wrapper}, wrapArgs(e.Command, e.Args)...), "type"), nil
+		case '"':
+		default:
 			return nil, errors.New("command 不是字符串，暂不支持包装")
 		}
 	}
@@ -157,10 +165,18 @@ func wrapJSON(raw []byte, wrapper string, e Entry) (object, error) {
 	return o.set("args", wrapArgs(e.Command, e.Args), "command"), nil
 }
 
-// newJSON is a new wrapped entry for server.
-func newJSON(withType bool, wrapper string, server Entry) object {
+// newJSON is a new wrapped entry for server, written in style.
+func newJSON(style jsonStyle, wrapper string, server Entry) object {
 	var o object
-	if withType {
+	if style == styleArray {
+		o = o.set("type", "local", "")
+		o = o.set("command", append([]string{wrapper}, wrapArgs(server.Command, server.Args)...), "type")
+		if len(server.Env) > 0 {
+			o = o.set("environment", server.Env, "command")
+		}
+		return o
+	}
+	if style == styleTyped {
 		o = o.set("type", "stdio", "")
 	}
 	o = o.set("command", wrapper, "type")

@@ -224,6 +224,9 @@ func (s *Server) attachOne(c clients.Client, name string, req takeoverRequest, t
 	}
 	if err != nil {
 		s.opts.Log.Warn("not taken over: the service does not start", "client", c.ID(), "entry", name, "service", service, "err", firstLine(err.Error()))
+		// Remembered, so 一键托管 and automatic takeover leave it alone
+		// until the entry changes.
+		_ = s.opts.Takeovers.MarkFailed(c.ID(), name, clients.EntryKey(ev.Entry), startProblem(err))
 		return fail("MCPcell 试着启动它失败，没有接管，条目保持原样：" + startProblem(err))
 	}
 	if !ev.ServiceExists {
@@ -248,6 +251,7 @@ func (s *Server) attachOne(c clients.Client, name string, req takeoverRequest, t
 	if err := s.opts.Takeovers.Put(rec); err != nil {
 		return fail("已改写客户端配置，但保存接管记录失败：" + err.Error())
 	}
+	_ = s.opts.Takeovers.ClearFailed(c.ID(), name)
 	s.opts.Log.Info("taken over", "client", c.ID(), "entry", name, "service", service)
 	return service, created, true
 }

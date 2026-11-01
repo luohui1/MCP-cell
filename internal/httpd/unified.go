@@ -29,6 +29,9 @@ type agentCell struct {
 	// Takeable: native, and MCPcell can run it (local stdio, reproducible env).
 	Takeable bool   `json:"takeable,omitempty"`
 	Drift    string `json:"drift,omitempty"` // managed, but edited since (clients.EntryView.Drift)
+	// Dead: native, but its program is missing or it did not start
+	// (clients.EntryView.Dead); 一键托管 leaves it out.
+	Dead string `json:"dead,omitempty"`
 }
 
 type mcpRow struct {
@@ -45,6 +48,8 @@ type mcpRow struct {
 	Proposed string               `json:"proposed,omitempty"` // service a takeover or add would create
 	Agents   map[string]agentCell `json:"agents"`
 	CanAdd   bool                 `json:"canAdd"` // can be added to agents that lack it
+	// SyncTo: the apps a sync would add it to, so every app has the same set (sync.go).
+	SyncTo []string `json:"syncTo,omitempty"`
 
 	source *clients.Entry // a native entry to create the service from
 	args   []string
@@ -115,9 +120,12 @@ func (s *Server) unified() (unifiedResponse, error) {
 			default:
 				cell.State, key = "native", "key:"+shortHash(clients.EntryKey(ev.Entry))
 			}
-			if cell.State == "native" && clients.Takeable(ev) {
-				cell.Takeable = true
-				sum.Shareable++
+			if cell.State == "native" {
+				cell.Dead = ev.Dead
+				if clients.Takeable(ev) && ev.Dead == "" {
+					sum.Shareable++
+				}
+				cell.Takeable = clients.Takeable(ev)
 			}
 			e := ev
 			r := row(key, func() *mcpRow {
@@ -157,6 +165,7 @@ func (s *Server) unified() (unifiedResponse, error) {
 		}
 		out = append(out, r)
 	}
+	s.markSync(out, agents, cfg.Services)
 	sort.Slice(out, func(a, b int) bool {
 		ka, kb := rowOrder[prefix(out[a].Key)], rowOrder[prefix(out[b].Key)]
 		if ka != kb {
@@ -259,10 +268,16 @@ func (s *Server) addToAgent(c clients.Client, key string) (string, error) {
 			row = r
 		}
 	}
-	switch {
-	case row == nil:
+	if row == nil {
 		return "", errors.New("这个 MCP 已不存在，请刷新")
-	case !row.CanAdd:
+	}
+	return s.addRow(c, row)
+}
+
+// addRow puts row into c, creating the MCPcell service from another agent's
+// entry first if needed; the caller holds takeMu.
+func (s *Server) addRow(c clients.Client, row *mcpRow) (string, error) {
+	if !row.CanAdd {
 		return "", errors.New(row.Reason)
 	}
 	if _, has := row.Agents[c.ID()]; has {

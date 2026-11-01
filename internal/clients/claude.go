@@ -307,7 +307,7 @@ func (c *ClaudeCode) Add(name string, t Target) (Record, error) {
 	}
 	written, _ := json.Marshal(httpEntry(true, t.URL, t.Token))
 	if t.wrapped() {
-		written, _ = marshalPlain(newJSON(true, t.Wrapper, t.Server))
+		written, _ = marshalPlain(newJSON(styleTyped, t.Wrapper, t.Server))
 	}
 	rec.Written = string(written)
 	if err := s.add(name, rec.Written); err != nil {

@@ -33,6 +33,18 @@ type storeDoc struct {
 	Seen     []string    `json:",omitempty"`
 	Baseline []string    `json:",omitempty"`
 	Events   []AutoEvent `json:",omitempty"`
+	Failed   []Failed    `json:",omitempty"`
+}
+
+// Failed is an entry whose server did not start when MCPcell tried it, as
+// the entry was then (Key): 一键托管 and automatic takeover leave it alone
+// until it changes or a takeover by hand works.
+type Failed struct {
+	Client string    `json:"client"`
+	Name   string    `json:"name"`
+	Key    string    `json:"key"`
+	Error  string    `json:"error"`
+	At     time.Time `json:"at"`
 }
 
 // Exclusion is an entry not to take over by itself: the user restored it or
@@ -159,6 +171,43 @@ func (s *Store) dropExclusionLocked(client, name string) bool {
 	n := len(s.doc.Excluded)
 	s.doc.Excluded = slices.DeleteFunc(s.doc.Excluded, func(e Exclusion) bool { return e.Client == client && e.Name == name })
 	return len(s.doc.Excluded) != n
+}
+
+// FailedStart returns the failed start recorded for the entry with key.
+func (s *Store) FailedStart(client, name, key string) (Failed, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range s.doc.Failed {
+		if f.Client == client && f.Name == name && f.Key == key {
+			return f, true
+		}
+	}
+	return Failed{}, false
+}
+
+// MarkFailed records that the entry, as key, did not start.
+func (s *Store) MarkFailed(client, name, key, why string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropFailedLocked(client, name)
+	s.doc.Failed = append(s.doc.Failed, Failed{Client: client, Name: name, Key: key, Error: why, At: time.Now()})
+	return s.saveLocked()
+}
+
+// ClearFailed forgets a failed start: the entry was taken over after all.
+func (s *Store) ClearFailed(client, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dropFailedLocked(client, name) {
+		return nil
+	}
+	return s.saveLocked()
+}
+
+func (s *Store) dropFailedLocked(client, name string) bool {
+	n := len(s.doc.Failed)
+	s.doc.Failed = slices.DeleteFunc(s.doc.Failed, func(f Failed) bool { return f.Client == client && f.Name == name })
+	return len(s.doc.Failed) != n
 }
 
 func seenKey(client, name string) string { return client + "/" + name }

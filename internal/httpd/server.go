@@ -130,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/shutdown", s.api(s.handleShutdown))
 	mux.HandleFunc("/api/auto", s.api(s.handleAuto))
 	mux.HandleFunc("POST /api/auto/ack", s.api(s.handleAutoAck))
+	mux.HandleFunc("POST /api/sync", s.api(s.handleSync))
 	mux.HandleFunc("GET /api/desktop", s.api(s.handleDesktop))
 	mux.HandleFunc("POST /api/desktop", s.api(s.handleDesktop))
 	mux.HandleFunc("POST /api/window", s.api(s.handleWindow))

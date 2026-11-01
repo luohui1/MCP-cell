@@ -101,15 +101,10 @@ type entry struct {
 	lastErrAt  time.Time
 	lastStderr string
 	note       string // non-fatal: why the service runs through npx after all
-	// calls and lastUsed sum up the instances that already ended; peaks
-	// are the private commit peaks of recent runs (persisted).
+	// calls and lastUsed sum up the instances that already ended.
 	calls    uint64
 	lastUsed time.Time
-	peaks    []uint64
 }
-
-// maxPeaks is how many runs the typical memory is taken from.
-const maxPeaks = 5
 
 // slot is one instance of a service, or one being started.
 type slot struct {
@@ -240,52 +235,12 @@ func (p *Pool) restoreFailureLocked(e *entry) {
 	if f := p.opts.Catalog.Failure(e.name, fp); f != nil {
 		e.failures, e.lastErr, e.lastErrAt, e.failedAt = f.Failures, f.Error, f.At, f.At
 	}
-	e.peaks = p.opts.Catalog.Peaks(e.name, fp)
-}
-
-// RecordPeak adds the private commit peak of one run of the service, as
-// measured while it ran. The median of the last few is its typical memory.
-func (p *Pool) RecordPeak(name string, bytes uint64) {
-	if bytes == 0 {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	e := p.entries[name]
-	if e == nil {
-		return
-	}
-	e.peaks = append(e.peaks, bytes)
-	if len(e.peaks) > maxPeaks {
-		e.peaks = e.peaks[len(e.peaks)-maxPeaks:]
-	}
-	if p.opts.Catalog != nil {
-		if err := p.opts.Catalog.SetPeaks(name, p.fingerprint(e.def), e.peaks); err != nil {
-			p.opts.Log.Warn("saving memory peaks", "service", name, "err", err)
-		}
-	}
-}
-
-// Typical returns each service's typical memory: the median peak of its
-// last runs, for the services measured at least once.
-func (p *Pool) Typical() map[string]uint64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	out := map[string]uint64{}
-	for name, e := range p.entries {
-		if m := median(e.peaks); m > 0 {
-			out[name] = m
-		}
-	}
-	return out
 }
 
 // InstanceUsage is one running instance's memory, for the sampler.
 type InstanceUsage struct {
-	Service   string
-	PID       int
-	StartedAt time.Time
-	Bytes     uint64 // private commit of its process tree
+	Service string
+	Bytes   uint64 // private commit of its process tree
 }
 
 // Running measures every running instance (one process query each).
@@ -306,24 +261,9 @@ func (p *Pool) Running() []InstanceUsage {
 	p.mu.Unlock()
 	out := make([]InstanceUsage, 0, len(runs))
 	for _, r := range runs {
-		snap := r.inst.Snapshot()
-		out = append(out, InstanceUsage{Service: r.name, PID: snap.PID, StartedAt: snap.StartedAt, Bytes: snap.Usage.PrivateBytes})
+		out = append(out, InstanceUsage{Service: r.name, Bytes: r.inst.Snapshot().Usage.PrivateBytes})
 	}
 	return out
-}
-
-// median of the recorded peaks; 0 when none was measured yet.
-func median(v []uint64) uint64 {
-	if len(v) == 0 {
-		return 0
-	}
-	s := slices.Clone(v)
-	slices.Sort(s)
-	if n := len(s); n%2 == 1 {
-		return s[n/2]
-	} else {
-		return (s[n/2-1] + s[n/2]) / 2
-	}
 }
 
 // saveFailureLocked keeps e's failed-start state across daemon restarts:
@@ -1278,23 +1218,19 @@ type ServiceStatus struct {
 	Failures       int      `json:"failures,omitempty"` // consecutive failed starts; 0 once one succeeds
 	// Calls since the daemon started, ended instances included; LastUsedAt
 	// is the last activity of any instance.
-	Calls      uint64     `json:"calls"`
-	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
-	// TypicalBytes is the median private commit peak of the last runs
-	// (TypicalRuns of them); 0 until one was measured.
-	TypicalBytes uint64             `json:"typicalBytes,omitempty"`
-	TypicalRuns  int                `json:"typicalRuns,omitempty"`
-	Direct       bool               `json:"direct"` // running as node <bin>, without npx
-	Lean         bool               `json:"lean"`   // memory-saving node flags enabled
-	Package      *PackageInfo       `json:"package,omitempty"`
-	Catalog      *CatalogInfo       `json:"catalog,omitempty"`
-	Note         string             `json:"note,omitempty"`
-	LastError    string             `json:"lastError,omitempty"`
-	LastErrorAt  *time.Time         `json:"lastErrorAt,omitempty"`
-	RetryAt      *time.Time         `json:"retryAt,omitempty"`
-	StderrTail   string             `json:"stderrTail,omitempty"`
-	Instance     *instance.Snapshot `json:"instance,omitempty"`  // a shared service's instance
-	Instances    []SessionInstance  `json:"instances,omitempty"` // a per-session service's instances
+	Calls       uint64             `json:"calls"`
+	LastUsedAt  *time.Time         `json:"lastUsedAt,omitempty"`
+	Direct      bool               `json:"direct"` // running as node <bin>, without npx
+	Lean        bool               `json:"lean"`   // memory-saving node flags enabled
+	Package     *PackageInfo       `json:"package,omitempty"`
+	Catalog     *CatalogInfo       `json:"catalog,omitempty"`
+	Note        string             `json:"note,omitempty"`
+	LastError   string             `json:"lastError,omitempty"`
+	LastErrorAt *time.Time         `json:"lastErrorAt,omitempty"`
+	RetryAt     *time.Time         `json:"retryAt,omitempty"`
+	StderrTail  string             `json:"stderrTail,omitempty"`
+	Instance    *instance.Snapshot `json:"instance,omitempty"`  // a shared service's instance
+	Instances   []SessionInstance  `json:"instances,omitempty"` // a per-session service's instances
 }
 
 func (p *Pool) Status() []ServiceStatus {
@@ -1319,7 +1255,7 @@ func (p *Pool) Status() []ServiceStatus {
 			MemoryLimit:    uint64(e.def.MemoryLimit),
 			Lean:           e.def.LeanEnabled(),
 			Starts:         e.starts, Failures: e.failures, Note: e.note, LastError: e.lastErr, StderrTail: e.lastStderr,
-			Calls: e.calls, TypicalBytes: median(e.peaks), TypicalRuns: len(e.peaks),
+			Calls: e.calls,
 		}
 		if !e.def.PerSession() && p.perSessionLocked(e) {
 			st.Mode = registry.ModePerSession
