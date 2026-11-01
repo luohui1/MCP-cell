@@ -228,12 +228,34 @@ func TestCodexInlineTableRefused(t *testing.T) {
 	}
 }
 
-// fakeClaude emulates `claude mcp remove/add-json -s user` on a config file.
+// fakeClaude emulates `claude mcp remove/add-json -s user|local` on a config
+// file; the local scope is the project the CLI runs in.
 func fakeClaude(t *testing.T, path string, failAdd *bool) Runner {
-	return func(args ...string) ([]byte, error) {
+	return func(dir string, args ...string) ([]byte, error) {
 		var doc map[string]any
 		_ = json.Unmarshal([]byte(read(t, path)), &doc)
-		servers, _ := doc["mcpServers"].(map[string]any)
+		if doc == nil {
+			doc = map[string]any{}
+		}
+		holder := doc
+		if args[3] == "local" {
+			projects, _ := doc["projects"].(map[string]any)
+			if projects == nil {
+				projects = map[string]any{}
+				doc["projects"] = projects
+			}
+			p, _ := projects[filepath.ToSlash(dir)].(map[string]any)
+			if p == nil {
+				p = map[string]any{}
+				projects[filepath.ToSlash(dir)] = p
+			}
+			holder = p
+		}
+		servers, _ := holder["mcpServers"].(map[string]any)
+		if servers == nil {
+			servers = map[string]any{}
+			holder["mcpServers"] = servers
+		}
 		switch {
 		case args[1] == "remove":
 			delete(servers, args[4])

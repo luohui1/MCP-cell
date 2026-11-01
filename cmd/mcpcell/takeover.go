@@ -435,12 +435,17 @@ func applyPlan(w io.Writer, p takeoverPlan, mode string, offerAutostart bool) er
 		}
 	}
 	fmt.Fprintf(w, "\n已托管 %d 个，失败 %d 个。\n", ok, failed)
+	said := map[string]bool{}
 	for _, a := range done {
-		hint := takeoverHint[a.ID]
+		app, _, _ := strings.Cut(a.ID, "@") // a Claude Code project is Claude Code
+		hint := takeoverHint[app]
 		if hint == "" {
 			hint = a.Name + " 重启后生效"
 		}
-		fmt.Fprintln(w, "  "+hint)
+		if !said[hint] {
+			said[hint] = true
+			fmt.Fprintln(w, "  "+hint)
+		}
 	}
 	if ok > 0 && offerAutostart {
 		fmt.Fprintln(w, "建议开启开机自启，让托管的 MCP 随时可用：mcpcell autostart on")

@@ -169,7 +169,14 @@ func TestClaudeCodeWrapViaCLI(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	path := filepath.Join(dir, ".claude.json")
 	write(t, path, `{"mcpServers": {"context7": {"type": "stdio", "command": "cmd", "args": ["/c", "npx", "-y", "@upstash/context7-mcp"], "env": {"K": "v"}}}}`)
-	c := NewClaudeCode(t.TempDir(), t.TempDir(), fakeClaude(t, path, nil))
+	fake := fakeClaude(t, path, nil)
+	var sent string // what add-json was given: the real CLI stores it as is
+	c := NewClaudeCode(t.TempDir(), t.TempDir(), func(dir string, args ...string) ([]byte, error) {
+		if args[1] == "add-json" {
+			sent = args[5]
+		}
+		return fake(dir, args...)
+	})
 	inTemp(t, c.Path())
 	rec, err := c.Attach("context7", Target{Wrapper: wrapper})
 	if err != nil {
@@ -180,8 +187,8 @@ func TestClaudeCodeWrapViaCLI(t *testing.T) {
 	if !ok || inner.Command != "cmd" || len(inner.Args) != 4 || entries[0].Env["K"] != "v" {
 		t.Fatalf("after wrap: %v %v", entries[0].Command, entries[0].Args)
 	}
-	if !strings.Contains(rec.Written, `"type":"stdio","command":`) {
-		t.Fatalf("member order not kept: %s", rec.Written)
+	if !strings.Contains(sent, `"type":"stdio","command":`) {
+		t.Fatalf("member order not kept: %s", sent)
 	}
 	if err := c.Restore(rec); err != nil {
 		t.Fatal(err)

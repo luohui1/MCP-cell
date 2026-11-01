@@ -29,7 +29,7 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, clientsResponse{
-		Clients:   clients.Overview(s.opts.Clients, s.opts.Takeovers, cfg.Services, s.baseURL()),
+		Clients:   clients.Overview(clients.Expand(s.opts.Clients), s.opts.Takeovers, cfg.Services, s.baseURL()),
 		Autostart: s.autostart(),
 	})
 }

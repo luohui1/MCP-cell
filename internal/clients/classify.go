@@ -95,6 +95,8 @@ func Classify(e Entry, baseURL string) (Class, string) {
 		return ClassUnknown, "无法识别的配置写法"
 	case e.Client == "codex" && (e.Name == "codex" || e.Name == "node_repl" || e.Name == "cua_repl"):
 		return ClassInternal, "Codex 应用自带的组件，和应用进程绑定"
+	case e.Hold != "":
+		return ClassUnknown, e.Hold
 	case len(e.EnvVars) > 0:
 		return ClassUnknown, "通过 env_vars 读取客户端自己的环境变量，MCPcell 拿不到这些值"
 	}

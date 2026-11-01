@@ -1,11 +1,13 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/luohui1/MCP-cell/internal/clients"
 	"github.com/luohui1/MCP-cell/internal/registry"
 )
 
@@ -220,5 +222,31 @@ args = ["mcp-server-time"]
 	}
 	if _, err = run("", "--client", "vim"); err == nil {
 		t.Fatal("an unknown client was not an error")
+	}
+
+	// restore --all while the daemon runs goes through it: the daemon drops
+	// its records and will not take the restored entries over again.
+	t.Setenv("USERPROFILE", userHome)
+	t.Setenv("HOME", userHome)
+	if code := dispatch([]string{"restore", "--all"}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("restore --all = %d", code)
+	}
+	if readFile(t, cursorFile) != cursorOrig || readFile(t, codexFile) != codexOrig {
+		t.Fatal("restore --all did not put the configurations back")
+	}
+	// The daemon itself knows: its own records say the entries were restored
+	// (restoring around it would leave them only on disk).
+	var auto struct {
+		Excluded []clients.Exclusion `json:"excluded"`
+	}
+	if err := daemonCall("GET", "/api/auto", &auto); err != nil {
+		t.Fatal(err)
+	}
+	if len(auto.Excluded) != 5 {
+		t.Fatalf("the daemon lists %d restored entries, want 5", len(auto.Excluded))
+	}
+	store, _ := clients.OpenStore(home)
+	if len(store.All()) != 0 || len(store.Exclusions()) == 0 {
+		t.Fatalf("after restore: %d records, %d exclusions", len(store.All()), len(store.Exclusions()))
 	}
 }

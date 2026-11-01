@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/luohui1/MCP-cell/internal/clients"
@@ -24,6 +25,27 @@ import (
 type fileStamp struct {
 	mod  time.Time
 	size int64
+}
+
+// projectsBaseline is recorded once the Claude Code projects that existed at
+// the first look have been: a project that shows up later (the user ran
+// `claude mcp add` in it) has nothing but new servers.
+const projectsBaseline = "claude-code@*"
+
+// stamp is what tells whether c's configuration changed: its file, and for
+// a Claude Code project its .mcp.json too. ok is false when the file is gone.
+func stamp(c clients.Client) (st [2]fileStamp, ok bool) {
+	info, err := os.Stat(c.Path())
+	if err != nil {
+		return st, false
+	}
+	st[0] = fileStamp{info.ModTime(), info.Size()}
+	if p, isProject := c.(*clients.ClaudeProject); isProject {
+		if info, err := os.Stat(filepath.Join(p.Dir(), ".mcp.json")); err == nil {
+			st[1] = fileStamp{info.ModTime(), info.Size()}
+		}
+	}
+	return st, true
 }
 
 func (s *Server) runAutoTakeover(ctx context.Context, every time.Duration) {
@@ -49,19 +71,21 @@ func (s *Server) autoTakeover() {
 	if err != nil {
 		return
 	}
-	for _, c := range s.opts.Clients {
-		st, err := os.Stat(c.Path())
-		if err != nil {
+	for _, c := range clients.Expand(s.opts.Clients) {
+		st, ok := stamp(c)
+		if !ok {
 			continue
 		}
-		stamp := fileStamp{st.ModTime(), st.Size()}
 		s.mu.Lock()
-		same := s.autoStamps[c.ID()] == stamp
-		s.autoStamps[c.ID()] = stamp
+		same := s.autoStamps[c.ID()] == st
+		s.autoStamps[c.ID()] = st
 		s.mu.Unlock()
 		if !same {
 			s.autoClient(c, cfg)
 		}
+	}
+	if !s.opts.Takeovers.Baselined(projectsBaseline) {
+		_ = s.opts.Takeovers.MarkSeen(projectsBaseline, nil, true)
 	}
 }
 
@@ -73,13 +97,18 @@ func (s *Server) autoClient(c clients.Client, cfg *registry.Config) {
 		return
 	}
 	if !store.Baselined(c.ID()) {
-		// The first look: what is there already is not new. 一键托管 is for those.
-		names := make([]string, 0, len(v.Entries))
-		for _, ev := range v.Entries {
-			names = append(names, ev.Name)
+		if _, project := clients.ProjectDir(c.ID()); project && store.Baselined(projectsBaseline) {
+			// A project that appeared since the first look: all of it is new.
+			_ = store.MarkSeen(c.ID(), nil, true)
+		} else {
+			// The first look: what is there already is not new. 一键托管 is for those.
+			names := make([]string, 0, len(v.Entries))
+			for _, ev := range v.Entries {
+				names = append(names, ev.Name)
+			}
+			_ = store.MarkSeen(c.ID(), names, true)
+			return
 		}
-		_ = store.MarkSeen(c.ID(), names, true)
-		return
 	}
 	var take, seen []string
 	again := map[string]int{} // entries the agent put back, with the times already re-taken

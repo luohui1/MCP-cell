@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,8 +93,10 @@ func openTakeovers() ([]clients.Client, *clients.Store, error) {
 	return clients.All(userHome, filepath.Join(home, "backups")), store, nil
 }
 
-// runRestore undoes takeovers straight from takeover.json; the daemon does
-// not need to be running, so this always works as the way back.
+// runRestore undoes takeovers. The daemon does not need to be running, so
+// this always works as the way back; while it runs, it does the restoring:
+// it holds the takeover records, and seeing the original entries come back
+// on their own it would take them over again.
 func runRestore(args []string) error {
 	cs, store, err := openTakeovers()
 	if err != nil {
@@ -119,12 +122,18 @@ func runRestore(args []string) error {
 			names[n] = true
 		}
 	}
-	recs := store.All()
+	var recs []clients.Record
+	for _, rec := range store.All() {
+		if all || rec.Client == client && (len(names) == 0 || names[rec.Name]) {
+			recs = append(recs, rec)
+		}
+	}
+	var st psStatus
+	if len(recs) > 0 && daemonCall("GET", "/api/status", &st) == nil {
+		return restoreThroughDaemon(cs, recs)
+	}
 	done, failed := 0, 0
 	for _, rec := range recs {
-		if !all && (rec.Client != client || len(names) > 0 && !names[rec.Name]) {
-			continue
-		}
 		c := clients.FindClient(cs, rec.Client)
 		if c == nil {
 			continue
@@ -150,6 +159,52 @@ func runRestore(args []string) error {
 	return nil
 }
 
+// restoreThroughDaemon asks the running daemon to restore recs, one request
+// per client, the way the page's 改回原样 does.
+func restoreThroughDaemon(cs []clients.Client, recs []clients.Record) error {
+	var order []string
+	byClient := map[string][]string{}
+	for _, rec := range recs {
+		if _, seen := byClient[rec.Client]; !seen {
+			order = append(order, rec.Client)
+		}
+		byClient[rec.Client] = append(byClient[rec.Client], rec.Name)
+	}
+	done, failed := 0, 0
+	for _, id := range order {
+		name := id
+		if c := clients.FindClient(cs, id); c != nil {
+			name = c.Name()
+		}
+		var out struct {
+			Results []struct {
+				Name  string `json:"name"`
+				OK    bool   `json:"ok"`
+				Error string `json:"error"`
+			} `json:"results"`
+		}
+		if err := daemonSend("POST", "/api/clients/"+url.PathEscape(id)+"/restore", map[string]any{"names": byClient[id]}, &out); err != nil {
+			failed += len(byClient[id])
+			fmt.Printf("  ✗ %s：%v\n", name, err)
+			continue
+		}
+		for _, r := range out.Results {
+			if !r.OK {
+				failed++
+				fmt.Printf("  ✗ %s / %s：%s\n", name, r.Name, r.Error)
+				continue
+			}
+			done++
+			fmt.Printf("  ✓ %s / %s 已还原\n", name, r.Name)
+		}
+	}
+	fmt.Printf("还原 %d 个，失败 %d 个。改动后请重启对应客户端。\n", done, failed)
+	if failed > 0 {
+		return errors.New("部分条目没有还原")
+	}
+	return nil
+}
+
 // runClients prints what each client has and what MCPcell would do.
 func runClients() error {
 	cs, store, err := openTakeovers()
@@ -164,7 +219,7 @@ func runClients() error {
 	label := map[clients.Class]string{clients.ClassShared: "可共享", clients.ClassStateful: "需要会话隔离",
 		clients.ClassUnknown: "未验证", clients.ClassRemote: "远程 HTTP", clients.ClassManaged: "已托管", clients.ClassInternal: "客户端内置"}
 	takeable, managed := 0, 0
-	for _, v := range clients.Overview(cs, store, cfg.Services, fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)) {
+	for _, v := range clients.Overview(clients.Expand(cs), store, cfg.Services, fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)) {
 		switch {
 		case v.Error != "":
 			fmt.Printf("%s（%s）：%s\n\n", v.Name, v.Path, v.Error)

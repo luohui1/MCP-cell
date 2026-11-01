@@ -89,7 +89,7 @@ func (s *Server) unified() (unifiedResponse, error) {
 		row("svc:"+name, func() *mcpRow { return serviceRow(name, def, base) })
 	}
 	var agents []agentSummary
-	for _, v := range clients.Overview(s.opts.Clients, s.opts.Takeovers, cfg.Services, base) {
+	for _, v := range clients.Overview(clients.Expand(s.opts.Clients), s.opts.Takeovers, cfg.Services, base) {
 		sum := agentSummary{ID: v.ID, Name: v.Name, Path: v.Path, Found: v.Found, Error: v.Error, Total: len(v.Entries)}
 		for _, ev := range v.Entries {
 			cell := agentCell{Entry: ev.Name, Enabled: ev.Enabled, Class: ev.Class, Reason: ev.Reason, Drift: ev.Drift}

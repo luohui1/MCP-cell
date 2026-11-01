@@ -30,6 +30,11 @@ type Entry struct {
 	// EnvVars are names a client forwards from its own environment (Codex
 	// env_vars); MCPcell cannot see those values.
 	EnvVars []string `json:"envVars,omitempty"`
+	// Shared: it comes from a file shared with others (a project's
+	// .mcp.json), which MCPcell never edits.
+	Shared bool `json:"shared,omitempty"`
+	// Hold says why MCPcell must leave the entry as it is, if it must.
+	Hold string `json:"hold,omitempty"`
 }
 
 func (e *Entry) setEnv(env map[string]string) {
@@ -57,6 +62,10 @@ type Record struct {
 	// took the entry over again after the agent put the original back.
 	Auto       bool `json:"auto,omitempty"`
 	Reattached int  `json:"reattached,omitempty"`
+	// Override: the original lives in a shared file (a project's .mcp.json)
+	// and MCPcell added an entry that takes precedence; undoing it removes
+	// that entry.
+	Override bool `json:"override,omitempty"`
 }
 
 // Client is one AI client's configuration.

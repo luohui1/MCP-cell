@@ -2,6 +2,7 @@ package clients
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -65,7 +66,7 @@ func ModeFor(class Class, share bool) string {
 func Takeable(v EntryView) bool {
 	switch v.Class {
 	case ClassShared, ClassStateful, ClassUnknown:
-		return v.Kind == "stdio" && len(v.EnvVars) == 0
+		return v.Kind == "stdio" && len(v.EnvVars) == 0 && v.Hold == ""
 	}
 	return false
 }
@@ -167,7 +168,7 @@ func proposeName(e Entry, byKey map[string]string, services map[string]*registry
 	if name, ok := byKey[key]; ok {
 		return name
 	}
-	for _, candidate := range []string{e.Name, e.Name + "-" + e.Client} {
+	for _, candidate := range []string{e.Name, e.Name + "-" + clientSlug(e.Client)} {
 		if !validName(candidate) {
 			continue
 		}
@@ -195,11 +196,34 @@ func validName(s string) bool {
 	return true
 }
 
-// FindClient returns the client with id.
+// clientSlug is a client id fit for a service name: a Claude Code project
+// becomes claude-<its directory's name>.
+func clientSlug(id string) string {
+	if dir, ok := ProjectDir(id); ok {
+		id = "claude-" + filepath.Base(filepath.FromSlash(dir))
+	}
+	b := []byte(id)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
+
+// FindClient returns the client with id, a Claude Code project included,
+// even one that has no servers of its own any more (to restore a record).
 func FindClient(cs []Client, id string) Client {
 	for _, c := range cs {
 		if c.ID() == id {
 			return c
+		}
+	}
+	if dir, ok := ProjectDir(id); ok {
+		for _, c := range cs {
+			if cc, ok := c.(*ClaudeCode); ok {
+				return cc.Project(dir)
+			}
 		}
 	}
 	return nil

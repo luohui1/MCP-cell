@@ -79,7 +79,7 @@ type Server struct {
 	// is a variant of (variantService), so the page shows it under that one.
 	variantOf sync.Map
 	// autoStamps: the agents' configuration files as last looked at.
-	autoStamps map[string]fileStamp
+	autoStamps map[string][2]fileStamp
 
 	cfgMu  sync.Mutex // serializes config.json edits
 	takeMu sync.Mutex // serializes client config takeovers
@@ -91,7 +91,7 @@ func New(p *pool.Pool, opts Options) *Server {
 	}
 	s := &Server{opts: opts, pool: p, started: time.Now(), cookie: randomHex(32),
 		sessions: map[string]*session{}, codes: map[string]time.Time{}, runs: map[net.Conn]*runWriter{},
-		autoStamps: map[string]fileStamp{}}
+		autoStamps: map[string][2]fileStamp{}}
 	p.OnListChange(s.notifyListChanged)
 	return s
 }
