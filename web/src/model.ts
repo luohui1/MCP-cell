@@ -45,7 +45,7 @@ export const failing = (s: Service) => s.state === 'failed' || (s.failures ?? 0)
 // Three states for an MCP MCPcell runs: 待命 (not running, opens when an app
 // needs it), 运行中, 打不开 (with a plain reason). An MCP the apps still run
 // themselves is native; remote and built-in ones need nothing (other); one
-// whose program is gone or that did not start is ignored.
+// whose program is gone or that never started is ignored.
 export type McpKind = 'broken' | 'running' | 'standby' | 'native' | 'other' | 'ignored';
 
 export interface McpView {
@@ -77,7 +77,16 @@ export function mcpView(row: McpRow, status: Status): McpView {
   const base = { id: mcpId(row), row, services, sessions, managed, takeable, purpose: purposeOf(row, services) };
 
   const broken = services.find(failing);
-  if (broken) return { ...base, broken, kind: 'broken', tone: 'red', text: `打不开：${plainReason(broken.lastError)}` };
+  if (broken) {
+    const reason = plainReason(broken.lastError);
+    // One that never started, or whose program is gone, will not come back by
+    // itself: ignored like a native one that cannot start. Red is for one
+    // that worked and broke.
+    if (!services.some((s) => s.starts > 0 || s.catalog) || /程序不存在|未安装/.test(reason)) {
+      return { ...base, kind: 'ignored', tone: 'gray', text: `无法启动：${reason}` };
+    }
+    return { ...base, broken, kind: 'broken', tone: 'red', text: `打不开：${reason}` };
+  }
   if (managed && !row.service) return { ...base, kind: 'broken', tone: 'amber', text: 'MCPcell 中的配置已删除' };
   if (!row.service) {
     if (row.kind === 'http') return { ...base, kind: 'other', tone: 'gray', text: '远程' };

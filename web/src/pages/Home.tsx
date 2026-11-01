@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronDown, Compass, Info, Layers, Package, Play, Plus, RefreshCw, RotateCw, Square, Undo2 } from 'lucide-react';
+import { ChevronDown, ChevronLeft, Compass, Info, Layers, Package, Play, Plus, RefreshCw, RotateCw, Square, Undo2 } from 'lucide-react';
 import { autoApi, instancesOf, type AgentSummary, type AutoStatus, type McpRow } from '../api';
 import { useServiceActions } from '../actions';
 import { agentBrand, agentsOf, appOf, appsOf, candidates, canTake, isProject, pendingSync, restoreSteps, takeSteps, useAgentActions } from '../agents';
 import { useStatus, useUnified } from '../data';
+import { RunHead } from '../guide';
+import { RunView, useTakeoverRun } from '../run';
 import { bytes } from '../format';
 import { openGuide } from '../guide';
 import { BrandMark, ServiceAvatar } from '../icons';
@@ -12,7 +14,7 @@ import { kindRank, mcpView, plainReason, type McpView } from '../model';
 import { go, href, useRoute } from '../router';
 import { StatStrip, useNow } from '../stats';
 import { agentName } from '../timeline';
-import { Button, Card, cx, Dot, IconButton, Menu, Segmented, Switch } from '../ui';
+import { Button, Card, cx, Dot, IconButton, Menu, Modal, Segmented, Switch } from '../ui';
 
 // The MCP page: the app filter, three numbers, then every MCP in one card.
 // A row shows what the MCP is for, which apps have it, its state, and a
@@ -22,13 +24,15 @@ import { Button, Card, cx, Dot, IconButton, Menu, Segmented, Switch } from '../u
 type Acts = ReturnType<typeof useAgentActions>;
 
 export function HomePage() {
-  const { status } = useStatus();
+  const { status, refresh } = useStatus();
   const { data, error, reload } = useUnified();
   const acts = useAgentActions(reload);
   const svcActs = useServiceActions();
   const now = useNow();
   const only = useRoute().query.get('agent') ?? '';
   const [showOther, setShowOther] = useState(false);
+  const run = useTakeoverRun();
+  const [runOpen, setRunOpen] = useState(false);
 
   const agents = data ? agentsOf(data.agents) : [];
   const apps = appsOf(agents);
@@ -59,9 +63,13 @@ export function HomePage() {
                   size="sm"
                   variant="primary"
                   icon={<Layers className="size-3.5" />}
-                  busy={acts.busy}
+                  busy={run.running}
                   title={[offered.length && `托管 ${offered.length} 个`, toSync && `同步到其他应用 ${toSync} 项`].filter(Boolean).join('，')}
-                  onClick={() => acts.oneClick(offered.flatMap((c) => c.steps), sync, app ? [app] : undefined)}
+                  onClick={async () => {
+                    setRunOpen(true);
+                    await run.run(offered, sync, app ? [app] : undefined);
+                    await Promise.all([reload(), refresh()]);
+                  }}
                 >
                   一键托管
                 </Button>
@@ -114,6 +122,17 @@ export function HomePage() {
           </Card>
         )}
       </Body>
+      <Modal open={runOpen} onClose={() => !run.running && setRunOpen(false)} width={480}>
+        <RunHead run={run} />
+        <div className="mt-4 max-h-[400px] overflow-y-auto">
+          <RunView run={run} />
+        </div>
+        <div className="mt-5 flex justify-end">
+          <Button variant="primary" disabled={run.running} onClick={() => setRunOpen(false)}>
+            完成
+          </Button>
+        </div>
+      </Modal>
       {acts.dialog}
       {svcActs.deleteDialog}
     </>
@@ -297,13 +316,16 @@ function cellText(c: McpRow['agents'][string]): string {
  * projects): in color when taken over, faded and dashed when not (a click
  * takes those over). */
 function AppMarks({ row, agents, acts }: { row: McpRow; agents: AgentSummary[]; acts: Acts }) {
+  const [open, setOpen] = useState(false);
   const marks: ReactNode[] = [];
+  const tips: string[] = [];
   for (const app of appsOf(agents)) {
     const cells = agents.filter((a) => appOf(a.id) === app && row.agents[a.id]).map((a) => ({ a, c: row.agents[a.id] }));
     if (!cells.length) continue;
     const takeable = cells.filter(({ c }) => canTake(c)).map(({ a }) => a);
     const managed = cells.filter(({ c }) => c.state === 'managed');
     const tip = cells.map(({ a, c }) => `${a.name}：${cellText(c)}`).join('\n');
+    tips.push(tip);
     const brand = <BrandMark brand={agentBrand[app] ?? ''} className="size-3.5" />;
     const base = 'relative grid size-6 place-items-center rounded-full border';
     const count = cells.length > 1 && (
@@ -346,12 +368,27 @@ function AppMarks({ row, agents, acts }: { row: McpRow; agents: AgentSummary[]; 
       );
     }
   }
+  // Past three apps the rest fold into +N; a click unfolds them.
+  const folded = marks.length > maxMarks && !open;
+  const chip = 'grid h-6 min-w-6 place-items-center rounded-full border border-zinc-200 px-1.5 text-[11px] text-zinc-500 tabular-nums hover:border-zinc-400 hover:text-zinc-800 dark:border-zinc-700 dark:hover:text-zinc-100';
   return (
     <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-      {marks}
+      {folded ? marks.slice(0, maxMarks) : marks}
+      {folded && (
+        <button className={chip} title={tips.slice(maxMarks).join('\n')} onClick={() => setOpen(true)}>
+          +{marks.length - maxMarks}
+        </button>
+      )}
+      {open && marks.length > maxMarks && (
+        <button className={chip} title="收起" aria-label="收起" onClick={() => setOpen(false)}>
+          <ChevronLeft className="size-3" />
+        </button>
+      )}
     </div>
   );
 }
+
+const maxMarks = 3;
 
 const join = (items: ReactNode[]) => items.flatMap((x, i) => (i ? ['、', x] : [x]));
 

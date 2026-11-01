@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { TriangleAlert } from 'lucide-react';
-import { autoApi, takeover, unified, type AgentCell, type AgentSummary, type McpRow } from './api';
+import { takeover, unified, type AgentCell, type AgentSummary, type McpRow } from './api';
 import { useStatus, type Unified } from './data';
 import { firstLine } from './format';
 import { BrandMark } from './icons';
@@ -80,21 +80,13 @@ export function restoreSteps(r: McpRow, agents: AgentSummary[]): RestoreStep[] {
 export const pendingSync = (data: Unified, only?: string) =>
   data.rows.reduce((n, r) => n + (r.syncTo ?? []).filter((id) => !only || appOf(id) === only).length, 0);
 
-/** Takes over, then, when every app keeps the same set, adds the MCPs to
- * the apps that lack them (only to apps, when given). */
-export async function takeAndSync(steps: TakeStep[], sync: boolean, apps?: string[]) {
-  const taken = steps.length ? await attachAll(steps) : { ok: 0, failed: [] as string[], failedSteps: [] as TakeStep[] };
-  const added = sync ? (await autoApi.sync(apps)).results.filter((r) => r.ok).length : 0;
-  return { ...taken, added };
-}
-
 /** Rows 一键托管 takes over, with their steps (optionally for one app). */
 export function candidates(data: Unified, only?: string) {
   const agents = data.agents.filter((a) => a.found);
   return data.rows.map((row) => ({ row, steps: takeSteps(row, agents, only) })).filter((c) => c.steps.length > 0);
 }
 
-const byAgent = <T extends { agent: AgentSummary }>(steps: T[]) => {
+export const byAgent = <T extends { agent: AgentSummary }>(steps: T[]) => {
   const m = new Map<string, { agent: AgentSummary; steps: T[] }>();
   for (const s of steps) {
     const g = m.get(s.agent.id) ?? { agent: s.agent, steps: [] };
@@ -143,11 +135,11 @@ async function applyTakeover(steps: TakeStep[]): Promise<string> {
   return `已托管 ${ok} 个，${appliesTo(steps)}${failed.length ? `；${failed.length} 项无法托管，已忽略` : ''}`;
 }
 
-async function applyRestore(steps: RestoreStep[]): Promise<string> {
+async function applyRestore(steps: RestoreStep[], all = false): Promise<string> {
   const failed: string[] = [];
   let ok = 0;
   for (const g of byAgent(steps)) {
-    const { results } = await takeover.restore(g.agent.id, g.steps.map((s) => s.entry));
+    const { results } = await takeover.restore(g.agent.id, g.steps.map((s) => s.entry), false, all);
     for (const r of results) r.ok ? ok++ : failed.push(`${g.agent.name} ${r.name}：${r.error}`);
   }
   if (failed.length) throw new Error(`${ok ? `已还原 ${ok} 个，` : ''}${failed.length} 个失败：${failed[0]}`);
@@ -193,16 +185,6 @@ export function useAgentActions(reload: () => Promise<void>) {
     takeover(steps: TakeStep[]) {
       if (steps.length) apply(() => applyTakeover(steps));
     },
-    /** 一键托管: take everything over, and give every app the same set. */
-    oneClick(steps: TakeStep[], sync: boolean, apps?: string[]) {
-      apply(async () => {
-        const { ok, failed, added } = await takeAndSync(steps, sync, apps);
-        if (!ok && !added && failed.length) throw new Error(`托管失败：${failed[0]}`);
-        const done = [ok && `已托管 ${ok} 个`, added && `同步到其他应用 ${added} 项`].filter(Boolean).join('，') || '没有需要托管的';
-        const when = added ? `${applies['claude-code']}，其他应用重启后生效` : appliesTo(steps);
-        return `${done}${when ? `，${when}` : ''}${failed.length ? `；${failed.length} 项无法托管，已忽略` : ''}`;
-      });
-    },
     restore(steps: RestoreStep[]) {
       if (steps.length) apply(() => applyRestore(steps));
     },
@@ -215,7 +197,7 @@ export function useAgentActions(reload: () => Promise<void>) {
         note: '先备份配置文件',
         confirm: '还原',
         danger: true,
-        run: () => applyRestore(steps),
+        run: () => applyRestore(steps, true),
       });
     },
     forget(agent: AgentSummary, entry: string) {
@@ -233,6 +215,22 @@ export function useAgentActions(reload: () => Promise<void>) {
     },
     add(agent: AgentSummary, row: McpRow) {
       apply(async () => (await unified.add(agent.id, row.key), `已添加到 ${agent.name}，${applies[appOf(agent.id)] ?? '重启后生效'}`));
+    },
+    /** Adds row to several apps, one after another. */
+    addMany(list: AgentSummary[], row: McpRow) {
+      apply(async () => {
+        const failed: string[] = [];
+        for (const a of list) {
+          try {
+            await unified.add(a.id, row.key);
+          } catch (e) {
+            failed.push(`${a.name}：${firstLine((e as Error).message)}`);
+          }
+        }
+        const ok = list.length - failed.length;
+        if (!ok) throw new Error(`添加失败：${failed[0]}`);
+        return `已添加到 ${ok} 个应用，${appliesTo(list.map((agent) => ({ agent })))}${failed.length ? `；${failed.length} 个没加上` : ''}`;
+      });
     },
   };
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { ArrowLeft, ChevronRight, Copy, Layers, Package, Play, RotateCw, Square, Trash2, Undo2 } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Copy, Layers, Package, Play, Plus, RotateCw, Square, Trash2, Undo2 } from 'lucide-react';
 import { instancesOf, metricsApi, type AgentSummary, type InstanceSnapshot, type SessionInfo } from '../api';
 import { useServiceActions } from '../actions';
 import { agentsOf, brandOfAgent, canTake, isProject, restoreSteps, takeSteps, useAgentActions } from '../agents';
@@ -228,6 +228,7 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
   const instances = view.services.flatMap((s) => s.instances ?? []);
   const byAgent = (id: string) => view.sessions.filter((x) => agentOfClient(x.client) === id);
   const others = view.sessions.filter((x) => !agents.some((a) => a.id === agentOfClient(x.client)));
+  const missing: AgentSummary[] = []; // apps it could be added to: one line for all of them
   const lines = agents
     .map((a) => {
       const c = row.agents[a.id];
@@ -274,17 +275,29 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
         state = c.state === 'remote' ? '远程' : c.state === 'internal' ? '内置' : '未托管';
         why = c.reason;
       } else if (row.canAdd && row.service && view.kind !== 'broken' && !isProject(a.id)) {
-        state = '未添加';
-        action = (
-          <Button size="sm" variant="ghost" busy={acts.busy} onClick={() => acts.add(a, row)}>
-            添加
-          </Button>
-        );
+        missing.push(a);
+        return null;
       } else return null;
       if (c && !c.enabled) state += '（已停用）';
       return { id: a.id, brand: brandOfAgent(a.id), name: a.name, state, why, action, sessions };
     })
     .filter((l) => !!l);
+  if (missing.length) {
+    const one = missing.length === 1;
+    lines.push({
+      id: 'missing',
+      brand: one ? brandOfAgent(missing[0].id) : '',
+      name: one ? missing[0].name : `未添加 ${missing.length} 个应用`,
+      state: one ? '未添加' : missing.map((a) => a.name).join('、'),
+      why: undefined,
+      action: (
+        <Button size="sm" variant="ghost" busy={acts.busy} onClick={() => (one ? acts.add(missing[0], row) : acts.addMany(missing, row))}>
+          {one ? '添加' : '全部添加'}
+        </Button>
+      ),
+      sessions: [],
+    });
+  }
   if (others.length) lines.push({ id: 'other', brand: '', name: '其他程序', state: '直连', why: undefined, action: null, sessions: others });
   if (!lines.length) return <p className="text-sm text-zinc-500">暂无应用使用</p>;
 
@@ -302,7 +315,7 @@ function UsedBy({ view, agents, acts }: { view: McpView; agents: AgentSummary[];
                 aria-expanded={expanded}
               >
                 <ChevronRight className={cx('size-3.5 shrink-0 text-zinc-400 transition-transform', expanded && 'rotate-90', !l.sessions.length && 'invisible')} />
-                <BrandMark brand={l.brand} className="size-4 shrink-0" />
+                {l.id === 'missing' && !l.brand ? <Plus className="size-4 shrink-0 text-zinc-400" /> : <BrandMark brand={l.brand} className="size-4 shrink-0" />}
                 <span className="w-40 shrink-0 truncate text-[13px] font-medium" title={l.name}>{l.name}</span>
                 <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-500" title={l.why ? `${l.state}\n${l.why}` : l.state}>
                   {l.state}

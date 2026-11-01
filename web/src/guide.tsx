@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { CircleCheck, CircleX, Layers, Power, ScanSearch, Undo2 } from 'lucide-react';
-import { agentBrand, appliesTo, appOf, candidates, isProject, pendingSync, takeAndSync } from './agents';
+import { CircleCheck, CircleMinus, Layers, LoaderCircle, Power, ScanSearch, Undo2 } from 'lucide-react';
+import { agentBrand, appOf, candidates, isProject, pendingSync } from './agents';
 import { useStatus, useUnified } from './data';
-import { firstLine } from './format';
 import { BrandMark, Logo } from './icons';
+import { RunView, summaryText, useTakeoverRun } from './run';
 import { agentOrder, mcpView } from './model';
 import { agentName } from './timeline';
 import { Button, cx } from './ui';
@@ -47,13 +47,11 @@ export function Guide() {
   const [open, setOpen] = useState(() => !seen());
   const [step, setStep] = useState<Step>('intro');
   const [scanning, setScanning] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ mcps: number; entries: number; added: number; failed: string[]; applies: string } | null>(null);
+  const run = useTakeoverRun();
 
   useEffect(() => {
     const show = () => {
       setStep('intro');
-      setResult(null);
       setOpen(true);
     };
     window.addEventListener('mcpcell:guide', show);
@@ -70,7 +68,7 @@ export function Guide() {
   if (!open) return null;
 
   function close() {
-    if (busy) return;
+    if (run.running) return;
     markSeen();
     setOpen(false);
   }
@@ -82,22 +80,11 @@ export function Guide() {
     setScanning(false);
   }
 
-  // Counted in MCPs, like the button; an MCP counts once any of its apps
-  // took. Then every app gets the same set, when that is on.
+  // The third step shows the run as it goes (run.tsx).
   async function take(list: ReturnType<typeof candidates>) {
-    setBusy(true);
-    const todo = list.flatMap((c) => c.steps);
-    try {
-      const { ok, failed, failedSteps, added } = await takeAndSync(todo, sync);
-      const mcps = list.filter((c) => c.steps.some((s) => !failedSteps.includes(s))).length;
-      setResult({ mcps, entries: ok, added, failed, applies: added ? 'Claude Code 新对话生效，其他应用重启后生效' : appliesTo(todo) });
-    } catch (e) {
-      setResult({ mcps: 0, entries: 0, added: 0, failed: [firstLine((e as Error).message)], applies: '' });
-    } finally {
-      setBusy(false);
-      setStep('done');
-      await Promise.all([reload(), refresh()]);
-    }
+    setStep('done');
+    await run.run(list, sync);
+    await Promise.all([reload(), refresh()]);
   }
 
   // What the scan found: each app with its MCPs (Claude Code with its projects).
@@ -216,11 +203,11 @@ export function Guide() {
                 </>
               )}
               <div className="mt-6 flex justify-end gap-2">
-                <Button disabled={loading || busy} onClick={scan}>
+                <Button disabled={loading} onClick={scan}>
                   重新检测
                 </Button>
                 {work || loading ? (
-                  <Button variant="primary" icon={<Layers className="size-4" />} busy={busy} disabled={loading} onClick={() => take(offered)}>
+                  <Button variant="primary" icon={<Layers className="size-4" />} disabled={loading} onClick={() => take(offered)}>
                     一键托管{offered.length ? ` ${offered.length} 个` : ''}
                   </Button>
                 ) : (
@@ -232,28 +219,42 @@ export function Guide() {
             </>
           )}
 
-          {step === 'done' && result && (
-            <div className="flex flex-col items-center text-center">
-              {result.mcps > 0 || result.added > 0 ? <CircleCheck className="size-14 text-emerald-500" /> : <CircleX className="size-14 text-red-500" />}
-              <h1 className="mt-4 text-xl font-semibold tracking-tight">
-                {result.mcps > 0 ? `已托管 ${result.mcps} 个 MCP` : result.added > 0 ? '已同步' : '托管失败'}
-              </h1>
-              {(result.mcps > 0 || result.added > 0) && (
-                <p className="mt-1.5 text-sm text-zinc-500">
-                  {[result.entries && `${result.entries} 项配置`, result.added && `同步到其他应用 ${result.added} 项`, result.applies].filter(Boolean).join(' · ')}
-                </p>
-              )}
-              {result.failed.length > 0 && (
-                <p className="mt-3 text-[13px] text-zinc-400" title={result.failed.join('\n')}>
-                  {result.failed.length} 项无法托管，已忽略
-                </p>
-              )}
-              <Button className="mt-8 h-10 px-6" variant="primary" onClick={close}>
-                完成
-              </Button>
-            </div>
+          {step === 'done' && (
+            <>
+              <RunHead run={run} />
+              <div className="mt-4">
+                <RunView run={run} />
+              </div>
+              <div className="mt-6 flex justify-end">
+                <Button className="h-10 px-6" variant="primary" disabled={!run.summary} onClick={close}>
+                  完成
+                </Button>
+              </div>
+            </>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** What the run is doing, then what it did. */
+export function RunHead({ run }: { run: ReturnType<typeof useTakeoverRun> }) {
+  const s = run.summary && summaryText(run.summary);
+  return (
+    <div className="flex items-center gap-3">
+      {!s ? (
+        <LoaderCircle className="size-8 shrink-0 animate-spin text-blue-600" />
+      ) : run.summary!.mcps || run.summary!.added ? (
+        <CircleCheck className="size-8 shrink-0 text-emerald-500" />
+      ) : (
+        <CircleMinus className="size-8 shrink-0 text-zinc-400" />
+      )}
+      <div className="min-w-0">
+        <h1 className="text-lg font-semibold tracking-tight">{s ? s.title : '正在托管…'}</h1>
+        <p className="truncate text-[13px] text-zinc-500" title={run.summary?.ignored.join('\n')}>
+          {s ? s.line : '试启动每个 MCP 后改写配置'}
+        </p>
       </div>
     </div>
   );

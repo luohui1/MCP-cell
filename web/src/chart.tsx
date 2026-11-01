@@ -69,7 +69,7 @@ export function MemoryChart({
 
   const w = Math.max(0, width - pad.left - pad.right);
   const h = height - pad.top - pad.bottom;
-  const maxV = Math.max(1, ...points.map((p) => p.total));
+  const maxV = Math.max(1048576, ...points.map((p) => p.total)); // at least 1 MB of axis
   const yStep = niceStep(maxV * 1.08);
   const yMax = yStep * Math.max(1, Math.ceil((maxV * 1.08) / yStep));
   const x = (t: number) => pad.left + ((t - from) / Math.max(1, to - from)) * w;

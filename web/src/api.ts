@@ -171,8 +171,9 @@ export const takeover = {
   overview: () => call<{ clients: ClientView[]; autostart: AutostartStatus }>('GET', '/api/clients'),
   attach: (client: string, names: string[], force = false) =>
     call<{ results: TakeoverResult[] }>('POST', `/api/clients/${encodeURIComponent(client)}/attach`, { names, force }),
-  restore: (client: string, names: string[], forget = false) =>
-    call<{ results: TakeoverResult[] }>('POST', `/api/clients/${encodeURIComponent(client)}/restore${forget ? '?forget=1' : ''}`, { names }),
+  /** forget drops the record only; all is 全部还原 (what the sync added may come back). */
+  restore: (client: string, names: string[], forget = false, all = false) =>
+    call<{ results: TakeoverResult[] }>('POST', `/api/clients/${encodeURIComponent(client)}/restore${forget ? '?forget=1' : all ? '?all=1' : ''}`, { names }),
   autostart: (enabled: boolean) => call<AutostartStatus>('POST', '/api/autostart', { enabled }),
   autostartStatus: () => call<AutostartStatus>('GET', '/api/autostart'),
 };
