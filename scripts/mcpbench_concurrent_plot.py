@@ -2,7 +2,10 @@
 blocks (a light pixel style): every block is a fixed amount, so the
 difference is counted rather than read off an axis.
 
-    python scripts/mcpbench_concurrent_plot.py <concurrent.json> <out dir>
+    python scripts/mcpbench_concurrent_plot.py <concurrent.json> <out dir> [name=label ...]
+
+name=label shows an MCP under another name, e.g. a private one in a figure
+that will be published.
 
 Three panels under one title:
   memory    per number of conversations, a tower of 100 MB blocks for
@@ -100,6 +103,7 @@ def towers(ax, ns, v, unit, fmt, title, key, top, badge_text):
 def main():
     data = json.load(open(sys.argv[1], encoding='utf-8'))
     out = sys.argv[2]
+    labels = dict(a.split('=', 1) for a in sys.argv[3:])
     os.makedirs(out, exist_ok=True)
     rows = data['concurrent']
     ns = sorted({r['n'] for r in rows})
@@ -139,7 +143,7 @@ def main():
     pitch = (top - 1) / len(order)  # the MCPs spread over the panel's height
     for i, s in enumerate(order):
         y0 = top - pitch * (i + 0.5)  # native row on top, MCPcell under it
-        b.text(label_w - 0.8, y0, s, ha='right', va='center', fontsize=11.5, color=INK)
+        b.text(label_w - 0.8, y0, labels.get(s, s), ha='right', va='center', fontsize=11.5, color=INK)
         for j, m in enumerate(MODES):
             v = wait[m].get(s)
             if v is None:

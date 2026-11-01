@@ -10,26 +10,25 @@ A local MCP runtime that lets every AI agent session on a machine share MCP serv
 
 Claude Code、Codex、Cursor 每开一个对话，就把配置里的 MCP 全部启动一遍。一台开发机实测（8 个对话）：71 个 MCP 进程，约 **2.9 GB** 内存；用 npx 启动的 MCP 冷启动十几秒，常常撞上应用的 30 秒连接超时，结果对话里用不上。
 
-用 MCPcell 之后（同一台机器，2026-10-31）：2 个对话各连 6 个 MCP，对话这边只有 12 个转发小程序共约 **11 MB**，加上 MCPcell 自己约 56 MB；MCP 没人调用时不开，用到时才打开。对话连上 MCP 只要零点几秒。
+同一台机器上 1、2、4 个对话同时调用 5 个 MCP，每轮从冷启动开始，原生和 MCPcell 各 3 轮，1806 次调用全部成功：
+
+![5 个 MCP 同时被调用：原生 vs MCPcell](docs/images/bench-concurrent.png)
+
+4 个对话时内存 **4.7 GB → 0.7 GB**，全部调用做完 19.8 秒 → 7.1 秒；npx 启动的 MCP 从打开对话到第一个结果 12.6–15.5 秒 → 0.7–3.8 秒。代价是 MCP 已在运行时每次调用多 0.4–0.7 毫秒。方法见 [里程碑](docs/roadmap.md)，脚本是 `scripts/mcpbench.py --concurrent`。
 
 ## 上手
 
-1. **安装**：`bin/mcpcell.exe install`（现在还要自己编译，见下面的「开发」；之后会提供直接下载的安装包）
-2. **打开**：`~/.mcpcell/bin/mcpcell.exe open`，第一次打开会出现使用引导：一键检测各应用的 MCP，再一键托管（之后也可以点右上角的「一键托管」）
-3. **重开 Agent 的对话**：新对话就会用 MCPcell 共用的 MCP
-
-### macOS、Linux（预览）
-
-每次推送都会在 GitHub Actions 上测试并打包（`.github/workflows/build.yml`），`v*` 标签会把包挂到 Release：`mcpcell-darwin-arm64`（Apple 芯片）、`mcpcell-darwin-amd64`（Intel）、`mcpcell-linux-amd64`。
+到 [Releases](https://github.com/luohui1/MCP-cell/releases) 下载对应系统的包：`mcpcell-windows-amd64`、`mcpcell-darwin-arm64`（Apple 芯片）、`mcpcell-darwin-amd64`（Intel）、`mcpcell-linux-amd64`。
 
 ```sh
-tar -xzf mcpcell-darwin-arm64.tar.gz && cd mcpcell-darwin-arm64
-xattr -dr com.apple.quarantine .     # 只在 macOS：没有签名，去掉下载隔离
-./mcpcell install
-~/.mcpcell/bin/mcpcell open           # 在浏览器里打开管理页
+tar -xzf mcpcell-windows-amd64.tar.gz && cd mcpcell-windows-amd64
+./mcpcell install                  # 装到 ~/.mcpcell/bin 并启动后台服务
+~/.mcpcell/bin/mcpcell open        # 打开管理页
 ```
 
-和 Windows 的区别：没有托盘图标和独立窗口，管理页在浏览器里打开；开机自启用 LaunchAgent（macOS）或 XDG 自启（Linux），下次登录生效；内存按进程组的常驻内存统计（macOS 用 `ps`，比 Windows 的私有提交略高）；不能给 MCP 设内存上限。
+第一次打开会出现使用引导：一键检测各应用的 MCP，再一键托管。然后重开 Agent 的对话，新对话就会用共用的 MCP。也可以自己编译，见「开发」。
+
+macOS、Linux 是预览版：macOS 解压后先运行 `xattr -dr com.apple.quarantine .`（没有签名）；没有托盘图标和独立窗口，管理页在浏览器里打开；开机自启用 LaunchAgent（macOS）或 XDG 自启（Linux），下次登录生效；内存按进程组的常驻内存统计（macOS 用 `ps`，比 Windows 的私有提交略高）；不能给 MCP 设内存上限。
 
 Claude Code 里按项目加的 MCP（`claude mcp add` 默认的项目私有配置、项目里的 `.mcp.json`）也会找到；`.mcp.json` 是团队共享的文件，MCPcell 不改它，而是在你本机加一条同名的私有配置覆盖它。支持的应用：Claude Code、Codex、Cursor、Claude Desktop、VS Code、Copilot CLI、Gemini CLI、Antigravity、Windsurf、Kiro、Cline、Roo Code、OpenCode。所有应用用同一套 MCP：一键托管时，一个应用里有的 MCP 也会加到其他应用里（设置里可以关掉；从某个应用里还原或删掉的不会再加回去）。之后在这些应用里新加的 MCP 会自动交给 MCPcell，并同步到其他应用。不想用了：首页右上角菜单里的「全部还原」，或者 `mcpcell restore --all`，各应用的配置逐字节恢复。
 
@@ -88,3 +87,7 @@ pwsh scripts/measure-mcp.ps1                           # 测量本机所有 Agen
 - 路由只改写 id 这类归属字段，不改工具名，不重放调用；MCP 中途退出时报告"结果未知"
 - 只监听本机，校验 Host 和 Origin，每个请求都要令牌
 - 改写应用配置前先备份，被你改过的不覆盖，随时逐字节还原
+
+## 友情链接
+
+- [LINUX DO](https://linux.do) — 新的理想型社区
