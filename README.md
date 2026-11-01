@@ -4,7 +4,7 @@
 
 A local MCP runtime that lets every AI agent session on a machine share MCP server processes instead of spawning its own set.
 
-`0.6.0-dev` · Windows · macOS、Linux（预览）
+`0.6.0` · Windows · macOS、Linux（预览）
 
 ## 为什么
 
