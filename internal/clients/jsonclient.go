@@ -183,18 +183,24 @@ func inAppDir(parts ...string) func(string) string {
 	return func(home string) string { return filepath.Join(append([]string{appDir(home)}, parts...)...) }
 }
 
-// firstOf is the first of paths that exists, else the last one, for an agent
-// that reads its settings under more than one name. It is looked up on every
-// use: the daemon keeps its clients while the user creates or renames files.
-func firstOf(paths ...func(string) string) func(string) string {
-	return func(home string) string {
-		for _, p := range paths[:len(paths)-1] {
-			if _, err := os.Stat(p(home)); err == nil {
-				return p(home)
-			}
-		}
-		return paths[len(paths)-1](home)
+// openCodeConfig is OpenCode's config file. OpenCode reads both opencode.json
+// and opencode.jsonc; edit whichever exists, and prefer opencode.json when
+// both do (the one MCPcell has always written). JSONClient.Path calls it on
+// every use, so a file created while the daemon runs is found.
+func openCodeConfig(home string) string {
+	dir := filepath.Join(home, ".config", "opencode")
+	if p := filepath.Join(dir, "opencode.json"); exists(p) {
+		return p
 	}
+	if p := filepath.Join(dir, "opencode.jsonc"); exists(p) {
+		return p
+	}
+	return filepath.Join(dir, "opencode.json")
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // jsonAgents are the agents MCPcell edits as JSON, in display order. Paths
@@ -211,8 +217,7 @@ var jsonAgents = []jsonAgent{
 	{"kiro", "Kiro", inHome(".kiro", "settings", "mcp.json"), "mcpServers", styleCommand},
 	{"cline", "Cline", inAppDir("Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"), "mcpServers", styleCommand},
 	{"roo", "Roo Code", inAppDir("Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings", "mcp_settings.json"), "mcpServers", styleCommand},
-	// OpenCode reads both and lets opencode.jsonc win; a new file is .json.
-	{"opencode", "OpenCode", firstOf(inHome(".config", "opencode", "opencode.jsonc"), inHome(".config", "opencode", "opencode.json")), "mcp", styleArray},
+	{"opencode", "OpenCode", openCodeConfig, "mcp", styleArray},
 }
 
 // JSONClient edits one JSON agent's servers in place: only the entry
