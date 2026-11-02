@@ -212,3 +212,50 @@ func TestAddToFileWithoutServers(t *testing.T) {
 		t.Fatalf("after removing:\n%s", got)
 	}
 }
+
+// OpenCode reads opencode.json and opencode.jsonc; the client edits whichever
+// exists, so a commented .jsonc config is found and taken over as written.
+func TestOpenCodeJSONC(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "opencode")
+	jsonc := filepath.Join(dir, "opencode.jsonc")
+	write(t, jsonc, `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    // 本地 MCP
+    "ctx": {
+      "type": "local",
+      "command": ["npx", "-y", "@upstash/context7-mcp"],
+      "environment": { "API_KEY": "x" },
+    },
+  },
+}
+`)
+	c := jsonClient(t, "opencode", home)
+	if c.Path() != jsonc {
+		t.Fatalf("edits %s, want %s", c.Path(), jsonc)
+	}
+	if e := entriesByName(t, c)["ctx"]; e.Command != "npx" || len(e.Args) != 2 {
+		t.Fatalf("ctx = %+v", e)
+	}
+
+	// Both files: keep editing opencode.json.
+	jsonPath := filepath.Join(dir, "opencode.json")
+	write(t, jsonPath, "{}")
+	if p := jsonClient(t, "opencode", home).Path(); p != jsonPath {
+		t.Fatalf("both files: edits %s, want %s", p, jsonPath)
+	}
+}
+
+// A machine with neither file still reports MCPcell's usual path, so the
+// agent shows up as "not installed" rather than somewhere new.
+func TestOpenCodeMissingFile(t *testing.T) {
+	home := t.TempDir()
+	c := jsonClient(t, "opencode", home)
+	if want := filepath.Join(home, ".config", "opencode", "opencode.json"); c.Path() != want {
+		t.Fatalf("path %s, want %s", c.Path(), want)
+	}
+	if es, err := c.List(); es != nil || err != nil {
+		t.Fatalf("no file: %v %v", es, err)
+	}
+}

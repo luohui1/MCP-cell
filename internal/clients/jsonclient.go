@@ -183,6 +183,25 @@ func inAppDir(parts ...string) func(string) string {
 	return func(home string) string { return filepath.Join(append([]string{appDir(home)}, parts...)...) }
 }
 
+// openCodeConfig is OpenCode's config file. OpenCode reads both opencode.json
+// and opencode.jsonc; edit whichever exists, and prefer opencode.json when
+// both do (the one MCPcell has always written).
+func openCodeConfig(home string) string {
+	dir := filepath.Join(home, ".config", "opencode")
+	if p := filepath.Join(dir, "opencode.json"); exists(p) {
+		return p
+	}
+	if p := filepath.Join(dir, "opencode.jsonc"); exists(p) {
+		return p
+	}
+	return filepath.Join(dir, "opencode.json")
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // jsonAgents are the agents MCPcell edits as JSON, in display order. Paths
 // follow each agent's documentation (docs/architecture.md §9.4); the VS Code
 // extensions are found in VS Code's own storage.
@@ -197,7 +216,7 @@ var jsonAgents = []jsonAgent{
 	{"kiro", "Kiro", inHome(".kiro", "settings", "mcp.json"), "mcpServers", styleCommand},
 	{"cline", "Cline", inAppDir("Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"), "mcpServers", styleCommand},
 	{"roo", "Roo Code", inAppDir("Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings", "mcp_settings.json"), "mcpServers", styleCommand},
-	{"opencode", "OpenCode", inHome(".config", "opencode", "opencode.json"), "mcp", styleArray},
+	{"opencode", "OpenCode", openCodeConfig, "mcp", styleArray},
 }
 
 // JSONClient edits one JSON agent's servers in place: only the entry
