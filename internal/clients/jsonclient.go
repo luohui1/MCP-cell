@@ -183,6 +183,20 @@ func inAppDir(parts ...string) func(string) string {
 	return func(home string) string { return filepath.Join(append([]string{appDir(home)}, parts...)...) }
 }
 
+// firstOf is the first of paths that exists, else the last one, for an agent
+// that reads its settings under more than one name. It is looked up on every
+// use: the daemon keeps its clients while the user creates or renames files.
+func firstOf(paths ...func(string) string) func(string) string {
+	return func(home string) string {
+		for _, p := range paths[:len(paths)-1] {
+			if _, err := os.Stat(p(home)); err == nil {
+				return p(home)
+			}
+		}
+		return paths[len(paths)-1](home)
+	}
+}
+
 // jsonAgents are the agents MCPcell edits as JSON, in display order. Paths
 // follow each agent's documentation (docs/architecture.md §9.4); the VS Code
 // extensions are found in VS Code's own storage.
@@ -197,7 +211,8 @@ var jsonAgents = []jsonAgent{
 	{"kiro", "Kiro", inHome(".kiro", "settings", "mcp.json"), "mcpServers", styleCommand},
 	{"cline", "Cline", inAppDir("Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"), "mcpServers", styleCommand},
 	{"roo", "Roo Code", inAppDir("Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings", "mcp_settings.json"), "mcpServers", styleCommand},
-	{"opencode", "OpenCode", inHome(".config", "opencode", "opencode.json"), "mcp", styleArray},
+	// OpenCode reads both and lets opencode.jsonc win; a new file is .json.
+	{"opencode", "OpenCode", firstOf(inHome(".config", "opencode", "opencode.jsonc"), inHome(".config", "opencode", "opencode.json")), "mcp", styleArray},
 }
 
 // JSONClient edits one JSON agent's servers in place: only the entry
@@ -205,11 +220,11 @@ var jsonAgents = []jsonAgent{
 // as it was.
 type JSONClient struct {
 	jsonAgent
-	path, backups string
+	home, backups string
 }
 
 func newJSONClient(a jsonAgent, home, backups string) *JSONClient {
-	return &JSONClient{jsonAgent: a, path: a.path(home), backups: backups}
+	return &JSONClient{jsonAgent: a, home: home, backups: backups}
 }
 
 // NewCursor is Cursor's ~/.cursor/mcp.json.
@@ -226,8 +241,8 @@ func jsonClients(home, backups string) []Client {
 
 func (c *JSONClient) ID() string             { return c.id }
 func (c *JSONClient) Name() string           { return c.name }
-func (c *JSONClient) Path() string           { return c.path }
-func (c *JSONClient) List() ([]Entry, error) { return listJSON(c.id, c.path, c.key) }
+func (c *JSONClient) Path() string           { return c.jsonAgent.path(c.home) }
+func (c *JSONClient) List() ([]Entry, error) { return listJSON(c.id, c.Path(), c.key) }
 
 func (c *JSONClient) httpValue(t Target) map[string]any {
 	v := httpEntry(c.style == styleTyped, t.URL, t.Token)
@@ -239,7 +254,7 @@ func (c *JSONClient) httpValue(t Target) map[string]any {
 
 func (c *JSONClient) Attach(name string, t Target) (Record, error) {
 	rec := Record{Client: c.id, Name: name}
-	backup, err := rewrite(c.path, c.backups, c.id, func(old []byte) ([]byte, error) {
+	backup, err := rewrite(c.Path(), c.backups, c.id, func(old []byte) ([]byte, error) {
 		start, end, err := valueSpan(old, c.key, name)
 		if err != nil {
 			return nil, err
@@ -259,7 +274,7 @@ func (c *JSONClient) Attach(name string, t Target) (Record, error) {
 }
 
 func (c *JSONClient) Restore(rec Record) error {
-	_, err := rewrite(c.path, c.backups, c.id, func(old []byte) ([]byte, error) {
+	_, err := rewrite(c.Path(), c.backups, c.id, func(old []byte) ([]byte, error) {
 		start, end, err := valueSpan(old, c.key, rec.Name)
 		if err != nil {
 			return nil, err
@@ -284,10 +299,10 @@ func splice(src []byte, start, end int, with string) []byte {
 
 func (c *JSONClient) Add(name string, t Target) (Record, error) {
 	rec := Record{Client: c.id, Name: name, Added: true}
-	if err := ensureFile(c.path, "{\n  \""+c.key+"\": {}\n}\n"); err != nil {
+	if err := ensureFile(c.Path(), "{\n  \""+c.key+"\": {}\n}\n"); err != nil {
 		return rec, err
 	}
-	backup, err := rewrite(c.path, c.backups, c.id, func(old []byte) ([]byte, error) {
+	backup, err := rewrite(c.Path(), c.backups, c.id, func(old []byte) ([]byte, error) {
 		if _, _, err := valueSpan(old, c.key, name); err == nil {
 			return nil, ErrExists
 		}

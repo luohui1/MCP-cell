@@ -150,6 +150,54 @@ func TestOpenCodeCommandArray(t *testing.T) {
 	}
 }
 
+// OpenCode also reads opencode.jsonc (comments, trailing commas) and lets it
+// win over opencode.json. The client finds it even when the file appears
+// after the client was made, as in a running daemon.
+func TestOpenCodeJSONC(t *testing.T) {
+	home := t.TempDir()
+	c := jsonClient(t, "opencode", home)
+	dir := filepath.Join(home, ".config", "opencode")
+	if got := c.Path(); got != filepath.Join(dir, "opencode.json") {
+		t.Fatalf("path without a file = %s, want opencode.json", got)
+	}
+	const plain = `{ "mcp": {} }`
+	const jsonc = `{
+  // my settings
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ctx": { "type": "local", "command": ["npx", "-y", "@upstash/context7-mcp"], "enabled": true, },
+  },
+}
+`
+	write(t, filepath.Join(dir, "opencode.json"), plain)
+	write(t, filepath.Join(dir, "opencode.jsonc"), jsonc)
+	if got := c.Path(); got != filepath.Join(dir, "opencode.jsonc") {
+		t.Fatalf("path = %s, want opencode.jsonc", got)
+	}
+	if e := entriesByName(t, c)["ctx"]; e.Command != "npx" || len(e.Args) != 2 || !e.Enabled {
+		t.Fatalf("entries: %+v", entriesByName(t, c))
+	}
+	rec, err := c.Attach("ctx", Target{Wrapper: wrapper})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Unwrap(entriesByName(t, c)["ctx"]); !ok {
+		t.Fatalf("not wrapped:\n%s", read(t, c.Path()))
+	}
+	if got := read(t, c.Path()); !strings.Contains(got, "// my settings") {
+		t.Fatalf("comment lost:\n%s", got)
+	}
+	if err := c.Restore(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, c.Path()); got != jsonc {
+		t.Fatalf("restore not byte-exact:\n%s", got)
+	}
+	if got := read(t, filepath.Join(dir, "opencode.json")); got != plain {
+		t.Fatalf("opencode.json changed: %s", got)
+	}
+}
+
 // Gemini CLI keeps servers among its other settings; Windsurf and Gemini
 // name remote URLs their own way.
 func TestSettingsFileAndRemoteNames(t *testing.T) {

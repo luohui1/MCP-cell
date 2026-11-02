@@ -129,7 +129,7 @@ xattr -dr com.apple.quarantine .     # 只在 macOS：包没有签名，去掉�
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | Kiro | `~/.kiro/settings/mcp.json` |
 | Cline、Roo Code | VS Code 扩展存储里的 MCP 设置 |
-| OpenCode | `~/.config/opencode/opencode.json` |
+| OpenCode | `~/.config/opencode/opencode.json` 或 `opencode.jsonc` |
 
 `<应用数据>`：Windows 是 `%APPDATA%`，macOS 是 `~/Library/Application Support`，Linux 是 `~/.config`。项目里的 `.mcp.json` 是团队共享文件，MCPcell 不改它，而是在本机加一条同名的私有配置覆盖它。
 
