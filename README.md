@@ -14,7 +14,7 @@
 [![Rust](https://img.shields.io/badge/wrapper-Rust-orange.svg)](https://www.rust-lang.org/)
 [![Downloads](https://img.shields.io/github/downloads/luohui1/MCP-cell/total)](https://github.com/luohui1/MCP-cell/releases/latest)
 
-**[下载安装](#下载安装) · [快速开始](#快速开始) · [功能特性](#功能特性) · [原理](#原理) · [实测](#实测) · [常见问题](#常见问题)**
+**[让 AI 帮你装](#让-ai-帮你装) · [下载安装](#下载安装) · [快速开始](#快速开始) · [功能特性](#功能特性) · [原理](#原理) · [实测](#实测) · [常见问题](#常见问题)**
 
 </div>
 
@@ -43,6 +43,30 @@ MCP 服务是一个个 stdio 进程。Claude Code、Codex、Cursor 每开一个�
 <td align="center"><img src="docs/images/bench-concurrent.png" alt="实测对比" width="420"><br>实测：5 个 MCP 同时被调用</td>
 </tr>
 </table>
+
+## 让 AI 帮你装
+
+命令行版本，不装托盘图标和窗口。把下面这段发给 Claude Code、Codex 等 AI 助手：
+
+```text
+请按 https://raw.githubusercontent.com/luohui1/MCP-cell/main/docs/agent-setup.md 的步骤，在这台电脑上安装 MCPcell，并托管本机 AI 应用的 MCP。
+```
+
+也可以自己运行一行命令：下载最新版本、安装到 `~/.mcpcell/bin`、开启开机自启、一键托管。
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/luohui1/MCP-cell/main/scripts/install.ps1 | iex
+```
+
+macOS、Linux：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/luohui1/MCP-cell/main/scripts/install.sh | sh
+```
+
+设 `MCPCELL_NO_TAKEOVER=1` 只安装不托管，`MCPCELL_NO_AUTOSTART=1` 不开机自启。撤销：`mcpcell restore --all`。
 
 ## 下载安装
 
