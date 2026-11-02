@@ -1,6 +1,6 @@
 [package]
 name = "mcpcell-run"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 description = "Wrapper an agent's MCP entry launches in place of the server; hands the session to the MCPcell daemon"
 publish = false
